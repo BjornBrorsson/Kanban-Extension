@@ -1,0 +1,1 @@
+Place here tickets that are planned for future work but its not currently clear if they are ready or needs further specification. Once they have been analyzed they need to be moved into the Ready or Needs further specification folders accordingly.

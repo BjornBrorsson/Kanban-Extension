@@ -1,0 +1,169 @@
+{
+  "name": "agentic-kanban",
+  "displayName": "Agentic Kanban (Folders & Markdown)",
+  "description": "Folder & markdown-based Kanban project management for VS Code, Codium, Devin, Antigravity, and Cursor — designed for AI agents first, humans second.",
+  "version": "0.1.0",
+  "publisher": "agentic-kanban",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Project Management",
+    "Other"
+  ],
+  "keywords": [
+    "kanban",
+    "markdown",
+    "ai agents",
+    "productivity",
+    "tickets",
+    "project management"
+  ],
+  "main": "./dist/extension.js",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/agentic-kanban/agentic-kanban"
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run build",
+    "build": "node esbuild.js",
+    "watch": "node esbuild.js --watch",
+    "compile": "tsc -p ./ --noEmit",
+    "test": "node esbuild.js && node dist/test.js && node test/testKanban.js",
+    "package": "npm run build && node ./node_modules/@vscode/vsce/vsce package --allow-missing-repository --no-dependencies"
+  },
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "agentic-kanban-container",
+          "title": "Agentic Kanban",
+          "icon": "media/kanban-icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "agentic-kanban-container": [
+        {
+          "id": "agenticKanban.boardsView",
+          "name": "Boards & Workspaces",
+          "type": "tree"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "agenticKanban.openBoard",
+        "title": "Open Board",
+        "category": "Agentic Kanban",
+        "icon": "$(layout-kanban)"
+      },
+      {
+        "command": "agenticKanban.openOverview",
+        "title": "Open Multi-Board Overview",
+        "category": "Agentic Kanban",
+        "icon": "$(dashboard)"
+      },
+      {
+        "command": "agenticKanban.refreshBoards",
+        "title": "Refresh Boards",
+        "category": "Agentic Kanban",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "agenticKanban.createTicket",
+        "title": "Create New Ticket",
+        "category": "Agentic Kanban",
+        "icon": "$(add)"
+      },
+      {
+        "command": "agenticKanban.openConfig",
+        "title": "Open Board Configuration",
+        "category": "Agentic Kanban",
+        "icon": "$(gear)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "agenticKanban.openOverview",
+          "when": "view == agenticKanban.boardsView",
+          "group": "navigation@1"
+        },
+        {
+          "command": "agenticKanban.refreshBoards",
+          "when": "view == agenticKanban.boardsView",
+          "group": "navigation@2"
+        },
+        {
+          "command": "agenticKanban.createTicket",
+          "when": "view == agenticKanban.boardsView",
+          "group": "navigation@3"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "agenticKanban.openBoard",
+          "when": "view == agenticKanban.boardsView && viewItem == board",
+          "group": "inline@1"
+        },
+        {
+          "command": "agenticKanban.openConfig",
+          "when": "view == agenticKanban.boardsView && viewItem == board",
+          "group": "inline@2"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Agentic Kanban",
+      "properties": {
+        "agenticKanban.boardPatterns": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "**/Tickets",
+            "**/tickets",
+            "**/.kanban"
+          ],
+          "description": "Glob patterns used to find Kanban board root directories in the workspace."
+        },
+        "agenticKanban.ignoredFiles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "Whatwhy.md",
+            "whatwhy.md",
+            "README.md",
+            "readme.md",
+            "00_Plan.md",
+            "plan-file_whatwhy.md",
+            "config.md",
+            "config.yaml",
+            "config.json"
+          ],
+          "description": "Filenames ignored as ticket cards (e.g., guidance and configuration files)."
+        },
+        "agenticKanban.autoUpdateStatusField": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically update the markdown table Status field or frontmatter status when a card is moved between columns."
+        }
+      }
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.80.0",
+    "@vscode/vsce": "^3.9.2",
+    "esbuild": "^0.20.0",
+    "typescript": "^5.3.3"
+  }
+}

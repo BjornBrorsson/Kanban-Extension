@@ -1,0 +1,1 @@
+In this document, the project's overall plan and architecture is laid out. It is intended to be read by AI Agents and humans starting work in the project to align on what the goal is and what is being built. 

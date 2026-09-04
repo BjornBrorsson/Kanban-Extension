@@ -1,0 +1,1 @@
+Place here tickets that are the AI agents can't continue without human input. The ticket should clearly state what the human need to do in order for them to proceed.

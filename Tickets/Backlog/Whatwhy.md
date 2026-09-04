@@ -1,0 +1,1 @@
+Place here tickets that are planned for future work on the Kanban extension. Review tickets and move them into 'Ready' once they have clear requirements and acceptance criteria, or 'Needs further specification' if details are missing.

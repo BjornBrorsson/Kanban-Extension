@@ -1,0 +1,1 @@
+We need to fix the PATHs for Ollama so that a basic "ollama run" command works, without having to point to the specific executable. This needs to be persistent and survive server restarts and closing and reopening the terminal. 
