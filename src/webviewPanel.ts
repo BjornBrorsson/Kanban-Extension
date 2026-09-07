@@ -4,6 +4,8 @@ import * as fs from 'fs';
 import { BoardManager } from './boardManager';
 import { AgentRunner } from './agentRunner';
 import { Board, Ticket, Assignee } from './types';
+import { PromptFormatter } from './promptFormatter';
+import { TicketParser } from './ticketParser';
 
 export class KanbanWebviewManager {
   public static currentPanel: KanbanWebviewManager | undefined;
@@ -213,6 +215,41 @@ export class KanbanWebviewManager {
         }
         break;
 
+      case 'copyAgentPrompt':
+        try {
+          const t = message.ticket;
+          let targetBoard = boardManager.getBoard(message.boardId);
+          const allBoards = boardManager.getAllBoards();
+          if (t && t.path) {
+            const foundBoard = allBoards.find(b =>
+              path.resolve(t.path).toLowerCase().startsWith(path.resolve(b.rootPath).toLowerCase())
+            );
+            if (foundBoard) targetBoard = foundBoard;
+          }
+          if (!targetBoard && this.currentBoardId) {
+            targetBoard = boardManager.getBoard(this.currentBoardId);
+          }
+          if (!targetBoard && allBoards.length > 0) {
+            targetBoard = allBoards[0];
+          }
+
+          const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+          const prompt = PromptFormatter.formatPrompt(
+            t,
+            targetBoard ? targetBoard.config : null,
+            workspaceFolder,
+            targetBoard ? targetBoard.rootPath : undefined
+          );
+
+          await vscode.env.clipboard.writeText(prompt);
+          vscode.window.showInformationMessage(
+            `Copied Agent Task Prompt for "${t.id ? t.id + ': ' : ''}${t.title}" to clipboard!`
+          );
+        } catch (err: any) {
+          vscode.window.showErrorMessage(`Failed to copy agent prompt: ${err?.message || err}`);
+        }
+        break;
+
       case 'assignTicket':
         try {
           // 1. Locate the board that actually owns this ticket
@@ -273,10 +310,14 @@ export class KanbanWebviewManager {
                 const sourcePath = boardManager.resolveTicketPathOnDisk(targetBoard, message.ticketPath) || message.ticketPath;
                 const fileContent = await fs.promises.readFile(sourcePath, 'utf8');
                 ticketObj = TicketParser.parse(sourcePath, fileContent, targetBoard.rootPath, '', null);
-                ticketObj.assignee = assignee.name;
+                if (ticketObj) {
+                  ticketObj.assignee = assignee.name;
+                }
               }
 
-              await AgentRunner.dispatch(ticketObj, assignee, targetBoard.rootPath);
+              if (ticketObj) {
+                await AgentRunner.dispatch(ticketObj, assignee, targetBoard.rootPath);
+              }
             } else {
               vscode.window.showInformationMessage(`Assigned ticket to ${targetName}.`);
             }
@@ -581,6 +622,13 @@ export class KanbanWebviewManager {
               <line x1="10" y1="14" x2="21" y2="3"></line>
             </svg>
             <span>Open in Editor</span>
+          </button>
+          <button id="btnCopyPromptModal" class="modal-btn secondary" title="Copy Agent Task Prompt to clipboard">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path>
+              <rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect>
+            </svg>
+            <span>Copy Prompt</span>
           </button>
           <button id="btnAssignModal" class="modal-btn secondary">
             <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">

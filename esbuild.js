@@ -70,6 +70,149 @@ async function run() {
     });
   }
 
+  if (fs.existsSync(path.join(__dirname, 'test', 'm0Tests.ts'))) {
+    await esbuild.build({
+      entryPoints: ['./test/m0Tests.ts'],
+      bundle: true,
+      outfile: './dist/m0Tests.js',
+      external: ['vscode'],
+      format: 'cjs',
+      platform: 'node',
+      sourcemap: true,
+      minify: false
+    });
+  }
+
+  if (fs.existsSync(path.join(__dirname, 'test', 'm1Tests.ts'))) {
+    await esbuild.build({
+      entryPoints: ['./test/m1Tests.ts'],
+      bundle: true,
+      outfile: './dist/m1Tests.js',
+      external: ['vscode'],
+      format: 'cjs',
+      platform: 'node',
+      sourcemap: true,
+      minify: false
+    });
+  }
+
+  if (fs.existsSync(path.join(__dirname, 'test', 'm2Tests.ts'))) {
+    await esbuild.build({
+      entryPoints: ['./test/m2Tests.ts'],
+      bundle: true,
+      outfile: './dist/m2Tests.js',
+      external: ['vscode'],
+      format: 'cjs',
+      platform: 'node',
+      sourcemap: true,
+      minify: false
+    });
+  }
+
+  if (fs.existsSync(path.join(__dirname, 'test', 'm3Tests.ts'))) {
+    await esbuild.build({
+      entryPoints: ['./test/m3Tests.ts'],
+      bundle: true,
+      outfile: './dist/m3Tests.js',
+      external: ['vscode'],
+      format: 'cjs',
+      platform: 'node',
+      sourcemap: true,
+      minify: false
+    });
+  }
+
+  if (fs.existsSync(path.join(__dirname, 'test', 'm4Tests.ts'))) {
+    await esbuild.build({
+      entryPoints: ['./test/m4Tests.ts'],
+      bundle: true,
+      outfile: './dist/m4Tests.js',
+      external: ['vscode'],
+      format: 'cjs',
+      platform: 'node',
+      sourcemap: true,
+      minify: false
+    });
+  }
+
+  if (fs.existsSync(path.join(__dirname, 'test', 'm5Tests.ts'))) {
+    await esbuild.build({
+      entryPoints: ['./test/m5Tests.ts'],
+      bundle: true,
+      outfile: './dist/m5Tests.js',
+      external: ['vscode'],
+      format: 'cjs',
+      platform: 'node',
+      sourcemap: true,
+      minify: false
+    });
+  }
+
+  if (fs.existsSync(path.join(__dirname, 'test', 'failureMatrixTests.ts'))) {
+    await esbuild.build({
+      entryPoints: ['./test/failureMatrixTests.ts'],
+      bundle: true,
+      outfile: './dist/failureMatrixTests.js',
+      external: ['vscode'],
+      format: 'cjs',
+      platform: 'node',
+      sourcemap: true,
+      minify: false
+    });
+  }
+
+  if (fs.existsSync(path.join(__dirname, 'test', 'benchmarks', 'runBenchmarks.ts'))) {
+    await esbuild.build({
+      entryPoints: ['./test/benchmarks/runBenchmarks.ts'],
+      bundle: true,
+      outfile: './dist/benchmarks.js',
+      external: ['vscode'],
+      format: 'cjs',
+      platform: 'node',
+      sourcemap: true,
+      minify: false
+    });
+  }
+
+  if (fs.existsSync(path.join(__dirname, 'test', 'pilots', 'selfHostPilot.ts'))) {
+    await esbuild.build({
+      entryPoints: ['./test/pilots/selfHostPilot.ts'],
+      bundle: true,
+      outfile: './dist/selfHostPilot.js',
+      external: ['vscode'],
+      format: 'cjs',
+      platform: 'node',
+      sourcemap: true,
+      minify: false
+    });
+  }
+
+  if (fs.existsSync(path.join(__dirname, 'test', 'pilots', 'wasteLessPilot.ts'))) {
+    await esbuild.build({
+      entryPoints: ['./test/pilots/wasteLessPilot.ts'],
+      bundle: true,
+      outfile: './dist/wasteLessPilot.js',
+      external: ['vscode'],
+      format: 'cjs',
+      platform: 'node',
+      sourcemap: true,
+      minify: false
+    });
+  }
+
+  if (fs.existsSync(path.join(__dirname, 'src', 'orchestrator', 'cli', 'orchestratorCli.ts'))) {
+    await esbuild.build({
+      entryPoints: ['./src/orchestrator/cli/orchestratorCli.ts'],
+      bundle: true,
+      outfile: './dist/cli.js',
+      external: ['vscode'],
+      format: 'cjs',
+      platform: 'node',
+      sourcemap: true,
+      minify: false
+    });
+  }
+
   if (isWatch) {
     await context.watch();
     console.log('[esbuild] Watching for changes...');

@@ -31,11 +31,12 @@ var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: tru
 var runParserTests_exports = {};
 __export(runParserTests_exports, {
   ConfigParser: () => ConfigParser,
+  PromptFormatter: () => PromptFormatter,
   TicketParser: () => TicketParser
 });
 module.exports = __toCommonJS(runParserTests_exports);
 var fs = __toESM(require("fs"));
-var path2 = __toESM(require("path"));
+var path3 = __toESM(require("path"));
 
 // src/ticketParser.ts
 var path = __toESM(require("path"));
@@ -325,6 +326,174 @@ var TicketParser = class {
   }
 };
 
+// src/orchestrator/config/orchestrationConfig.ts
+var OrchestrationConfigParser = class {
+  /**
+   * Extracts and parses the versioned fenced YAML block from config.md content.
+   * Returns undefined if no orchestration YAML block is found or if it is disabled.
+   */
+  static extractFromMarkdown(content) {
+    if (!content || !content.trim()) {
+      return void 0;
+    }
+    const yamlBlockMatch = content.match(/```(?:yaml|yml)\s*\r?\n([\s\S]*?)\r?\n```/i);
+    if (!yamlBlockMatch) {
+      return void 0;
+    }
+    const yamlText = yamlBlockMatch[1].trim();
+    if (!yamlText.includes("schemaVersion")) {
+      return void 0;
+    }
+    return this.parseYaml(yamlText);
+  }
+  /**
+   * Parses the YAML text into a validated OrchestrationConfig structure.
+   */
+  static parseYaml(yamlText) {
+    const raw = this.parseSimpleYaml(yamlText);
+    const schemaVersion = Number(raw.schemaVersion) || 1;
+    if (schemaVersion !== 1) {
+      throw new Error(`Unsupported orchestration schemaVersion: ${raw.schemaVersion}. Supported versions: 1`);
+    }
+    const orchestrationRaw = typeof raw.orchestration === "object" && raw.orchestration !== null ? raw.orchestration : {};
+    const orchestration = {
+      enabled: Boolean(orchestrationRaw.enabled === true || orchestrationRaw.enabled === "true"),
+      profile: typeof orchestrationRaw.profile === "string" ? orchestrationRaw.profile : void 0,
+      maxConcurrentWorkers: typeof orchestrationRaw.maxConcurrentWorkers === "number" ? orchestrationRaw.maxConcurrentWorkers : orchestrationRaw.maxConcurrentWorkers ? parseInt(String(orchestrationRaw.maxConcurrentWorkers), 10) : 1,
+      completionTarget: orchestrationRaw.completionTarget === "reviewed-patch" || orchestrationRaw.completionTarget === "local-build" || orchestrationRaw.completionTarget === "pr" ? orchestrationRaw.completionTarget : "reviewed-patch",
+      retryLimit: typeof orchestrationRaw.retryLimit === "number" ? orchestrationRaw.retryLimit : 1
+    };
+    let roles;
+    if (raw.roles && typeof raw.roles === "object") {
+      roles = {
+        lead: typeof raw.roles.lead === "string" ? raw.roles.lead : void 0,
+        worker: typeof raw.roles.worker === "string" ? raw.roles.worker : void 0,
+        reviewer: typeof raw.roles.reviewer === "string" ? raw.roles.reviewer : void 0
+      };
+    }
+    let policies;
+    if (raw.policies && typeof raw.policies === "object") {
+      policies = {};
+      for (const [pName, pVal] of Object.entries(raw.policies)) {
+        if (typeof pVal === "object" && pVal !== null) {
+          const pObj = pVal;
+          const allowedExecRaw = Array.isArray(pObj.allowedExecution) ? pObj.allowedExecution : typeof pObj.allowedExecution === "string" ? pObj.allowedExecution.split(",").map((s) => s.trim()) : ["local"];
+          policies[pName] = {
+            allowedExecution: allowedExecRaw,
+            unknownDestination: pObj.unknownDestination === "allow" ? "allow" : "deny",
+            allowedDataClasses: Array.isArray(pObj.allowedDataClasses) ? pObj.allowedDataClasses : void 0,
+            allowedEndpoints: Array.isArray(pObj.allowedEndpoints) ? pObj.allowedEndpoints : void 0
+          };
+        }
+      }
+    }
+    let budgets;
+    if (raw.budgets && typeof raw.budgets === "object") {
+      const bObj = raw.budgets;
+      budgets = {
+        dailyCurrency: typeof bObj.dailyCurrency === "string" ? bObj.dailyCurrency : "EUR",
+        dailyLimit: typeof bObj.dailyLimit === "number" ? bObj.dailyLimit : parseFloat(bObj.dailyLimit) || void 0,
+        reserveForReview: typeof bObj.reserveForReview === "number" ? bObj.reserveForReview : parseFloat(bObj.reserveForReview) || 1,
+        batchCeiling: typeof bObj.batchCeiling === "number" ? bObj.batchCeiling : parseFloat(bObj.batchCeiling) || void 0,
+        maxPerTicketSpend: typeof bObj.maxPerTicketSpend === "number" ? bObj.maxPerTicketSpend : parseFloat(bObj.maxPerTicketSpend) || void 0
+      };
+    }
+    return {
+      schemaVersion: 1,
+      orchestration,
+      roles,
+      policies,
+      budgets
+    };
+  }
+  /**
+   * Lightweight indent-based YAML parser supporting objects, scalars, inline arrays [a, b], and list items.
+   */
+  static parseSimpleYaml(yaml) {
+    const lines = yaml.split(/\r?\n/);
+    const root = {};
+    const stack = [
+      { indent: -1, target: root }
+    ];
+    for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+      const originalLine = lines[lineIndex];
+      if (!originalLine.trim() || originalLine.trim().startsWith("#")) {
+        continue;
+      }
+      const indent = originalLine.search(/\S/);
+      const trimmed = originalLine.trim();
+      while (stack.length > 1 && stack[stack.length - 1].indent >= indent) {
+        stack.pop();
+      }
+      const currentContext = stack[stack.length - 1].target;
+      const kvMatch = trimmed.match(/^([A-Za-z0-9_-]+)\s*:\s*(.*)$/);
+      if (kvMatch) {
+        const key = kvMatch[1];
+        const valStr = kvMatch[2].trim();
+        if (valStr === "") {
+          const newObj = {};
+          if (Array.isArray(currentContext)) {
+            currentContext.push({ [key]: newObj });
+          } else {
+            currentContext[key] = newObj;
+          }
+          stack.push({ indent, target: newObj });
+        } else {
+          const parsedVal = this.parseScalarOrInlineArray(valStr);
+          if (Array.isArray(currentContext)) {
+            currentContext.push({ [key]: parsedVal });
+          } else {
+            currentContext[key] = parsedVal;
+          }
+        }
+        continue;
+      }
+      const listMatch = trimmed.match(/^-\s+(.*)$/);
+      if (listMatch) {
+        const itemContent = listMatch[1].trim();
+        const subKv = itemContent.match(/^([A-Za-z0-9_-]+)\s*:\s*(.*)$/);
+        if (subKv) {
+          const itemKey = subKv[1];
+          const itemVal = this.parseScalarOrInlineArray(subKv[2].trim());
+          const itemObj = { [itemKey]: itemVal };
+          if (Array.isArray(currentContext)) {
+            currentContext.push(itemObj);
+          }
+        } else {
+          const val = this.parseScalarOrInlineArray(itemContent);
+          if (Array.isArray(currentContext)) {
+            currentContext.push(val);
+          }
+        }
+      }
+    }
+    return root;
+  }
+  static parseScalarOrInlineArray(val) {
+    if (!val)
+      return "";
+    if (val.startsWith("[") && val.endsWith("]")) {
+      const inner = val.slice(1, -1).trim();
+      if (!inner)
+        return [];
+      return inner.split(",").map((s) => this.parseScalarOrInlineArray(s.trim()));
+    }
+    if (val.startsWith('"') && val.endsWith('"') || val.startsWith("'") && val.endsWith("'")) {
+      return val.slice(1, -1);
+    }
+    if (val.toLowerCase() === "true")
+      return true;
+    if (val.toLowerCase() === "false")
+      return false;
+    if (/^-?\d+(\.\d+)?$/.test(val)) {
+      const num = Number(val);
+      if (!isNaN(num))
+        return num;
+    }
+    return val;
+  }
+};
+
 // src/configParser.ts
 var ConfigParser = class {
   static parse(content, defaultBoardName) {
@@ -355,6 +524,8 @@ var ConfigParser = class {
             config.autoUpdateStatus = val.toLowerCase() !== "false";
           } else if (key.includes("default agent")) {
             config.defaultAgent = val;
+          } else if (key.includes("prompt template") || key.includes("agent prompt")) {
+            config.agentPromptTemplate = val.replace(/^["'`](.*)["'`]$/, "$1");
           }
         }
       }
@@ -363,6 +534,17 @@ var ConfigParser = class {
     if (assigneesMatch) {
       const assigneesBlock = assigneesMatch[1];
       this.parseAssignees(assigneesBlock, config);
+    }
+    const promptMatch = content.match(/##\s+(?:Agent\s+|Task\s+)?Prompt\s+Template\s*\r?\n([\s\S]*?)(?=\r?\n##\s+|$)/i);
+    if (promptMatch) {
+      const templateContent = promptMatch[1].trim();
+      const codeBlockMatch = templateContent.match(/^```(?:markdown|md)?\r?\n([\s\S]*?)\r?\n```$/);
+      config.agentPromptTemplate = codeBlockMatch ? codeBlockMatch[1].trim() : templateContent;
+    }
+    try {
+      config.orchestration = OrchestrationConfigParser.extractFromMarkdown(content);
+    } catch (e) {
+      console.warn("Could not parse orchestration block in config.md:", e);
     }
     return config;
   }
@@ -491,6 +673,92 @@ var ConfigParser = class {
   }
 };
 
+// src/promptFormatter.ts
+var path2 = __toESM(require("path"));
+var PromptFormatter = class {
+  static DEFAULT_TEMPLATE = `Please review and work on ticket **{id}: {title}** located at \`{relative_path}\`.
+
+### Summary
+{summary}
+
+### Key Acceptance Criteria
+{acceptance_criteria}
+
+### Instructions
+1. Inspect the codebase and execute the necessary changes.
+2. Verify that all acceptance criteria are met and pass tests.
+3. Record your timestamped progress under \`## Work Log\` in the ticket file.
+4. Move the ticket to \`{completed_path}\` once done.`;
+  /**
+   * Formats a structured agent prompt for a ticket based on board config or default template.
+   */
+  static formatPrompt(ticket, boardConfig, workspaceRoot, boardRoot) {
+    let relPath = ticket.relativePath || ticket.filename;
+    if (workspaceRoot && ticket.path) {
+      const calculated = path2.relative(workspaceRoot, ticket.path).replace(/\\/g, "/");
+      if (!calculated.startsWith("..")) {
+        relPath = calculated;
+      }
+    } else if (boardRoot && ticket.path) {
+      const boardDirName = path2.basename(boardRoot);
+      const fromBoard = path2.relative(boardRoot, ticket.path).replace(/\\/g, "/");
+      relPath = `${boardDirName}/${fromBoard}`;
+    }
+    let completedPath = "Tickets/Completed/";
+    if (boardRoot && workspaceRoot) {
+      const relBoard = path2.relative(workspaceRoot, boardRoot).replace(/\\/g, "/");
+      completedPath = relBoard && relBoard !== "." ? `${relBoard}/Completed/` : "Completed/";
+    } else if (ticket.column) {
+      const colSubstr = "/" + ticket.column + "/";
+      const colIdx = relPath.indexOf(colSubstr);
+      if (colIdx !== -1) {
+        completedPath = `${relPath.slice(0, colIdx)}/Completed/`;
+      } else if (relPath.startsWith(ticket.column + "/")) {
+        completedPath = "Completed/";
+      }
+    }
+    let criteriaText = "";
+    if (ticket.acceptanceCriteria && ticket.acceptanceCriteria.length > 0) {
+      criteriaText = ticket.acceptanceCriteria.map((c) => `- [${c.done ? "x" : " "}] ${c.text}`).join("\n");
+    } else {
+      criteriaText = "- [ ] Implement requirements as specified in ticket.";
+    }
+    const template = boardConfig?.agentPromptTemplate && boardConfig.agentPromptTemplate.trim() ? boardConfig.agentPromptTemplate.trim() : this.DEFAULT_TEMPLATE;
+    const summaryText = ticket.summary || ticket.title;
+    const descriptionText = ticket.description || ticket.summary || ticket.title;
+    const replacements = {
+      "{id}": ticket.id || "",
+      "{ticket_id}": ticket.id || "",
+      "{title}": ticket.title || "",
+      "{ticket_title}": ticket.title || "",
+      "{relative_path}": relPath,
+      "{ticket_rel_path}": relPath,
+      "{path}": ticket.path || "",
+      "{ticket_path}": ticket.path || "",
+      "{summary}": summaryText,
+      "{ticket_summary}": summaryText,
+      "{description}": descriptionText,
+      "{ticket_description}": descriptionText,
+      "{acceptance_criteria}": criteriaText,
+      "{criteria}": criteriaText,
+      "{key_acceptance_criteria}": criteriaText,
+      "{column}": ticket.column || "",
+      "{ticket_column}": ticket.column || "",
+      "{subfolder}": ticket.subfolder || "",
+      "{priority}": ticket.priority || "Normal",
+      "{assignee}": ticket.assignee || "Unassigned",
+      "{epic}": ticket.epic || "",
+      "{estimate}": ticket.estimate || "",
+      "{completed_path}": completedPath
+    };
+    let result = template;
+    for (const [placeholder, value] of Object.entries(replacements)) {
+      result = result.split(placeholder).join(value);
+    }
+    return result;
+  }
+};
+
 // test/runParserTests.ts
 function assert(condition, message) {
   if (!condition) {
@@ -499,9 +767,9 @@ function assert(condition, message) {
 }
 async function runTests() {
   console.log("=== Running Parser Unit Tests ===");
-  const root = path2.join(__dirname, "..");
-  const ticketsRoot = path2.join(root, "Example Structure", "Tickets");
-  const configPath = path2.join(ticketsRoot, "config.md");
+  const root = path3.join(__dirname, "..");
+  const ticketsRoot = path3.join(root, "Example Structure", "Tickets");
+  const configPath = path3.join(ticketsRoot, "config.md");
   const configContent = fs.readFileSync(configPath, "utf8");
   const config = ConfigParser.parse(configContent, "Example Project Board");
   console.log("Testing ConfigParser...");
@@ -518,7 +786,7 @@ async function runTests() {
   assert(ideChat !== void 0 && ideChat.agentConfig?.type === "vscode-command", "ide-chat should be parsed as vscode-command");
   console.log("\u2713 ConfigParser tests passed!");
   console.log("\nTesting TicketParser on table ticket (ticket-019)...");
-  const ticket019Path = path2.join(ticketsRoot, "Ongoing", "Example_ticket-019_cleanup-audit-trail.md");
+  const ticket019Path = path3.join(ticketsRoot, "Ongoing", "Example_ticket-019_cleanup-audit-trail.md");
   const ticket019Content = fs.readFileSync(ticket019Path, "utf8");
   const ticket019 = TicketParser.parse(ticket019Path, ticket019Content, ticketsRoot, "Ongoing", null);
   assert(ticket019.id === "ATF-019", `Expected ID ATF-019, got '${ticket019.id}'`);
@@ -532,7 +800,7 @@ async function runTests() {
   assert(ticket019.hasWorkLog === true, "Expected hasWorkLog to be true");
   console.log("\u2713 Ticket-019 table parser tests passed!");
   console.log("\nTesting TicketParser on checklist progress (ticket-001)...");
-  const ticket001Path = path2.join(ticketsRoot, "Assistance Required", "Example_ticket-001_local-gpu-model-host.md");
+  const ticket001Path = path3.join(ticketsRoot, "Assistance Required", "Example_ticket-001_local-gpu-model-host.md");
   const ticket001Content = fs.readFileSync(ticket001Path, "utf8");
   const ticket001 = TicketParser.parse(ticket001Path, ticket001Content, ticketsRoot, "Assistance Required", null);
   assert(ticket001.id === "ACM-001", `Expected ID ACM-001, got '${ticket001.id}'`);
@@ -541,7 +809,7 @@ async function runTests() {
   assert(ticket001.labels.includes("llm") && ticket001.labels.includes("gpu"), "Expected llm and gpu labels");
   console.log("\u2713 Ticket-001 checklist tests passed!");
   console.log("\nTesting TicketParser on freeform ticket (ticket-092)...");
-  const ticket092Path = path2.join(ticketsRoot, "Backlog", "Needs further specification", "Example_ticket-092-Pathfix.md");
+  const ticket092Path = path3.join(ticketsRoot, "Backlog", "Needs further specification", "Example_ticket-092-Pathfix.md");
   const ticket092Content = fs.readFileSync(ticket092Path, "utf8");
   const ticket092 = TicketParser.parse(ticket092Path, ticket092Content, ticketsRoot, "Backlog", "Needs further specification");
   assert(ticket092.id.includes("092"), `Expected ID to contain 092, got '${ticket092.id}'`);
@@ -578,18 +846,88 @@ async function runTests() {
   assert(yamlAssigned.includes("assignee: Copilot"), "Expected assignee to be inserted in YAML frontmatter");
   console.log("\u2713 YAML frontmatter assignment tests passed!");
   console.log("\nTesting Assignee insertion on EXT-001 format...");
-  const ext001Path = path2.join(root, "Tickets", "Ongoing", "EXT-001_copy-agent-task-prompt.md");
+  const ext001Path = fs.existsSync(path3.join(root, "Tickets", "Completed", "EXT-001_copy-agent-task-prompt.md")) ? path3.join(root, "Tickets", "Completed", "EXT-001_copy-agent-task-prompt.md") : path3.join(root, "Tickets", "Ongoing", "EXT-001_copy-agent-task-prompt.md");
   if (fs.existsSync(ext001Path)) {
     const ext001Content = fs.readFileSync(ext001Path, "utf8");
     const ext001Assigned = TicketParser.updateTicketAssignee(ext001Content, "Cline CLI (Ollama - Gemma 4 E4B)");
     assert(ext001Assigned.includes("| **Assignee** | Cline CLI (Ollama - Gemma 4 E4B) |"), "Expected Assignee row inserted into EXT-001");
-    const parsedExt001 = TicketParser.parse(ext001Path, ext001Assigned, path2.join(root, "Tickets"), "Ongoing", null);
+    const parsedExt001 = TicketParser.parse(ext001Path, ext001Assigned, path3.join(root, "Tickets"), "Ongoing", null);
     assert(parsedExt001.assignee === "Cline CLI (Ollama - Gemma 4 E4B)", `Expected parsed assignee to be Cline CLI, got: ${parsedExt001.assignee}`);
     const ext001Reassigned = TicketParser.updateTicketAssignee(ext001Assigned, "Bj\xF6rn");
     assert(ext001Reassigned.includes("| **Assignee** | Bj\xF6rn |"), "Expected Assignee row updated to Bj\xF6rn");
     assert(!ext001Reassigned.includes("Cline CLI"), "Expected Cline CLI to be replaced");
     console.log("\u2713 EXT-001 assignment and re-assignment tests passed!");
   }
+  console.log("\nTesting ConfigParser prompt template parsing...");
+  const inlineTemplateConfig = ConfigParser.parse(`
+## Settings
+- **Board Name**: Custom Prompt Board
+- **Agent Prompt Template**: Work on {id} located at {relative_path}
+  `, "Test Board");
+  assert(
+    inlineTemplateConfig.agentPromptTemplate === "Work on {id} located at {relative_path}",
+    `Expected parsed inline template, got: '${inlineTemplateConfig.agentPromptTemplate}'`
+  );
+  const sectionTemplateConfig = ConfigParser.parse(`
+## Settings
+- **Board Name**: Custom Prompt Board
+
+## Prompt Template
+\`\`\`markdown
+Special instructions for **{id}: {title}** at {relative_path}:
+Summary: {summary}
+Acceptance Criteria:
+{acceptance_criteria}
+\`\`\`
+  `, "Test Board");
+  assert(
+    sectionTemplateConfig.agentPromptTemplate !== void 0 && sectionTemplateConfig.agentPromptTemplate.includes("Special instructions for **{id}: {title}**"),
+    `Expected parsed block template, got: '${sectionTemplateConfig.agentPromptTemplate}'`
+  );
+  console.log("\u2713 ConfigParser prompt template tests passed!");
+  console.log("\nTesting PromptFormatter default template...");
+  const defaultPrompt = PromptFormatter.formatPrompt(ticket019, null, root, ticketsRoot);
+  assert(
+    defaultPrompt.includes("Please review and work on ticket **ATF-019:"),
+    `Expected prompt to include 'Please review and work on ticket **ATF-019:', got:
+${defaultPrompt}`
+  );
+  assert(
+    defaultPrompt.includes("located at `Example Structure/Tickets/Ongoing/Example_ticket-019_cleanup-audit-trail.md`"),
+    `Expected relative path to be computed relative to workspace root, got:
+${defaultPrompt}`
+  );
+  assert(defaultPrompt.includes("### Summary"), "Expected prompt to contain ### Summary");
+  assert(defaultPrompt.includes("### Key Acceptance Criteria"), "Expected prompt to contain Key Acceptance Criteria");
+  assert(
+    defaultPrompt.includes("- [ ] Mutations captured with before/after"),
+    "Expected criteria to be formatted with checklist bullets"
+  );
+  assert(defaultPrompt.includes("### Instructions"), "Expected prompt to contain Instructions");
+  assert(
+    defaultPrompt.includes("Move the ticket to `Example Structure/Tickets/Completed/` once done."),
+    `Expected completed path to be correctly derived, got:
+${defaultPrompt}`
+  );
+  console.log("\u2713 PromptFormatter default template tests passed!");
+  console.log("\nTesting PromptFormatter with custom template...");
+  const customPrompt = PromptFormatter.formatPrompt(ticket001, sectionTemplateConfig, root, ticketsRoot);
+  assert(
+    customPrompt.includes("Special instructions for **ACM-001:"),
+    `Expected custom template prefix, got:
+${customPrompt}`
+  );
+  assert(
+    customPrompt.includes("- [x] Ollama installed and running locally.") && customPrompt.includes("- [ ] Backend `.env` model endpoint"),
+    "Expected done/undone checkboxes to reflect criterion state"
+  );
+  const noCriteriaTicket = { ...ticket092, acceptanceCriteria: [] };
+  const fallbackPrompt = PromptFormatter.formatPrompt(noCriteriaTicket, null, root, ticketsRoot);
+  assert(
+    fallbackPrompt.includes("- [ ] Implement requirements as specified in ticket."),
+    "Expected fallback criterion text when no criteria present"
+  );
+  console.log("\u2713 PromptFormatter custom template & edge cases tests passed!");
   console.log("\n=== ALL UNIT TESTS PASSED SUCCESSFULLY! ===");
 }
 runTests().catch((err) => {
@@ -599,6 +937,7 @@ runTests().catch((err) => {
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
   ConfigParser,
+  PromptFormatter,
   TicketParser
 });
 //# sourceMappingURL=test.js.map

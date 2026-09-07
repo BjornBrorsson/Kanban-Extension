@@ -492,6 +492,70 @@ body.is-dragging-card .kanban-column {
   border: 1px solid rgba(245, 158, 11, 0.3);
 }
 
+.priority-p3 {
+  color: var(--p3-color);
+  background: var(--p3-bg);
+  border: 1px solid rgba(156, 163, 175, 0.3);
+}
+
+/* ORCHESTRATION ATTEMPT BADGES & EVIDENCE */
+.attempt-badge {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-primary);
+  color: var(--text-muted);
+}
+
+.attempt-badge.attempt-running {
+  background: rgba(59, 130, 246, 0.15);
+  color: #60a5fa;
+  border-color: rgba(59, 130, 246, 0.3);
+  animation: pulse-border 2s infinite ease-in-out;
+}
+
+.attempt-badge.attempt-review {
+  background: rgba(168, 85, 247, 0.15);
+  color: #c084fc;
+  border-color: rgba(168, 85, 247, 0.3);
+}
+
+.attempt-badge.attempt-completed {
+  background: rgba(34, 197, 94, 0.15);
+  color: #4ade80;
+  border-color: rgba(34, 197, 94, 0.3);
+}
+
+.attempt-badge.attempt-failed {
+  background: rgba(239, 68, 68, 0.15);
+  color: #f87171;
+  border-color: rgba(239, 68, 68, 0.3);
+}
+
+.attempt-badge.attempt-blocked {
+  background: rgba(245, 158, 11, 0.15);
+  color: #fbbf24;
+  border-color: rgba(245, 158, 11, 0.3);
+}
+
+.diff-viewer {
+  user-select: text;
+  white-space: pre-wrap;
+  word-break: break-all;
+  font-family: var(--vscode-editor-font-family, monospace);
+  line-height: 1.35;
+}
+
+@keyframes pulse-border {
+  0%, 100% { border-color: rgba(59, 130, 246, 0.3); }
+  50% { border-color: rgba(59, 130, 246, 0.8); }
+}
+
 .priority-p2 {
   color: var(--p2-color);
   background: var(--p2-bg);
@@ -669,6 +733,13 @@ body.is-dragging-card .kanban-column {
   color: #ffffff;
   background: #0284c7;
   border-color: #38bdf8;
+}
+
+.card-action-btn.copy-prompt-btn:hover {
+  color: #ffffff;
+  background: #059669;
+  border-color: #34d399;
+  box-shadow: 0 0 8px rgba(16, 185, 129, 0.35);
 }
 
 /* FLOATING ASSIGN POPOVER */

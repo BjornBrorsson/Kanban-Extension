@@ -2,8 +2,9 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { TicketParser } from '../src/ticketParser';
 import { ConfigParser } from '../src/configParser';
+import { PromptFormatter } from '../src/promptFormatter';
 
-export { TicketParser, ConfigParser };
+export { TicketParser, ConfigParser, PromptFormatter };
 
 function assert(condition: boolean, message: string) {
   if (!condition) {
@@ -122,7 +123,9 @@ async function runTests() {
 
   // Test 10: Assignee insertion on EXT-001 (Project's own ticket format)
   console.log('\nTesting Assignee insertion on EXT-001 format...');
-  const ext001Path = path.join(root, 'Tickets', 'Ongoing', 'EXT-001_copy-agent-task-prompt.md');
+  const ext001Path = fs.existsSync(path.join(root, 'Tickets', 'Completed', 'EXT-001_copy-agent-task-prompt.md'))
+    ? path.join(root, 'Tickets', 'Completed', 'EXT-001_copy-agent-task-prompt.md')
+    : path.join(root, 'Tickets', 'Ongoing', 'EXT-001_copy-agent-task-prompt.md');
   if (fs.existsSync(ext001Path)) {
     const ext001Content = fs.readFileSync(ext001Path, 'utf8');
     const ext001Assigned = TicketParser.updateTicketAssignee(ext001Content, 'Cline CLI (Ollama - Gemma 4 E4B)');
@@ -136,6 +139,63 @@ async function runTests() {
     assert(!ext001Reassigned.includes('Cline CLI'), 'Expected Cline CLI to be replaced');
     console.log('✓ EXT-001 assignment and re-assignment tests passed!');
   }
+
+  // Test 11: ConfigParser prompt template parsing
+  console.log('\nTesting ConfigParser prompt template parsing...');
+  const inlineTemplateConfig = ConfigParser.parse(`
+## Settings
+- **Board Name**: Custom Prompt Board
+- **Agent Prompt Template**: Work on {id} located at {relative_path}
+  `, 'Test Board');
+  assert(inlineTemplateConfig.agentPromptTemplate === 'Work on {id} located at {relative_path}',
+    `Expected parsed inline template, got: '${inlineTemplateConfig.agentPromptTemplate}'`);
+
+  const sectionTemplateConfig = ConfigParser.parse(`
+## Settings
+- **Board Name**: Custom Prompt Board
+
+## Prompt Template
+\`\`\`markdown
+Special instructions for **{id}: {title}** at {relative_path}:
+Summary: {summary}
+Acceptance Criteria:
+{acceptance_criteria}
+\`\`\`
+  `, 'Test Board');
+  assert(sectionTemplateConfig.agentPromptTemplate !== undefined && sectionTemplateConfig.agentPromptTemplate.includes('Special instructions for **{id}: {title}**'),
+    `Expected parsed block template, got: '${sectionTemplateConfig.agentPromptTemplate}'`);
+  console.log('✓ ConfigParser prompt template tests passed!');
+
+  // Test 12: PromptFormatter default template formatting
+  console.log('\nTesting PromptFormatter default template...');
+  const defaultPrompt = PromptFormatter.formatPrompt(ticket019, null, root, ticketsRoot);
+  assert(defaultPrompt.includes('Please review and work on ticket **ATF-019:'),
+    `Expected prompt to include 'Please review and work on ticket **ATF-019:', got:\n${defaultPrompt}`);
+  assert(defaultPrompt.includes('located at `Example Structure/Tickets/Ongoing/Example_ticket-019_cleanup-audit-trail.md`'),
+    `Expected relative path to be computed relative to workspace root, got:\n${defaultPrompt}`);
+  assert(defaultPrompt.includes('### Summary'), 'Expected prompt to contain ### Summary');
+  assert(defaultPrompt.includes('### Key Acceptance Criteria'), 'Expected prompt to contain Key Acceptance Criteria');
+  assert(defaultPrompt.includes('- [ ] Mutations captured with before/after'),
+    'Expected criteria to be formatted with checklist bullets');
+  assert(defaultPrompt.includes('### Instructions'), 'Expected prompt to contain Instructions');
+  assert(defaultPrompt.includes('Move the ticket to `Example Structure/Tickets/Completed/` once done.'),
+    `Expected completed path to be correctly derived, got:\n${defaultPrompt}`);
+  console.log('✓ PromptFormatter default template tests passed!');
+
+  // Test 13: PromptFormatter with custom config template and edge cases
+  console.log('\nTesting PromptFormatter with custom template...');
+  const customPrompt = PromptFormatter.formatPrompt(ticket001, sectionTemplateConfig, root, ticketsRoot);
+  assert(customPrompt.includes('Special instructions for **ACM-001:'),
+    `Expected custom template prefix, got:\n${customPrompt}`);
+  assert(customPrompt.includes('- [x] Ollama installed and running locally.') && customPrompt.includes('- [ ] Backend `.env` model endpoint'),
+    'Expected done/undone checkboxes to reflect criterion state');
+
+  // Test with ticket having no acceptance criteria
+  const noCriteriaTicket = { ...ticket092, acceptanceCriteria: [] };
+  const fallbackPrompt = PromptFormatter.formatPrompt(noCriteriaTicket, null, root, ticketsRoot);
+  assert(fallbackPrompt.includes('- [ ] Implement requirements as specified in ticket.'),
+    'Expected fallback criterion text when no criteria present');
+  console.log('✓ PromptFormatter custom template & edge cases tests passed!');
 
   console.log('\n=== ALL UNIT TESTS PASSED SUCCESSFULLY! ===');
 }

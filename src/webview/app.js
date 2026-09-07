@@ -80,6 +80,7 @@
   const modalBadges = document.getElementById('modalBadges');
   const modalDetailBody = document.getElementById('modalDetailBody');
   const btnOpenInEditor = document.getElementById('btnOpenInEditor');
+  const btnCopyPromptModal = document.getElementById('btnCopyPromptModal');
   const btnAssignModal = document.getElementById('btnAssignModal');
   const assignModalBtnText = document.getElementById('assignModalBtnText');
   const btnRunInChatModal = document.getElementById('btnRunInChatModal');
@@ -204,6 +205,18 @@
       e.stopPropagation();
       if (state.activeDetailTicket) {
         showAssignMenu(btnAssignModal, state.activeDetailTicket);
+      }
+    });
+  }
+
+  if (btnCopyPromptModal) {
+    btnCopyPromptModal.addEventListener('click', () => {
+      if (state.activeDetailTicket) {
+        vscode.postMessage({
+          type: 'copyAgentPrompt',
+          ticket: state.activeDetailTicket,
+          boardId: state.currentBoard ? state.currentBoard.id : ''
+        });
       }
     });
   }
@@ -900,14 +913,32 @@
       <span class="subfolder-tag">📁 ${ticket.subfolder}</span>
     ` : '';
 
+    // Orchestration attempt badge
+    let attemptBadgeHtml = '';
+    if (ticket.attemptState) {
+      const statusClass = `attempt-${(ticket.attemptState.status || '').toLowerCase()}`;
+      attemptBadgeHtml = `
+        <span class="attempt-badge ${statusClass}" title="Attempt #${ticket.attemptState.generation}: ${ticket.attemptState.status} (${ticket.attemptState.tier})">
+          ⚙ ${ticket.attemptState.status} #${ticket.attemptState.generation}
+        </span>
+      `;
+    }
+
     card.innerHTML = `
       <div class="ticket-card-top">
         <div class="ticket-badges-left">
           <span class="ticket-id-badge">${ticket.id}</span>
           <span class="priority-pill ${priorityClass}">${ticket.priority}</span>
+          ${attemptBadgeHtml}
           ${subfolderHtml}
         </div>
         <div class="card-hover-actions">
+          <button class="card-action-btn copy-prompt-btn" title="Copy Agent Task Prompt" data-action="copy-prompt">
+            <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path>
+              <rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect>
+            </svg>
+          </button>
           <button class="card-action-btn run-chat-btn" title="Run in IDE Chat" data-action="run-chat">
             <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
@@ -943,6 +974,18 @@
     `;
 
     // Action button listeners
+    const copyPromptBtn = card.querySelector('[data-action="copy-prompt"]');
+    if (copyPromptBtn) {
+      copyPromptBtn.addEventListener('click', e => {
+        e.stopPropagation();
+        vscode.postMessage({
+          type: 'copyAgentPrompt',
+          ticket,
+          boardId: state.currentBoard ? state.currentBoard.id : ''
+        });
+      });
+    }
+
     const runChatBtn = card.querySelector('[data-action="run-chat"]');
     if (runChatBtn) {
       runChatBtn.addEventListener('click', e => {
@@ -1245,11 +1288,67 @@
       `;
     }
 
+    let evidenceHtml = '';
+    if (ticket.attemptState) {
+      const att = ticket.attemptState;
+      const statusClass = `attempt-${(att.status || '').toLowerCase()}`;
+      evidenceHtml = `
+        <div class="evidence-drawer-section" style="margin-top:14px;border-top:1px solid var(--border-subtle);padding-top:10px;">
+          <div style="font-size:12.5px;font-weight:600;margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;">
+            <span>🔍 Orchestration Attempt</span>
+            <span class="attempt-badge ${statusClass}">Attempt #${att.generation} — ${att.status} (${att.tier})</span>
+          </div>
+          ${att.patch ? `
+            <div style="margin-bottom:8px;">
+              <div style="font-size:11px;font-weight:600;margin-bottom:4px;color:var(--text-muted);">Unified Diff / Patch</div>
+              <pre class="diff-viewer" style="background:var(--bg-primary);padding:8px;border-radius:4px;font-size:11px;overflow-x:auto;max-height:180px;border:1px solid var(--border-subtle);">${escapeHtml(att.patch)}</pre>
+            </div>
+          ` : ''}
+          ${att.evidence && att.evidence.length > 0 ? `
+            <div style="margin-bottom:8px;">
+              <div style="font-size:11px;font-weight:600;margin-bottom:4px;color:var(--text-muted);">Verification Checks</div>
+              ${att.evidence.map(ev => `
+                <div style="font-size:11px;background:var(--bg-primary);padding:6px;border-radius:4px;margin-bottom:4px;border:1px solid var(--border-subtle);">
+                  <div style="display:flex;justify-content:space-between;">
+                    <code>${escapeHtml(ev.command)}</code>
+                    <span style="color:${ev.exitCode === 0 ? '#4ade80' : '#f87171'};font-weight:600;">Exit: ${ev.exitCode}</span>
+                  </div>
+                  <pre style="margin:4px 0 0 0;font-size:10.5px;color:var(--text-muted);">${escapeHtml(ev.output)}</pre>
+                </div>
+              `).join('')}
+            </div>
+          ` : ''}
+          ${att.handoff ? `
+            <div style="margin-bottom:8px;font-size:11px;background:var(--bg-primary);padding:6px;border-radius:4px;border:1px solid var(--border-subtle);">
+              <div style="font-weight:600;margin-bottom:2px;color:var(--text-muted);">Lead ➔ Worker Delegation</div>
+              <div><strong>Scope:</strong> <code>${escapeHtml(att.handoff.allowedScope ? att.handoff.allowedScope.join(', ') : 'All')}</code></div>
+              <div><strong>Next Action:</strong> ${escapeHtml(att.handoff.nextSuggestedAction || 'Implement changes')}</div>
+            </div>
+          ` : ''}
+          ${att.escalation ? `
+            <div style="margin-bottom:8px;font-size:11px;background:rgba(239, 68, 68, 0.1);padding:6px;border-radius:4px;border:1px solid #ef4444;">
+              <div style="font-weight:600;margin-bottom:2px;color:#ef4444;">Worker ➔ Lead Escalation (${escapeHtml(att.escalation.triggerType || '')})</div>
+              <div>${escapeHtml(att.escalation.message || '')}</div>
+              ${att.escalation.resolutionStrategy ? `<div><strong>Strategy:</strong> ${escapeHtml(att.escalation.resolutionStrategy)}</div>` : ''}
+            </div>
+          ` : ''}
+          ${att.reviewDecision ? `
+            <div style="margin-bottom:8px;font-size:11px;background:rgba(74, 222, 128, 0.08);padding:6px;border-radius:4px;border:1px solid #4ade80;">
+              <div style="font-weight:600;margin-bottom:2px;color:#4ade80;">Fresh Lead Review: ${att.reviewDecision.approved ? 'Approved ✓' : 'Changes Requested ✗'}</div>
+              <div>${escapeHtml(att.reviewDecision.feedback || '')}</div>
+            </div>
+          ` : ''}
+          ${att.failureReason ? `<div style="font-size:11.5px;color:#f87171;margin-top:4px;"><strong>Failure Reason:</strong> ${escapeHtml(att.failureReason)}</div>` : ''}
+        </div>
+      `;
+    }
+
     modalDetailBody.innerHTML = `
       <div class="detail-modal-title">${ticket.title}</div>
       ${fieldsHtml}
       ${ticket.summary ? `<div style="margin: 10px 0;"><h4 style="font-size:12.5px;margin-bottom:4px;">Summary</h4><p style="font-size:12px;color:var(--text-muted);">${ticket.summary}</p></div>` : ''}
       ${checklistHtml}
+      ${evidenceHtml}
     `;
 
     // Make detail modal assignee row clickable
@@ -1318,6 +1417,16 @@
     }
 
     return null;
+  }
+
+  function escapeHtml(str) {
+    if (!str) return '';
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
   }
 
 })();

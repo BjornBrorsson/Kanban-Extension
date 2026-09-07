@@ -30,7 +30,8 @@
     "build": "node esbuild.js",
     "watch": "node esbuild.js --watch",
     "compile": "tsc -p ./ --noEmit",
-    "test": "node esbuild.js && node dist/test.js && node test/testKanban.js",
+    "test": "node esbuild.js && node dist/test.js && node dist/m0Tests.js && node dist/m1Tests.js && node dist/m2Tests.js && node dist/m3Tests.js && node dist/m4Tests.js && node dist/m5Tests.js && node dist/failureMatrixTests.js && node dist/selfHostPilot.js && node dist/wasteLessPilot.js && node test/testKanban.js",
+    "benchmark": "node esbuild.js && node dist/benchmarks.js",
     "package": "npm run build && node ./node_modules/@vscode/vsce/vsce package --allow-missing-repository --no-dependencies"
   },
   "activationEvents": [

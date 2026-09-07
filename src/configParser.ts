@@ -1,4 +1,5 @@
 import { BoardConfig, Assignee, AgentRunnerConfig } from './types';
+import { OrchestrationConfigParser } from './orchestrator/config/orchestrationConfig';
 
 export class ConfigParser {
   public static parse(content: string, defaultBoardName: string): BoardConfig {
@@ -34,6 +35,8 @@ export class ConfigParser {
             config.autoUpdateStatus = val.toLowerCase() !== 'false';
           } else if (key.includes('default agent')) {
             config.defaultAgent = val;
+          } else if (key.includes('prompt template') || key.includes('agent prompt')) {
+            config.agentPromptTemplate = val.replace(/^["'`](.*)["'`]$/, '$1');
           }
         }
       }
@@ -44,6 +47,21 @@ export class ConfigParser {
     if (assigneesMatch) {
       const assigneesBlock = assigneesMatch[1];
       this.parseAssignees(assigneesBlock, config);
+    }
+
+    // 3. Parse Prompt Template section if present (takes precedence if section exists)
+    const promptMatch = content.match(/##\s+(?:Agent\s+|Task\s+)?Prompt\s+Template\s*\r?\n([\s\S]*?)(?=\r?\n##\s+|$)/i);
+    if (promptMatch) {
+      const templateContent = promptMatch[1].trim();
+      const codeBlockMatch = templateContent.match(/^```(?:markdown|md)?\r?\n([\s\S]*?)\r?\n```$/);
+      config.agentPromptTemplate = codeBlockMatch ? codeBlockMatch[1].trim() : templateContent;
+    }
+
+    // 4. Parse Orchestration YAML block if present
+    try {
+      config.orchestration = OrchestrationConfigParser.extractFromMarkdown(content);
+    } catch (e) {
+      console.warn('Could not parse orchestration block in config.md:', e);
     }
 
     return config;

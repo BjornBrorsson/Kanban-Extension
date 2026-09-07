@@ -40,7 +40,10 @@ export class AgentRunner {
     if (config.type === 'cli') {
       let command = config.command;
       for (const [placeholder, value] of Object.entries(replacements)) {
-        command = command.split(placeholder).join(value);
+        const safeValue = (placeholder === '{ticket_title}' || placeholder === '{ticket_summary}' || placeholder === '{ticket_name}')
+          ? value.replace(/"/g, '\\"')
+          : value;
+        command = command.split(placeholder).join(safeValue);
       }
 
       const cwd = config.workingDir ? config.workingDir.replace('{workspace_root}', workspaceFolder).replace('{board_root}', boardRoot) : workspaceFolder;

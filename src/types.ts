@@ -32,6 +32,15 @@ export interface Ticket {
   };
   mtime: number;
   hasWorkLog: boolean;
+  attemptState?: {
+    attemptId: string;
+    generation: number;
+    status: string;
+    tier: 'managed' | 'assisted';
+    patch?: string;
+    evidence?: { command: string; exitCode: number; output: string }[];
+    failureReason?: string;
+  };
 }
 
 export interface SubfolderInfo {
@@ -65,12 +74,16 @@ export interface Assignee {
   agentConfig?: AgentRunnerConfig;
 }
 
+import { OrchestrationConfig } from './orchestrator/types';
+
 export interface BoardConfig {
   name: string;
   columnsOrder: string[];
   autoUpdateStatus: boolean;
   defaultAgent: string | null;
   assignees: Assignee[];
+  agentPromptTemplate?: string;
+  orchestration?: OrchestrationConfig;
 }
 
 export interface BoardPlanDocument {

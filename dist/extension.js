@@ -35,7 +35,7 @@ __export(extension_exports, {
 });
 module.exports = __toCommonJS(extension_exports);
 var vscode6 = __toESM(require("vscode"));
-var path6 = __toESM(require("path"));
+var path7 = __toESM(require("path"));
 var fs5 = __toESM(require("fs"));
 
 // src/boardManager.ts
@@ -50,7 +50,7 @@ var fs = __toESM(require("fs"));
 
 // src/ticketParser.ts
 var path = __toESM(require("path"));
-var TicketParser2 = class {
+var TicketParser = class {
   static parse(filePath, content, boardRoot, column, subfolder, mtime = Date.now()) {
     const filename = path.basename(filePath);
     const relativePath = path.relative(boardRoot, filePath).replace(/\\/g, "/");
@@ -336,6 +336,174 @@ var TicketParser2 = class {
   }
 };
 
+// src/orchestrator/config/orchestrationConfig.ts
+var OrchestrationConfigParser = class {
+  /**
+   * Extracts and parses the versioned fenced YAML block from config.md content.
+   * Returns undefined if no orchestration YAML block is found or if it is disabled.
+   */
+  static extractFromMarkdown(content) {
+    if (!content || !content.trim()) {
+      return void 0;
+    }
+    const yamlBlockMatch = content.match(/```(?:yaml|yml)\s*\r?\n([\s\S]*?)\r?\n```/i);
+    if (!yamlBlockMatch) {
+      return void 0;
+    }
+    const yamlText = yamlBlockMatch[1].trim();
+    if (!yamlText.includes("schemaVersion")) {
+      return void 0;
+    }
+    return this.parseYaml(yamlText);
+  }
+  /**
+   * Parses the YAML text into a validated OrchestrationConfig structure.
+   */
+  static parseYaml(yamlText) {
+    const raw = this.parseSimpleYaml(yamlText);
+    const schemaVersion = Number(raw.schemaVersion) || 1;
+    if (schemaVersion !== 1) {
+      throw new Error(`Unsupported orchestration schemaVersion: ${raw.schemaVersion}. Supported versions: 1`);
+    }
+    const orchestrationRaw = typeof raw.orchestration === "object" && raw.orchestration !== null ? raw.orchestration : {};
+    const orchestration = {
+      enabled: Boolean(orchestrationRaw.enabled === true || orchestrationRaw.enabled === "true"),
+      profile: typeof orchestrationRaw.profile === "string" ? orchestrationRaw.profile : void 0,
+      maxConcurrentWorkers: typeof orchestrationRaw.maxConcurrentWorkers === "number" ? orchestrationRaw.maxConcurrentWorkers : orchestrationRaw.maxConcurrentWorkers ? parseInt(String(orchestrationRaw.maxConcurrentWorkers), 10) : 1,
+      completionTarget: orchestrationRaw.completionTarget === "reviewed-patch" || orchestrationRaw.completionTarget === "local-build" || orchestrationRaw.completionTarget === "pr" ? orchestrationRaw.completionTarget : "reviewed-patch",
+      retryLimit: typeof orchestrationRaw.retryLimit === "number" ? orchestrationRaw.retryLimit : 1
+    };
+    let roles;
+    if (raw.roles && typeof raw.roles === "object") {
+      roles = {
+        lead: typeof raw.roles.lead === "string" ? raw.roles.lead : void 0,
+        worker: typeof raw.roles.worker === "string" ? raw.roles.worker : void 0,
+        reviewer: typeof raw.roles.reviewer === "string" ? raw.roles.reviewer : void 0
+      };
+    }
+    let policies;
+    if (raw.policies && typeof raw.policies === "object") {
+      policies = {};
+      for (const [pName, pVal] of Object.entries(raw.policies)) {
+        if (typeof pVal === "object" && pVal !== null) {
+          const pObj = pVal;
+          const allowedExecRaw = Array.isArray(pObj.allowedExecution) ? pObj.allowedExecution : typeof pObj.allowedExecution === "string" ? pObj.allowedExecution.split(",").map((s) => s.trim()) : ["local"];
+          policies[pName] = {
+            allowedExecution: allowedExecRaw,
+            unknownDestination: pObj.unknownDestination === "allow" ? "allow" : "deny",
+            allowedDataClasses: Array.isArray(pObj.allowedDataClasses) ? pObj.allowedDataClasses : void 0,
+            allowedEndpoints: Array.isArray(pObj.allowedEndpoints) ? pObj.allowedEndpoints : void 0
+          };
+        }
+      }
+    }
+    let budgets;
+    if (raw.budgets && typeof raw.budgets === "object") {
+      const bObj = raw.budgets;
+      budgets = {
+        dailyCurrency: typeof bObj.dailyCurrency === "string" ? bObj.dailyCurrency : "EUR",
+        dailyLimit: typeof bObj.dailyLimit === "number" ? bObj.dailyLimit : parseFloat(bObj.dailyLimit) || void 0,
+        reserveForReview: typeof bObj.reserveForReview === "number" ? bObj.reserveForReview : parseFloat(bObj.reserveForReview) || 1,
+        batchCeiling: typeof bObj.batchCeiling === "number" ? bObj.batchCeiling : parseFloat(bObj.batchCeiling) || void 0,
+        maxPerTicketSpend: typeof bObj.maxPerTicketSpend === "number" ? bObj.maxPerTicketSpend : parseFloat(bObj.maxPerTicketSpend) || void 0
+      };
+    }
+    return {
+      schemaVersion: 1,
+      orchestration,
+      roles,
+      policies,
+      budgets
+    };
+  }
+  /**
+   * Lightweight indent-based YAML parser supporting objects, scalars, inline arrays [a, b], and list items.
+   */
+  static parseSimpleYaml(yaml) {
+    const lines = yaml.split(/\r?\n/);
+    const root = {};
+    const stack = [
+      { indent: -1, target: root }
+    ];
+    for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+      const originalLine = lines[lineIndex];
+      if (!originalLine.trim() || originalLine.trim().startsWith("#")) {
+        continue;
+      }
+      const indent = originalLine.search(/\S/);
+      const trimmed = originalLine.trim();
+      while (stack.length > 1 && stack[stack.length - 1].indent >= indent) {
+        stack.pop();
+      }
+      const currentContext = stack[stack.length - 1].target;
+      const kvMatch = trimmed.match(/^([A-Za-z0-9_-]+)\s*:\s*(.*)$/);
+      if (kvMatch) {
+        const key = kvMatch[1];
+        const valStr = kvMatch[2].trim();
+        if (valStr === "") {
+          const newObj = {};
+          if (Array.isArray(currentContext)) {
+            currentContext.push({ [key]: newObj });
+          } else {
+            currentContext[key] = newObj;
+          }
+          stack.push({ indent, target: newObj });
+        } else {
+          const parsedVal = this.parseScalarOrInlineArray(valStr);
+          if (Array.isArray(currentContext)) {
+            currentContext.push({ [key]: parsedVal });
+          } else {
+            currentContext[key] = parsedVal;
+          }
+        }
+        continue;
+      }
+      const listMatch = trimmed.match(/^-\s+(.*)$/);
+      if (listMatch) {
+        const itemContent = listMatch[1].trim();
+        const subKv = itemContent.match(/^([A-Za-z0-9_-]+)\s*:\s*(.*)$/);
+        if (subKv) {
+          const itemKey = subKv[1];
+          const itemVal = this.parseScalarOrInlineArray(subKv[2].trim());
+          const itemObj = { [itemKey]: itemVal };
+          if (Array.isArray(currentContext)) {
+            currentContext.push(itemObj);
+          }
+        } else {
+          const val = this.parseScalarOrInlineArray(itemContent);
+          if (Array.isArray(currentContext)) {
+            currentContext.push(val);
+          }
+        }
+      }
+    }
+    return root;
+  }
+  static parseScalarOrInlineArray(val) {
+    if (!val)
+      return "";
+    if (val.startsWith("[") && val.endsWith("]")) {
+      const inner = val.slice(1, -1).trim();
+      if (!inner)
+        return [];
+      return inner.split(",").map((s) => this.parseScalarOrInlineArray(s.trim()));
+    }
+    if (val.startsWith('"') && val.endsWith('"') || val.startsWith("'") && val.endsWith("'")) {
+      return val.slice(1, -1);
+    }
+    if (val.toLowerCase() === "true")
+      return true;
+    if (val.toLowerCase() === "false")
+      return false;
+    if (/^-?\d+(\.\d+)?$/.test(val)) {
+      const num = Number(val);
+      if (!isNaN(num))
+        return num;
+    }
+    return val;
+  }
+};
+
 // src/configParser.ts
 var ConfigParser = class {
   static parse(content, defaultBoardName) {
@@ -366,6 +534,8 @@ var ConfigParser = class {
             config.autoUpdateStatus = val.toLowerCase() !== "false";
           } else if (key.includes("default agent")) {
             config.defaultAgent = val;
+          } else if (key.includes("prompt template") || key.includes("agent prompt")) {
+            config.agentPromptTemplate = val.replace(/^["'`](.*)["'`]$/, "$1");
           }
         }
       }
@@ -374,6 +544,17 @@ var ConfigParser = class {
     if (assigneesMatch) {
       const assigneesBlock = assigneesMatch[1];
       this.parseAssignees(assigneesBlock, config);
+    }
+    const promptMatch = content.match(/##\s+(?:Agent\s+|Task\s+)?Prompt\s+Template\s*\r?\n([\s\S]*?)(?=\r?\n##\s+|$)/i);
+    if (promptMatch) {
+      const templateContent = promptMatch[1].trim();
+      const codeBlockMatch = templateContent.match(/^```(?:markdown|md)?\r?\n([\s\S]*?)\r?\n```$/);
+      config.agentPromptTemplate = codeBlockMatch ? codeBlockMatch[1].trim() : templateContent;
+    }
+    try {
+      config.orchestration = OrchestrationConfigParser.extractFromMarkdown(content);
+    } catch (e) {
+      console.warn("Could not parse orchestration block in config.md:", e);
     }
     return config;
   }
@@ -652,7 +833,7 @@ var BoardDiscovery = class {
               const ticketPath = path2.join(childPath, subChild.name);
               const stat = await fs.promises.stat(ticketPath);
               const content = await fs.promises.readFile(ticketPath, "utf8");
-              const ticket = TicketParser2.parse(ticketPath, content, rootPath, columnName, child.name, stat.mtimeMs);
+              const ticket = TicketParser.parse(ticketPath, content, rootPath, columnName, child.name, stat.mtimeMs);
               tickets.push(ticket);
               subTicketCount++;
             }
@@ -669,7 +850,7 @@ var BoardDiscovery = class {
           const ticketPath = childPath;
           const stat = await fs.promises.stat(ticketPath);
           const content = await fs.promises.readFile(ticketPath, "utf8");
-          const ticket = TicketParser2.parse(ticketPath, content, rootPath, columnName, null, stat.mtimeMs);
+          const ticket = TicketParser.parse(ticketPath, content, rootPath, columnName, null, stat.mtimeMs);
           tickets.push(ticket);
         }
       }
@@ -912,7 +1093,7 @@ var BoardManager = class _BoardManager {
       if (autoUpdate) {
         try {
           const content = await fs2.promises.readFile(targetPath, "utf8");
-          const updated = TicketParser2.updateTicketStatus(content, targetColumn);
+          const updated = TicketParser.updateTicketStatus(content, targetColumn);
           if (updated !== content) {
             await fs2.promises.writeFile(targetPath, updated, "utf8");
           }
@@ -946,7 +1127,7 @@ var BoardManager = class _BoardManager {
     }
     try {
       const content = await fs2.promises.readFile(sourcePath, "utf8");
-      const updated = TicketParser2.updateTicketAssignee(content, assigneeName);
+      const updated = TicketParser.updateTicketAssignee(content, assigneeName);
       if (updated !== content) {
         await fs2.promises.writeFile(sourcePath, updated, "utf8");
         console.log(`[Agentic Kanban] Successfully wrote assignment "${assigneeName}" to ${sourcePath}`);
@@ -1142,7 +1323,7 @@ var TreeItemNode = class extends vscode3.TreeItem {
 
 // src/webviewPanel.ts
 var vscode5 = __toESM(require("vscode"));
-var path5 = __toESM(require("path"));
+var path6 = __toESM(require("path"));
 var fs4 = __toESM(require("fs"));
 
 // src/agentRunner.ts
@@ -1179,7 +1360,8 @@ var AgentRunner = class {
     if (config.type === "cli") {
       let command = config.command;
       for (const [placeholder, value] of Object.entries(replacements)) {
-        command = command.split(placeholder).join(value);
+        const safeValue = placeholder === "{ticket_title}" || placeholder === "{ticket_summary}" || placeholder === "{ticket_name}" ? value.replace(/"/g, '\\"') : value;
+        command = command.split(placeholder).join(safeValue);
       }
       const cwd = config.workingDir ? config.workingDir.replace("{workspace_root}", workspaceFolder).replace("{board_root}", boardRoot) : workspaceFolder;
       const terminalName = `Agent: ${assignee.name}`;
@@ -1221,6 +1403,92 @@ ${ticket.summary}`;
       return true;
     }
     return false;
+  }
+};
+
+// src/promptFormatter.ts
+var path5 = __toESM(require("path"));
+var PromptFormatter = class {
+  static DEFAULT_TEMPLATE = `Please review and work on ticket **{id}: {title}** located at \`{relative_path}\`.
+
+### Summary
+{summary}
+
+### Key Acceptance Criteria
+{acceptance_criteria}
+
+### Instructions
+1. Inspect the codebase and execute the necessary changes.
+2. Verify that all acceptance criteria are met and pass tests.
+3. Record your timestamped progress under \`## Work Log\` in the ticket file.
+4. Move the ticket to \`{completed_path}\` once done.`;
+  /**
+   * Formats a structured agent prompt for a ticket based on board config or default template.
+   */
+  static formatPrompt(ticket, boardConfig, workspaceRoot, boardRoot) {
+    let relPath = ticket.relativePath || ticket.filename;
+    if (workspaceRoot && ticket.path) {
+      const calculated = path5.relative(workspaceRoot, ticket.path).replace(/\\/g, "/");
+      if (!calculated.startsWith("..")) {
+        relPath = calculated;
+      }
+    } else if (boardRoot && ticket.path) {
+      const boardDirName = path5.basename(boardRoot);
+      const fromBoard = path5.relative(boardRoot, ticket.path).replace(/\\/g, "/");
+      relPath = `${boardDirName}/${fromBoard}`;
+    }
+    let completedPath = "Tickets/Completed/";
+    if (boardRoot && workspaceRoot) {
+      const relBoard = path5.relative(workspaceRoot, boardRoot).replace(/\\/g, "/");
+      completedPath = relBoard && relBoard !== "." ? `${relBoard}/Completed/` : "Completed/";
+    } else if (ticket.column) {
+      const colSubstr = "/" + ticket.column + "/";
+      const colIdx = relPath.indexOf(colSubstr);
+      if (colIdx !== -1) {
+        completedPath = `${relPath.slice(0, colIdx)}/Completed/`;
+      } else if (relPath.startsWith(ticket.column + "/")) {
+        completedPath = "Completed/";
+      }
+    }
+    let criteriaText = "";
+    if (ticket.acceptanceCriteria && ticket.acceptanceCriteria.length > 0) {
+      criteriaText = ticket.acceptanceCriteria.map((c) => `- [${c.done ? "x" : " "}] ${c.text}`).join("\n");
+    } else {
+      criteriaText = "- [ ] Implement requirements as specified in ticket.";
+    }
+    const template = boardConfig?.agentPromptTemplate && boardConfig.agentPromptTemplate.trim() ? boardConfig.agentPromptTemplate.trim() : this.DEFAULT_TEMPLATE;
+    const summaryText = ticket.summary || ticket.title;
+    const descriptionText = ticket.description || ticket.summary || ticket.title;
+    const replacements = {
+      "{id}": ticket.id || "",
+      "{ticket_id}": ticket.id || "",
+      "{title}": ticket.title || "",
+      "{ticket_title}": ticket.title || "",
+      "{relative_path}": relPath,
+      "{ticket_rel_path}": relPath,
+      "{path}": ticket.path || "",
+      "{ticket_path}": ticket.path || "",
+      "{summary}": summaryText,
+      "{ticket_summary}": summaryText,
+      "{description}": descriptionText,
+      "{ticket_description}": descriptionText,
+      "{acceptance_criteria}": criteriaText,
+      "{criteria}": criteriaText,
+      "{key_acceptance_criteria}": criteriaText,
+      "{column}": ticket.column || "",
+      "{ticket_column}": ticket.column || "",
+      "{subfolder}": ticket.subfolder || "",
+      "{priority}": ticket.priority || "Normal",
+      "{assignee}": ticket.assignee || "Unassigned",
+      "{epic}": ticket.epic || "",
+      "{estimate}": ticket.estimate || "",
+      "{completed_path}": completedPath
+    };
+    let result = template;
+    for (const [placeholder, value] of Object.entries(replacements)) {
+      result = result.split(placeholder).join(value);
+    }
+    return result;
   }
 };
 
@@ -1333,7 +1601,7 @@ var KanbanWebviewManager = class _KanbanWebviewManager {
         try {
           const board = boardManager.getBoard(message.boardId);
           if (board) {
-            const configPath = path5.join(board.rootPath, "config.md");
+            const configPath = path6.join(board.rootPath, "config.md");
             if (fs4.existsSync(configPath)) {
               const doc = await vscode5.workspace.openTextDocument(vscode5.Uri.file(configPath));
               await vscode5.window.showTextDocument(doc, { viewColumn: vscode5.ViewColumn.Beside });
@@ -1405,13 +1673,46 @@ Instructions:
           vscode5.window.showErrorMessage(`Failed to open IDE chat: ${err?.message || err}`);
         }
         break;
+      case "copyAgentPrompt":
+        try {
+          const t = message.ticket;
+          let targetBoard2 = boardManager.getBoard(message.boardId);
+          const allBoards = boardManager.getAllBoards();
+          if (t && t.path) {
+            const foundBoard = allBoards.find(
+              (b) => path6.resolve(t.path).toLowerCase().startsWith(path6.resolve(b.rootPath).toLowerCase())
+            );
+            if (foundBoard)
+              targetBoard2 = foundBoard;
+          }
+          if (!targetBoard2 && this.currentBoardId) {
+            targetBoard2 = boardManager.getBoard(this.currentBoardId);
+          }
+          if (!targetBoard2 && allBoards.length > 0) {
+            targetBoard2 = allBoards[0];
+          }
+          const workspaceFolder = vscode5.workspace.workspaceFolders?.[0]?.uri.fsPath;
+          const prompt = PromptFormatter.formatPrompt(
+            t,
+            targetBoard2 ? targetBoard2.config : null,
+            workspaceFolder,
+            targetBoard2 ? targetBoard2.rootPath : void 0
+          );
+          await vscode5.env.clipboard.writeText(prompt);
+          vscode5.window.showInformationMessage(
+            `Copied Agent Task Prompt for "${t.id ? t.id + ": " : ""}${t.title}" to clipboard!`
+          );
+        } catch (err) {
+          vscode5.window.showErrorMessage(`Failed to copy agent prompt: ${err?.message || err}`);
+        }
+        break;
       case "assignTicket":
         try {
           let targetBoard2 = boardManager.getBoard(message.boardId);
           const allBoards = boardManager.getAllBoards();
           if (message.ticketPath) {
             const foundBoard = allBoards.find(
-              (b) => path5.resolve(message.ticketPath).toLowerCase().startsWith(path5.resolve(b.rootPath).toLowerCase())
+              (b) => path6.resolve(message.ticketPath).toLowerCase().startsWith(path6.resolve(b.rootPath).toLowerCase())
             );
             if (foundBoard)
               targetBoard2 = foundBoard;
@@ -1441,7 +1742,7 @@ Instructions:
               let ticketObj = null;
               for (const col of reloadedBoard.columns) {
                 const found = col.tickets.find(
-                  (t) => path5.resolve(t.path).toLowerCase() === path5.resolve(message.ticketPath).toLowerCase() || message.ticketId && t.id === message.ticketId || t.filename.toLowerCase() === path5.basename(message.ticketPath).toLowerCase()
+                  (t) => path6.resolve(t.path).toLowerCase() === path6.resolve(message.ticketPath).toLowerCase() || message.ticketId && t.id === message.ticketId || t.filename.toLowerCase() === path6.basename(message.ticketPath).toLowerCase()
                 );
                 if (found) {
                   ticketObj = found;
@@ -1452,9 +1753,13 @@ Instructions:
                 const sourcePath = boardManager.resolveTicketPathOnDisk(targetBoard2, message.ticketPath) || message.ticketPath;
                 const fileContent = await fs4.promises.readFile(sourcePath, "utf8");
                 ticketObj = TicketParser.parse(sourcePath, fileContent, targetBoard2.rootPath, "", null);
-                ticketObj.assignee = assignee.name;
+                if (ticketObj) {
+                  ticketObj.assignee = assignee.name;
+                }
               }
-              await AgentRunner.dispatch(ticketObj, assignee, targetBoard2.rootPath);
+              if (ticketObj) {
+                await AgentRunner.dispatch(ticketObj, assignee, targetBoard2.rootPath);
+              }
             } else {
               vscode5.window.showInformationMessage(`Assigned ticket to ${targetName}.`);
             }
@@ -1748,6 +2053,13 @@ Instructions:
             </svg>
             <span>Open in Editor</span>
           </button>
+          <button id="btnCopyPromptModal" class="modal-btn secondary" title="Copy Agent Task Prompt to clipboard">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path>
+              <rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect>
+            </svg>
+            <span>Copy Prompt</span>
+          </button>
           <button id="btnAssignModal" class="modal-btn secondary">
             <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path>
@@ -1871,7 +2183,7 @@ async function activate(context) {
           return;
         board = pick.board;
       }
-      const configPath = path6.join(board.rootPath, "config.md");
+      const configPath = path7.join(board.rootPath, "config.md");
       if (!fs5.existsSync(configPath)) {
         const defaultConfig = ConfigParser.generateDefaultConfig(board.name);
         await fs5.promises.writeFile(configPath, defaultConfig, "utf8");

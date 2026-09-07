@@ -3,4 +3,5 @@ dist/*.map
 .vscode-test/
 *.vsix
 .DS_Store
-Thumbs.db
+thumbs.db
+scratch/

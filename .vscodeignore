@@ -10,3 +10,9 @@ node_modules/**
 **/*.map
 Example Structure/**
 Tickets/**
+scratch/**
+docs/**
+dist/*Test*.js
+dist/*Tests.js
+dist/*Pilot.js
+dist/benchmarks.js
