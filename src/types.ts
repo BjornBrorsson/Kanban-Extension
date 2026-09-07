@@ -32,6 +32,7 @@ export interface Ticket {
   };
   mtime: number;
   hasWorkLog: boolean;
+  unresolvedDependencies?: string[];
   attemptState?: {
     attemptId: string;
     generation: number;
@@ -92,6 +93,25 @@ export interface BoardPlanDocument {
   content: string;
 }
 
+export interface TicketTemplate {
+  id: string;
+  name: string;
+  filename: string;
+  content: string;
+}
+
+export interface WorkLogEntry {
+  date: string;
+  timestamp?: number;
+  boardId: string;
+  boardName: string;
+  ticketId: string;
+  ticketTitle: string;
+  ticketPath: string;
+  text: string;
+  line?: number;
+}
+
 export interface Board {
   id: string;
   name: string;
@@ -99,6 +119,7 @@ export interface Board {
   columns: Column[];
   config: BoardConfig;
   planDocument: BoardPlanDocument | null;
+  templates?: TicketTemplate[];
   lastScanned: number;
 }
 
@@ -108,6 +129,8 @@ export interface MultiBoardOverview {
   ongoingTicketsCount: number;
   blockedTicketsCount: number;
   assistanceRequiredCount: number;
+  blockedByDependencyCount?: number;
+  recentWorkLogs: WorkLogEntry[];
   boards: {
     id: string;
     name: string;

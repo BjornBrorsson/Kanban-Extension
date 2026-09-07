@@ -1253,3 +1253,125 @@ body.is-dragging-card .kanban-column {
   gap: 12px;
   text-align: center;
 }
+
+/* Blocker warning badge on cards */
+.blocker-warning-badge {
+  background: rgba(239, 68, 68, 0.2);
+  color: #fca5a5;
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+/* Clickable dependency links in modal */
+.dep-link {
+  display: inline-block;
+  padding: 2px 7px;
+  border-radius: 3px;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  margin-right: 4px;
+  margin-bottom: 2px;
+  transition: all 0.15s ease;
+}
+
+.dep-link.resolved {
+  background: rgba(74, 222, 128, 0.12);
+  color: #86efac;
+  border: 1px solid rgba(74, 222, 128, 0.3);
+}
+
+.dep-link.unresolved {
+  background: rgba(239, 68, 68, 0.15);
+  color: #fca5a5;
+  border: 1px solid rgba(239, 68, 68, 0.35);
+}
+
+.dep-link:hover {
+  filter: brightness(1.2);
+  text-decoration: underline;
+}
+
+.criterion-done {
+  text-decoration: line-through;
+  color: var(--text-muted);
+  opacity: 0.8;
+}
+
+.link-btn {
+  background: none;
+  border: none;
+  color: var(--accent-primary);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
+}
+
+.link-btn:hover {
+  color: var(--accent-primary-hover);
+}
+
+/* Activity Feed Timeline */
+.activity-feed-container {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 420px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.timeline-entry {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-left: 3px solid var(--accent-primary);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.timeline-entry:hover {
+  background: var(--bg-card-hover);
+  border-color: var(--border-color);
+}
+
+.timeline-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
+.timeline-date {
+  font-weight: 600;
+  color: var(--text-main);
+  background: rgba(255, 255, 255, 0.06);
+  padding: 1px 6px;
+  border-radius: 3px;
+}
+
+.timeline-board {
+  color: var(--text-muted);
+}
+
+.timeline-ticket {
+  font-weight: 600;
+  color: var(--accent-primary);
+}
+
+.timeline-text {
+  font-size: 12px;
+  color: var(--text-main);
+  line-height: 1.4;
+}
+

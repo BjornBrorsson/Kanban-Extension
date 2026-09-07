@@ -86,6 +86,18 @@
         "title": "Open Board Configuration",
         "category": "Agentic Kanban",
         "icon": "$(gear)"
+      },
+      {
+        "command": "agenticKanban.generateAgentRules",
+        "title": "Generate Agent Rules (AGENT.md)",
+        "category": "Agentic Kanban",
+        "icon": "$(book)"
+      },
+      {
+        "command": "agenticKanban.initTemplates",
+        "title": "Initialize Default Templates (.templates/)",
+        "category": "Agentic Kanban",
+        "icon": "$(file-code)"
       }
     ],
     "menus": {

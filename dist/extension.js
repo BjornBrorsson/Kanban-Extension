@@ -334,6 +334,82 @@ var TicketParser = class {
     }
     return `${tableBlock}${updated}`;
   }
+  /**
+   * Toggles the Nth acceptance criterion checkbox in the document.
+   * Matches both `- [ ]` and `- [x]`, preserving indentation, prefix, and line endings.
+   */
+  static toggleCriterion(content, index, done) {
+    if (index < 0)
+      return content;
+    const checklistRegex = /^([\s>]*-\s*\[)([ xX])(\]\s+.*)$/gm;
+    let matchCount = 0;
+    let match;
+    while ((match = checklistRegex.exec(content)) !== null) {
+      if (matchCount === index) {
+        const fullMatch = match[0];
+        const matchIndex = match.index;
+        const prefix = match[1];
+        const suffix = match[3];
+        const newChar = done ? "x" : " ";
+        const updatedLine = `${prefix}${newChar}${suffix}`;
+        return content.slice(0, matchIndex) + updatedLine + content.slice(matchIndex + fullMatch.length);
+      }
+      matchCount++;
+    }
+    return content;
+  }
+  /**
+   * Scans ## Work Log in the ticket markdown content and extracts dated log entries.
+   */
+  static extractWorkLogEntries(content, ticketId, ticketTitle, ticketPath, boardId, boardName) {
+    const entries = [];
+    const lines = content.split(/\r?\n/);
+    let inWorkLog = false;
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const trimmed = line.trim();
+      if (/^##\s+Work\s+Log/i.test(trimmed)) {
+        inWorkLog = true;
+        continue;
+      }
+      if (inWorkLog) {
+        if (/^##\s+[^#]/i.test(trimmed)) {
+          break;
+        }
+        const dateMatch = trimmed.match(/^[-*]\s+(?:\*\*)?(\d{4}[-/]\d{2}[-/]\d{2}(?:\s+\d{2}:\d{2})?)(?:\*\*)?[\s:\-—–]+(.*)$/);
+        if (dateMatch) {
+          const dateStr = dateMatch[1].trim();
+          const text = dateMatch[2].trim();
+          entries.push({
+            date: dateStr,
+            timestamp: Date.parse(dateStr) || void 0,
+            boardId,
+            boardName,
+            ticketId,
+            ticketTitle,
+            ticketPath,
+            text,
+            line: i + 1
+          });
+        } else if (trimmed.startsWith("-") || trimmed.startsWith("*")) {
+          const text = trimmed.replace(/^[-*]\s+/, "").trim();
+          if (text) {
+            entries.push({
+              date: "Recent",
+              boardId,
+              boardName,
+              ticketId,
+              ticketTitle,
+              ticketPath,
+              text,
+              line: i + 1
+            });
+          }
+        }
+      }
+    }
+    return entries;
+  }
 };
 
 // src/orchestrator/config/orchestrationConfig.ts
@@ -864,6 +940,61 @@ var BoardDiscovery = class {
       });
     }
     this.sortColumns(columns, boardConfig.columnsOrder);
+    const templates = [];
+    const templatesDir = path2.join(rootPath, ".templates");
+    if (fs.existsSync(templatesDir)) {
+      try {
+        const templateEntries = await fs.promises.readdir(templatesDir, { withFileTypes: true });
+        for (const te of templateEntries) {
+          if (!te.isDirectory() && te.name.endsWith(".md")) {
+            const tPath = path2.join(templatesDir, te.name);
+            const content = await fs.promises.readFile(tPath, "utf8");
+            const id = te.name.replace(/\.md$/i, "").toLowerCase();
+            const h1Match = content.match(/^#\s+(.+)$/m);
+            const rawName = h1Match ? h1Match[1].replace(/\{id\}\s*[—–\-:]*\s*/i, "").trim() : id.charAt(0).toUpperCase() + id.slice(1);
+            templates.push({
+              id,
+              name: rawName || id,
+              filename: te.name,
+              content
+            });
+          }
+        }
+      } catch (e) {
+        console.warn(`Could not read .templates at ${templatesDir}:`, e);
+      }
+    }
+    const ticketMap = /* @__PURE__ */ new Map();
+    for (const col of columns) {
+      for (const t of col.tickets) {
+        if (t.id) {
+          ticketMap.set(t.id.toUpperCase(), { column: col.name, ticket: t });
+        }
+      }
+    }
+    for (const col of columns) {
+      for (const t of col.tickets) {
+        if (t.dependsOn && t.dependsOn.length > 0) {
+          const unresolved = [];
+          for (const dep of t.dependsOn) {
+            const depKey = dep.toUpperCase();
+            const found = ticketMap.get(depKey);
+            if (!found) {
+              unresolved.push(dep);
+            } else {
+              const colLower = found.column.toLowerCase();
+              const isCompleted = colLower.includes("complete") || colLower.includes("done");
+              if (!isCompleted) {
+                unresolved.push(`${dep} (${found.column})`);
+              }
+            }
+          }
+          if (unresolved.length > 0) {
+            t.unresolvedDependencies = unresolved;
+          }
+        }
+      }
+    }
     return {
       id: boardId,
       name: boardConfig.name,
@@ -871,6 +1002,7 @@ var BoardDiscovery = class {
       columns,
       config: boardConfig,
       planDocument,
+      templates: templates.length > 0 ? templates : void 0,
       lastScanned: Date.now()
     };
   }
@@ -964,6 +1096,8 @@ var BoardManager = class _BoardManager {
     let ongoingTicketsCount = 0;
     let blockedTicketsCount = 0;
     let assistanceRequiredCount = 0;
+    let blockedByDependencyCount = 0;
+    const recentWorkLogs = [];
     const activeTickets = [];
     const boardsSummary = boardsList.map((b) => {
       const colSummary = {};
@@ -983,6 +1117,19 @@ var BoardManager = class _BoardManager {
           assistanceRequiredCount += count;
           col.tickets.forEach((t) => activeTickets.push({ ticket: t, boardId: b.id, boardName: b.name }));
         }
+        for (const t of col.tickets) {
+          if (t.unresolvedDependencies && t.unresolvedDependencies.length > 0) {
+            blockedByDependencyCount++;
+          }
+          if (t.hasWorkLog && fs2.existsSync(t.path)) {
+            try {
+              const fileContent = fs2.readFileSync(t.path, "utf8");
+              const logs = TicketParser.extractWorkLogEntries(fileContent, t.id, t.title, t.path, b.id, b.name);
+              recentWorkLogs.push(...logs);
+            } catch {
+            }
+          }
+        }
       }
       return {
         id: b.id,
@@ -992,12 +1139,19 @@ var BoardManager = class _BoardManager {
         columnsSummary: colSummary
       };
     });
+    recentWorkLogs.sort((a, b) => {
+      const timeA = a.timestamp || (a.date ? Date.parse(a.date) : 0) || 0;
+      const timeB = b.timestamp || (b.date ? Date.parse(b.date) : 0) || 0;
+      return timeB - timeA;
+    });
     return {
       totalBoards: boardsList.length,
       totalTickets,
       ongoingTicketsCount,
       blockedTicketsCount,
       assistanceRequiredCount,
+      blockedByDependencyCount,
+      recentWorkLogs,
       boards: boardsSummary,
       activeTickets
     };
@@ -1139,6 +1293,28 @@ var BoardManager = class _BoardManager {
       return false;
     }
   }
+  async toggleTicketCriterion(ticketPath, index, done) {
+    const board = this.findBoardForTicketPath(ticketPath);
+    const resolvedPath = board ? this.resolveTicketPathOnDisk(board, ticketPath) : fs2.existsSync(ticketPath) ? ticketPath : null;
+    if (!resolvedPath) {
+      vscode2.window.showErrorMessage(`Ticket file not found: ${ticketPath}`);
+      return false;
+    }
+    try {
+      const content = await fs2.promises.readFile(resolvedPath, "utf8");
+      const updated = TicketParser.toggleCriterion(content, index, done);
+      if (updated !== content) {
+        await fs2.promises.writeFile(resolvedPath, updated, "utf8");
+      }
+      if (board) {
+        await this.reloadSingleBoard(board.rootPath);
+      }
+      return true;
+    } catch (err) {
+      vscode2.window.showErrorMessage(`Failed to update acceptance criterion: ${err?.message || err}`);
+      return false;
+    }
+  }
   async createTicket(boardId, targetColumn, targetSubfolder, title, initialContent) {
     const board = this.getBoard(boardId);
     if (!board)
@@ -1160,7 +1336,12 @@ var BoardManager = class _BoardManager {
       fullPath = path3.join(targetDir, filename);
       counter++;
     }
-    const defaultContent = initialContent || `# ${title}
+    let defaultContent = initialContent;
+    if (defaultContent) {
+      const generatedId = `T-${slug.toUpperCase()}`;
+      defaultContent = defaultContent.split("{id}").join(generatedId).split("{title}").join(title).split("{column}").join(targetColumn).split("{date}").join(dateStr).split("{user}").join("Unassigned").split("{assignee}").join("Unassigned");
+    } else {
+      defaultContent = `# ${title}
 
 | Field | Value |
 |-------|-------|
@@ -1176,9 +1357,156 @@ Describe what this ticket is about.
 - [ ] Implementation completed
 - [ ] Tests verified
 `;
+    }
     await fs2.promises.writeFile(fullPath, defaultContent, "utf8");
     await this.reloadSingleBoard(board.rootPath);
     return fullPath;
+  }
+  async generateAgentRules(boardId) {
+    let board = boardId ? this.getBoard(boardId) : void 0;
+    if (!board) {
+      const boards = this.getAllBoards();
+      if (boards.length > 0)
+        board = boards[0];
+    }
+    if (!board) {
+      vscode2.window.showWarningMessage("No active Kanban board found to generate agent rules.");
+      return null;
+    }
+    const wsFolder = vscode2.workspace.workspaceFolders?.[0]?.uri.fsPath || path3.dirname(board.rootPath);
+    const agentsDir = path3.join(wsFolder, ".agents");
+    let targetPath = path3.join(wsFolder, "AGENT.md");
+    if (fs2.existsSync(agentsDir)) {
+      const rulesDir = path3.join(agentsDir, "rules");
+      if (!fs2.existsSync(rulesDir)) {
+        await fs2.promises.mkdir(rulesDir, { recursive: true });
+      }
+      targetPath = path3.join(rulesDir, "kanban.md");
+    }
+    const relBoardPath = path3.relative(wsFolder, board.rootPath).replace(/\\/g, "/") || "Tickets";
+    const colsList = board.columns.map((c) => `- \`${relBoardPath}/${c.name}/\``).join("\n");
+    const content = `# Project Operating Rules: Agentic Kanban
+
+This project uses **Agentic Kanban** for task management. All tasks, features, and defects are tracked as Markdown files inside the board directory: \`${relBoardPath}/\`.
+
+## Board Structure & Columns
+${colsList}
+
+## Agent Operating Workflow
+1. **Discover & Inspect**: Look in \`${relBoardPath}/Backlog/\` (or \`${relBoardPath}/Backlog/Ready/\`) for assigned or available tasks.
+2. **Claim a Ticket**:
+   - Move the ticket file into \`${relBoardPath}/Ongoing/\`.
+   - Set the \`| **Assignee** | <YourName> |\` and \`| **Status** | Ongoing |\` in the ticket metadata table.
+3. **Log Progress in Real-Time**:
+   - In the ticket file under \`## Work Log\`, append a timestamped entry for key steps or decisions:
+     \`\`\`markdown
+     - **YYYY-MM-DD**: Started investigation of ...
+     \`\`\`
+4. **Complete Criteria & Verify**:
+   - Check off each criterion under \`## Acceptance Criteria\` by toggling \`- [ ]\` to \`- [x]\`.
+   - Run tests and static analysis to guarantee zero regressions.
+5. **Finalize**:
+   - Move the ticket file to \`${relBoardPath}/Completed/\`.
+   - Update the status field to \`Completed\`.
+6. **Blockers & Assistance**:
+   - If blocked by missing dependencies or external requirements, move the ticket to \`${relBoardPath}/Blocked/\` or \`${relBoardPath}/Assistance Required/\` and record the blocking reason in the \`## Work Log\`.
+`;
+    return { targetPath, created: true, content };
+  }
+  async initTemplates(boardId) {
+    let board = boardId ? this.getBoard(boardId) : void 0;
+    if (!board) {
+      const boards = this.getAllBoards();
+      if (boards.length > 0)
+        board = boards[0];
+    }
+    if (!board) {
+      vscode2.window.showWarningMessage("No Kanban board found to initialize templates.");
+      return null;
+    }
+    const templatesDir = path3.join(board.rootPath, ".templates");
+    if (!fs2.existsSync(templatesDir)) {
+      await fs2.promises.mkdir(templatesDir, { recursive: true });
+    }
+    const created = [];
+    const featurePath = path3.join(templatesDir, "feature.md");
+    if (!fs2.existsSync(featurePath)) {
+      const featureContent = `# {id} \u2014 {title}
+
+| Field | Value |
+|-------|-------|
+| **Epic** | |
+| **Type** | Feature |
+| **Priority** | P1 \u2014 Core |
+| **Estimate** | M (2\u20133 days) |
+| **Status** | {column} |
+| **Depends on** | \u2014 |
+| **Blocks** | \u2014 |
+| **Labels** | |
+| **Milestone** | |
+
+## Summary
+Brief description of the feature and what user problem it solves.
+
+## Description
+Detailed background, UX requirements, architecture decisions, and implementation outline.
+
+## Acceptance Criteria
+- [ ] Requirements defined and reviewed
+- [ ] Core implementation complete
+- [ ] Unit & integration tests added and passing
+- [ ] Documentation updated
+
+## Technical Notes
+- Implementation details and architectural guidelines.
+
+## Work Log
+- **{date}**: Created ticket.
+`;
+      await fs2.promises.writeFile(featurePath, featureContent, "utf8");
+      created.push("feature.md");
+    }
+    const bugPath = path3.join(templatesDir, "bug.md");
+    if (!fs2.existsSync(bugPath)) {
+      const bugContent = `# {id} \u2014 Fix: {title}
+
+| Field | Value |
+|-------|-------|
+| **Epic** | |
+| **Type** | Defect / Bug |
+| **Priority** | P0 \u2014 Critical |
+| **Estimate** | S (1 day) |
+| **Status** | {column} |
+| **Depends on** | \u2014 |
+| **Blocks** | \u2014 |
+| **Labels** | \`bug\`, \`fix\` |
+| **Milestone** | |
+
+## Summary
+Brief description of the bug and its impact.
+
+## Steps to Reproduce
+1. Step 1
+2. Step 2
+3. Observe unexpected behavior
+
+## Expected vs Actual Behavior
+- **Expected**: Describe expected behavior.
+- **Actual**: Describe actual observed error or failure.
+
+## Acceptance Criteria
+- [ ] Root cause diagnosed and resolved
+- [ ] Regression test added
+- [ ] Verified fix passes all existing test suites
+
+## Work Log
+- **{date}**: Logged bug.
+`;
+      await fs2.promises.writeFile(bugPath, bugContent, "utf8");
+      created.push("bug.md");
+    }
+    await this.reloadSingleBoard(board.rootPath);
+    return created;
   }
   async reloadSingleBoard(rootPath) {
     const config = vscode2.workspace.getConfiguration("agenticKanban");
@@ -1459,6 +1787,12 @@ var PromptFormatter = class {
     const template = boardConfig?.agentPromptTemplate && boardConfig.agentPromptTemplate.trim() ? boardConfig.agentPromptTemplate.trim() : this.DEFAULT_TEMPLATE;
     const summaryText = ticket.summary || ticket.title;
     const descriptionText = ticket.description || ticket.summary || ticket.title;
+    let blockerWarning = "";
+    if (ticket.unresolvedDependencies && ticket.unresolvedDependencies.length > 0) {
+      blockerWarning = `
+
+> \u26A0\uFE0F **DEPENDENCY WARNING**: This ticket is currently blocked by unfinished prerequisite tickets: ${ticket.unresolvedDependencies.join(", ")}. Please verify their status before proceeding or focus on prerequisite work.`;
+    }
     const replacements = {
       "{id}": ticket.id || "",
       "{ticket_id}": ticket.id || "",
@@ -1482,11 +1816,17 @@ var PromptFormatter = class {
       "{assignee}": ticket.assignee || "Unassigned",
       "{epic}": ticket.epic || "",
       "{estimate}": ticket.estimate || "",
-      "{completed_path}": completedPath
+      "{completed_path}": completedPath,
+      "{depends_on}": (ticket.dependsOn || []).join(", "),
+      "{unresolved_dependencies}": (ticket.unresolvedDependencies || []).join(", "),
+      "{blocker_warning}": blockerWarning
     };
     let result = template;
     for (const [placeholder, value] of Object.entries(replacements)) {
       result = result.split(placeholder).join(value);
+    }
+    if (blockerWarning && !template.includes("{blocker_warning}")) {
+      result += blockerWarning;
     }
     return result;
   }
@@ -1584,10 +1924,28 @@ var KanbanWebviewManager = class _KanbanWebviewManager {
       case "openTicketFile":
         try {
           const doc = await vscode5.workspace.openTextDocument(vscode5.Uri.file(message.filePath));
-          await vscode5.window.showTextDocument(doc, { viewColumn: vscode5.ViewColumn.Beside });
+          const editor = await vscode5.window.showTextDocument(doc, { viewColumn: vscode5.ViewColumn.Beside });
+          if (message.line && typeof message.line === "number" && message.line > 0) {
+            const pos = new vscode5.Position(message.line - 1, 0);
+            editor.selection = new vscode5.Selection(pos, pos);
+            editor.revealRange(new vscode5.Range(pos, pos), vscode5.TextEditorRevealType.InCenter);
+          }
         } catch (err) {
           vscode5.window.showErrorMessage(`Failed to open ticket: ${err?.message || err}`);
         }
+        break;
+      case "toggleCriterion":
+        await boardManager.toggleTicketCriterion(message.ticketPath, message.index, message.done);
+        break;
+      case "generateAgentRules":
+        await vscode5.commands.executeCommand("agenticKanban.generateAgentRules", {
+          board: boardManager.getBoard(message.boardId)
+        });
+        break;
+      case "initTemplates":
+        await vscode5.commands.executeCommand("agenticKanban.initTemplates", {
+          board: boardManager.getBoard(message.boardId)
+        });
         break;
       case "openPlan":
         try {
@@ -1869,6 +2227,14 @@ Instructions:
           </svg>
           <span>Plan</span>
         </button>
+
+        <button id="btnAgentRules" class="nav-action-btn secondary" title="Generate or Update AGENT.md System Rules">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
+            <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
+          </svg>
+          <span>Rules</span>
+        </button>
       </div>
 
       <div class="nav-center">
@@ -1955,6 +2321,10 @@ Instructions:
             <div class="stat-number" id="statBlockedTickets">0</div>
             <div class="stat-label">Blocked</div>
           </div>
+          <div class="stat-card highlight-blocked">
+            <div class="stat-number" id="statBlockedDependencies">0</div>
+            <div class="stat-label">Blocked by Dep</div>
+          </div>
         </div>
 
         <section class="overview-section">
@@ -1979,6 +2349,29 @@ Instructions:
           </div>
           <div id="projectBoardsGrid" class="project-boards-grid"></div>
         </section>
+
+        <section class="overview-section">
+          <div class="section-title" style="display:flex;justify-content:space-between;align-items:center;width:100%;">
+            <div style="display:flex;align-items:center;gap:8px;">
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10"></circle>
+                <polyline points="12 6 12 12 16 14"></polyline>
+              </svg>
+              <h2>Workspace Activity Feed (Work Log Timeline)</h2>
+            </div>
+            <div class="feed-filters" style="display:flex;gap:8px;">
+              <select id="feedDateFilter" class="select-input small">
+                <option value="all">All Dates</option>
+                <option value="today">Today</option>
+                <option value="week">Past 7 Days</option>
+              </select>
+              <select id="feedBoardFilter" class="select-input small">
+                <option value="">All Boards</option>
+              </select>
+            </div>
+          </div>
+          <div id="activityFeedContainer" class="activity-feed-container"></div>
+        </section>
       </div>
     </main>
 
@@ -1990,6 +2383,15 @@ Instructions:
           <button class="modal-close-btn" id="closeNewTicketModal">&times;</button>
         </div>
         <div class="modal-body">
+          <div class="form-group" id="templateGroup">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+              <label for="newTicketTemplate" style="margin-bottom:0;">Template</label>
+              <button type="button" id="btnInitTemplates" class="link-btn" title="Initialize default templates in .templates/">+ Init Templates</button>
+            </div>
+            <select id="newTicketTemplate" class="select-input full">
+              <option value="">(Default Ticket Format)</option>
+            </select>
+          </div>
           <div class="form-group">
             <label for="newTicketTitle">Title *</label>
             <input type="text" id="newTicketTitle" class="text-input" placeholder="e.g. Implement real-time cache layer" required />
@@ -2190,6 +2592,83 @@ async function activate(context) {
       }
       const doc = await vscode6.workspace.openTextDocument(vscode6.Uri.file(configPath));
       await vscode6.window.showTextDocument(doc);
+    }),
+    vscode6.commands.registerCommand("agenticKanban.generateAgentRules", async (item) => {
+      const boards = boardManager.getAllBoards();
+      if (boards.length === 0) {
+        vscode6.window.showWarningMessage("No active Kanban boards found.");
+        return;
+      }
+      let board = boards[0];
+      if (item && item.board) {
+        board = item.board;
+      } else if (boards.length > 1) {
+        const pick = await vscode6.window.showQuickPick(
+          boards.map((b) => ({ label: b.name, description: b.rootPath, board: b })),
+          { placeHolder: "Select board to generate agent rules for" }
+        );
+        if (!pick)
+          return;
+        board = pick.board;
+      }
+      const res = await boardManager.generateAgentRules(board.id);
+      if (!res)
+        return;
+      if (fs5.existsSync(res.targetPath)) {
+        const choice = await vscode6.window.showQuickPick(
+          [
+            { label: "Overwrite", description: `Replace entire ${path7.basename(res.targetPath)}` },
+            { label: "Append", description: `Append Kanban rules to existing ${path7.basename(res.targetPath)}` },
+            { label: "Cancel", description: "Keep existing file unchanged" }
+          ],
+          { placeHolder: `${path7.basename(res.targetPath)} already exists. What would you like to do?` }
+        );
+        if (!choice || choice.label === "Cancel")
+          return;
+        if (choice.label === "Append") {
+          const existing = await fs5.promises.readFile(res.targetPath, "utf8");
+          await fs5.promises.writeFile(res.targetPath, `${existing}
+
+${res.content}`, "utf8");
+        } else {
+          await fs5.promises.writeFile(res.targetPath, res.content, "utf8");
+        }
+      } else {
+        await fs5.promises.writeFile(res.targetPath, res.content, "utf8");
+      }
+      vscode6.window.showInformationMessage(`Agent rules generated at ${path7.basename(res.targetPath)}`);
+      const doc = await vscode6.workspace.openTextDocument(vscode6.Uri.file(res.targetPath));
+      await vscode6.window.showTextDocument(doc);
+    }),
+    vscode6.commands.registerCommand("agenticKanban.initTemplates", async (item) => {
+      const boards = boardManager.getAllBoards();
+      if (boards.length === 0) {
+        vscode6.window.showWarningMessage("No active Kanban boards found.");
+        return;
+      }
+      let board = boards[0];
+      if (item && item.board) {
+        board = item.board;
+      } else if (boards.length > 1) {
+        const pick = await vscode6.window.showQuickPick(
+          boards.map((b) => ({ label: b.name, description: b.rootPath, board: b })),
+          { placeHolder: "Select board to initialize templates in" }
+        );
+        if (!pick)
+          return;
+        board = pick.board;
+      }
+      const created = await boardManager.initTemplates(board.id);
+      if (created && created.length > 0) {
+        vscode6.window.showInformationMessage(`Initialized templates: ${created.join(", ")} in ${board.name}/.templates/`);
+        const firstTemplate = path7.join(board.rootPath, ".templates", created[0]);
+        if (fs5.existsSync(firstTemplate)) {
+          const doc = await vscode6.workspace.openTextDocument(vscode6.Uri.file(firstTemplate));
+          await vscode6.window.showTextDocument(doc);
+        }
+      } else {
+        vscode6.window.showInformationMessage(`.templates/ already contains templates for ${board.name}.`);
+      }
     })
   );
   console.log("[Agentic Kanban] Activated successfully.");

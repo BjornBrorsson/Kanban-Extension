@@ -6,7 +6,7 @@
 | **Type** | Feature |
 | **Priority** | P0 — Critical |
 | **Estimate** | M (2 days) |
-| **Status** | Ongoing |
+| **Status** | Completed |
 | **Depends on** | EXT-000 |
 | **Blocks** | — |
 | **Labels** | `checklists`, `acceptance-criteria`, `file-sync`, `ui` |
@@ -24,14 +24,15 @@ When humans review an AI agent's work, they should be able to click any checkbox
 - When an AI agent checks the file, it sees the human's approved criteria.
 
 ## Acceptance Criteria
-- [ ] Checkboxes in `ticketDetailModal` are interactive.
-- [ ] Toggling a checkbox sends `{ type: 'toggleCriterion', ticketPath, index, done }` to extension host.
-- [ ] Extension host locates the Nth `- [ ]` or `- [x]` in the file and updates it in place.
-- [ ] Optimistic update in UI updates the progress bar immediately without closing the modal.
-- [ ] Works with criteria located in `## Acceptance Criteria` as well as arbitrary checklists in the document.
+- [x] Checkboxes in `ticketDetailModal` are interactive.
+- [x] Toggling a checkbox sends `{ type: 'toggleCriterion', ticketPath, index, done }` to extension host.
+- [x] Extension host locates the Nth `- [ ]` or `- [x]` in the file and updates it in place.
+- [x] Optimistic update in UI updates the progress bar immediately without closing the modal.
+- [x] Works with criteria located in `## Acceptance Criteria` as well as arbitrary checklists in the document.
 
 ## Technical Notes
 - Regex replacement should locate the exact occurrence by line or index to avoid touching unrelated checklists in description sections.
 
 ## Work Log
 - **2026-09-04**: Drafted requirements and added ticket to Ready backlog.
+- **2026-09-07**: Implemented `TicketParser.toggleCriterion` preserving line endings and formatting, added `toggleCriterion` IPC handler in extension host and webview panel, made detail modal checkboxes interactive with optimistic UI update and progress counter recalculation.

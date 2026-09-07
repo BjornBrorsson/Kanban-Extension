@@ -6,7 +6,7 @@
 | **Type** | Feature |
 | **Priority** | P1 — Core |
 | **Estimate** | M (2–3 days) |
-| **Status** | Ongoing |
+| **Status** | Completed |
 | **Depends on** | EXT-000 |
 | **Blocks** | — |
 | **Labels** | `dependencies`, `blockers`, `graph`, `badges` |
@@ -25,11 +25,12 @@ If a ticket is in `Backlog` or `Ongoing`, but its dependencies are **not yet in 
 5. In the Multi-Board Overview, add a "Dependency Warnings" metric or filter.
 
 ## Acceptance Criteria
-- [ ] Board model builds a lookup map of all ticket IDs -> current column.
-- [ ] Ticket cards display a warning badge when any ticket in `dependsOn` is not in a completed column.
-- [ ] Hovering over the badge shows which specific tickets are unfinished.
-- [ ] Detail modal provides clickable links to inspect dependency tickets.
-- [ ] Agent prompt generator warns if trying to dispatch an agent on a blocked ticket.
+- [x] Board model builds a lookup map of all ticket IDs -> current column.
+- [x] Ticket cards display a warning badge when any ticket in `dependsOn` is not in a completed column.
+- [x] Hovering over the badge shows which specific tickets are unfinished.
+- [x] Detail modal provides clickable links to inspect dependency tickets.
+- [x] Agent prompt generator warns if trying to dispatch an agent on a blocked ticket.
 
 ## Work Log
 - **2026-09-04**: Drafted requirements and added ticket to Ready backlog.
+- **2026-09-07**: Added cross-board dependency resolution in `boardDiscovery.ts`, populated `ticket.unresolvedDependencies`, rendered blocker warning badges (`⛔ Blocked`) on ticket cards with hover tooltips, rendered clickable dependency chips and circular blocker warnings in detail modal, and injected prerequisite warnings into agent task prompt.

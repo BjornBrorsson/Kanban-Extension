@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
-import { Board, Column, SubfolderInfo, Ticket, BoardConfig, BoardPlanDocument } from './types';
+import { Board, Column, SubfolderInfo, Ticket, BoardConfig, BoardPlanDocument, TicketTemplate } from './types';
 import { TicketParser } from './ticketParser';
 import { ConfigParser } from './configParser';
 
@@ -220,6 +220,68 @@ export class BoardDiscovery {
     // Sort columns according to config if specified, or standard kanban order
     this.sortColumns(columns, boardConfig.columnsOrder);
 
+    // 4. Discover custom ticket templates in .templates/
+    const templates: TicketTemplate[] = [];
+    const templatesDir = path.join(rootPath, '.templates');
+    if (fs.existsSync(templatesDir)) {
+      try {
+        const templateEntries = await fs.promises.readdir(templatesDir, { withFileTypes: true });
+        for (const te of templateEntries) {
+          if (!te.isDirectory() && te.name.endsWith('.md')) {
+            const tPath = path.join(templatesDir, te.name);
+            const content = await fs.promises.readFile(tPath, 'utf8');
+            const id = te.name.replace(/\.md$/i, '').toLowerCase();
+            const h1Match = content.match(/^#\s+(.+)$/m);
+            const rawName = h1Match
+              ? h1Match[1].replace(/\{id\}\s*[—–\-:]*\s*/i, '').trim()
+              : id.charAt(0).toUpperCase() + id.slice(1);
+            templates.push({
+              id,
+              name: rawName || id,
+              filename: te.name,
+              content
+            });
+          }
+        }
+      } catch (e) {
+        console.warn(`Could not read .templates at ${templatesDir}:`, e);
+      }
+    }
+
+    // 5. Build lookup map and resolve dependencies across all tickets
+    const ticketMap = new Map<string, { column: string; ticket: Ticket }>();
+    for (const col of columns) {
+      for (const t of col.tickets) {
+        if (t.id) {
+          ticketMap.set(t.id.toUpperCase(), { column: col.name, ticket: t });
+        }
+      }
+    }
+
+    for (const col of columns) {
+      for (const t of col.tickets) {
+        if (t.dependsOn && t.dependsOn.length > 0) {
+          const unresolved: string[] = [];
+          for (const dep of t.dependsOn) {
+            const depKey = dep.toUpperCase();
+            const found = ticketMap.get(depKey);
+            if (!found) {
+              unresolved.push(dep);
+            } else {
+              const colLower = found.column.toLowerCase();
+              const isCompleted = colLower.includes('complete') || colLower.includes('done');
+              if (!isCompleted) {
+                unresolved.push(`${dep} (${found.column})`);
+              }
+            }
+          }
+          if (unresolved.length > 0) {
+            t.unresolvedDependencies = unresolved;
+          }
+        }
+      }
+    }
+
     return {
       id: boardId,
       name: boardConfig.name,
@@ -227,6 +289,7 @@ export class BoardDiscovery {
       columns,
       config: boardConfig,
       planDocument,
+      templates: templates.length > 0 ? templates : undefined,
       lastScanned: Date.now()
     };
   }

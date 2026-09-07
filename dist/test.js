@@ -324,6 +324,82 @@ var TicketParser = class {
     }
     return `${tableBlock}${updated}`;
   }
+  /**
+   * Toggles the Nth acceptance criterion checkbox in the document.
+   * Matches both `- [ ]` and `- [x]`, preserving indentation, prefix, and line endings.
+   */
+  static toggleCriterion(content, index, done) {
+    if (index < 0)
+      return content;
+    const checklistRegex = /^([\s>]*-\s*\[)([ xX])(\]\s+.*)$/gm;
+    let matchCount = 0;
+    let match;
+    while ((match = checklistRegex.exec(content)) !== null) {
+      if (matchCount === index) {
+        const fullMatch = match[0];
+        const matchIndex = match.index;
+        const prefix = match[1];
+        const suffix = match[3];
+        const newChar = done ? "x" : " ";
+        const updatedLine = `${prefix}${newChar}${suffix}`;
+        return content.slice(0, matchIndex) + updatedLine + content.slice(matchIndex + fullMatch.length);
+      }
+      matchCount++;
+    }
+    return content;
+  }
+  /**
+   * Scans ## Work Log in the ticket markdown content and extracts dated log entries.
+   */
+  static extractWorkLogEntries(content, ticketId, ticketTitle, ticketPath, boardId, boardName) {
+    const entries = [];
+    const lines = content.split(/\r?\n/);
+    let inWorkLog = false;
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const trimmed = line.trim();
+      if (/^##\s+Work\s+Log/i.test(trimmed)) {
+        inWorkLog = true;
+        continue;
+      }
+      if (inWorkLog) {
+        if (/^##\s+[^#]/i.test(trimmed)) {
+          break;
+        }
+        const dateMatch = trimmed.match(/^[-*]\s+(?:\*\*)?(\d{4}[-/]\d{2}[-/]\d{2}(?:\s+\d{2}:\d{2})?)(?:\*\*)?[\s:\-—–]+(.*)$/);
+        if (dateMatch) {
+          const dateStr = dateMatch[1].trim();
+          const text = dateMatch[2].trim();
+          entries.push({
+            date: dateStr,
+            timestamp: Date.parse(dateStr) || void 0,
+            boardId,
+            boardName,
+            ticketId,
+            ticketTitle,
+            ticketPath,
+            text,
+            line: i + 1
+          });
+        } else if (trimmed.startsWith("-") || trimmed.startsWith("*")) {
+          const text = trimmed.replace(/^[-*]\s+/, "").trim();
+          if (text) {
+            entries.push({
+              date: "Recent",
+              boardId,
+              boardName,
+              ticketId,
+              ticketTitle,
+              ticketPath,
+              text,
+              line: i + 1
+            });
+          }
+        }
+      }
+    }
+    return entries;
+  }
 };
 
 // src/orchestrator/config/orchestrationConfig.ts
@@ -726,6 +802,12 @@ var PromptFormatter = class {
     const template = boardConfig?.agentPromptTemplate && boardConfig.agentPromptTemplate.trim() ? boardConfig.agentPromptTemplate.trim() : this.DEFAULT_TEMPLATE;
     const summaryText = ticket.summary || ticket.title;
     const descriptionText = ticket.description || ticket.summary || ticket.title;
+    let blockerWarning = "";
+    if (ticket.unresolvedDependencies && ticket.unresolvedDependencies.length > 0) {
+      blockerWarning = `
+
+> \u26A0\uFE0F **DEPENDENCY WARNING**: This ticket is currently blocked by unfinished prerequisite tickets: ${ticket.unresolvedDependencies.join(", ")}. Please verify their status before proceeding or focus on prerequisite work.`;
+    }
     const replacements = {
       "{id}": ticket.id || "",
       "{ticket_id}": ticket.id || "",
@@ -749,11 +831,17 @@ var PromptFormatter = class {
       "{assignee}": ticket.assignee || "Unassigned",
       "{epic}": ticket.epic || "",
       "{estimate}": ticket.estimate || "",
-      "{completed_path}": completedPath
+      "{completed_path}": completedPath,
+      "{depends_on}": (ticket.dependsOn || []).join(", "),
+      "{unresolved_dependencies}": (ticket.unresolvedDependencies || []).join(", "),
+      "{blocker_warning}": blockerWarning
     };
     let result = template;
     for (const [placeholder, value] of Object.entries(replacements)) {
       result = result.split(placeholder).join(value);
+    }
+    if (blockerWarning && !template.includes("{blocker_warning}")) {
+      result += blockerWarning;
     }
     return result;
   }
@@ -928,6 +1016,70 @@ ${customPrompt}`
     "Expected fallback criterion text when no criteria present"
   );
   console.log("\u2713 PromptFormatter custom template & edge cases tests passed!");
+  console.log("\nTesting TicketParser.toggleCriterion (EXT-003)...");
+  const checklistSample = `# Ticket With Criteria
+
+## Acceptance Criteria
+- [ ] Task 1: Initialize DB
+- [ ] Task 2: Setup routes
+- [x] Task 3: Write tests
+`;
+  const toggled0 = TicketParser.toggleCriterion(checklistSample, 0, true);
+  assert(toggled0.includes("- [x] Task 1: Initialize DB"), "Expected task 1 to be checked");
+  assert(toggled0.includes("- [ ] Task 2: Setup routes"), "Expected task 2 to remain unchecked");
+  const toggled2 = TicketParser.toggleCriterion(toggled0, 2, false);
+  assert(toggled2.includes("- [ ] Task 3: Write tests"), "Expected task 3 to be unchecked");
+  const crlfChecklist = "# Title\r\n\r\n## Criteria\r\n- [ ] Task 1\r\n- [ ] Task 2\r\n";
+  const crlfToggled = TicketParser.toggleCriterion(crlfChecklist, 1, true);
+  assert(crlfToggled.includes("\r\n- [x] Task 2\r\n"), "Expected CRLF preserved when toggling checkbox");
+  console.log("\u2713 TicketParser.toggleCriterion tests passed!");
+  console.log("\nTesting TicketParser.extractWorkLogEntries (EXT-005)...");
+  const workLogSample = `# Ticket With Log
+
+## Summary
+Ticket summary
+
+## Work Log
+- **2026-09-04**: Started implementation of core algorithm
+- **2026-09-05**: Added regression tests and benchmark suite
+
+## Next Steps
+Ship it
+`;
+  const entries = TicketParser.extractWorkLogEntries(workLogSample, "EXT-005", "Live Timeline", "Tickets/EXT-005.md", "board-1", "Main Board");
+  assert(entries.length === 2, `Expected 2 work log entries, got ${entries.length}`);
+  assert(entries[0].date === "2026-09-04", `Expected date 2026-09-04, got '${entries[0].date}'`);
+  assert(entries[0].text.includes("Started implementation"), `Expected text to include 'Started implementation', got '${entries[0].text}'`);
+  assert(entries[0].line === 7, `Expected line 7, got ${entries[0].line}`);
+  assert(entries[1].date === "2026-09-05", `Expected date 2026-09-05, got '${entries[1].date}'`);
+  assert(entries[1].line === 8, `Expected line 8, got ${entries[1].line}`);
+  console.log("\u2713 TicketParser.extractWorkLogEntries tests passed!");
+  console.log("\nTesting PromptFormatter dependency blocker warning (EXT-004)...");
+  const blockedTicket = {
+    ...ticket019,
+    dependsOn: ["EXT-000", "EXT-001"],
+    unresolvedDependencies: ["EXT-000", "EXT-001 (Ongoing)"]
+  };
+  const blockedPrompt = PromptFormatter.formatPrompt(blockedTicket, null, root, ticketsRoot);
+  assert(blockedPrompt.includes("\u26A0\uFE0F **DEPENDENCY WARNING**:"), "Expected prompt to include dependency blocker warning");
+  assert(blockedPrompt.includes("EXT-000, EXT-001 (Ongoing)"), "Expected prompt to list unfinished dependencies");
+  console.log("\u2713 PromptFormatter dependency blocker warning tests passed!");
+  console.log("\nTesting ticket template interpolation (EXT-006)...");
+  const templateSample = `# {id} \u2014 Fix: {title}
+
+| Field | Value |
+|---|---|
+| **Status** | {column} |
+
+## Work Log
+- **{date}**: Created ticket.
+`;
+  const dateStr = "2026-09-07";
+  const interpolated = templateSample.split("{id}").join("T-FIX-BUG").split("{title}").join("Fix memory leak").split("{column}").join("Backlog").split("{date}").join(dateStr);
+  assert(interpolated.includes("# T-FIX-BUG \u2014 Fix: Fix memory leak"), "Expected title interpolated");
+  assert(interpolated.includes("| **Status** | Backlog |"), "Expected status column interpolated");
+  assert(interpolated.includes(`- **${dateStr}**: Created ticket.`), "Expected date interpolated");
+  console.log("\u2713 Ticket template interpolation tests passed!");
   console.log("\n=== ALL UNIT TESTS PASSED SUCCESSFULLY! ===");
 }
 runTests().catch((err) => {

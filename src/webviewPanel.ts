@@ -129,10 +129,31 @@ export class KanbanWebviewManager {
       case 'openTicketFile':
         try {
           const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(message.filePath));
-          await vscode.window.showTextDocument(doc, { viewColumn: vscode.ViewColumn.Beside });
+          const editor = await vscode.window.showTextDocument(doc, { viewColumn: vscode.ViewColumn.Beside });
+          if (message.line && typeof message.line === 'number' && message.line > 0) {
+            const pos = new vscode.Position(message.line - 1, 0);
+            editor.selection = new vscode.Selection(pos, pos);
+            editor.revealRange(new vscode.Range(pos, pos), vscode.TextEditorRevealType.InCenter);
+          }
         } catch (err: any) {
           vscode.window.showErrorMessage(`Failed to open ticket: ${err?.message || err}`);
         }
+        break;
+
+      case 'toggleCriterion':
+        await boardManager.toggleTicketCriterion(message.ticketPath, message.index, message.done);
+        break;
+
+      case 'generateAgentRules':
+        await vscode.commands.executeCommand('agenticKanban.generateAgentRules', {
+          board: boardManager.getBoard(message.boardId)
+        });
+        break;
+
+      case 'initTemplates':
+        await vscode.commands.executeCommand('agenticKanban.initTemplates', {
+          board: boardManager.getBoard(message.boardId)
+        });
         break;
 
       case 'openPlan':
@@ -439,6 +460,14 @@ export class KanbanWebviewManager {
           </svg>
           <span>Plan</span>
         </button>
+
+        <button id="btnAgentRules" class="nav-action-btn secondary" title="Generate or Update AGENT.md System Rules">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
+            <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
+          </svg>
+          <span>Rules</span>
+        </button>
       </div>
 
       <div class="nav-center">
@@ -525,6 +554,10 @@ export class KanbanWebviewManager {
             <div class="stat-number" id="statBlockedTickets">0</div>
             <div class="stat-label">Blocked</div>
           </div>
+          <div class="stat-card highlight-blocked">
+            <div class="stat-number" id="statBlockedDependencies">0</div>
+            <div class="stat-label">Blocked by Dep</div>
+          </div>
         </div>
 
         <section class="overview-section">
@@ -549,6 +582,29 @@ export class KanbanWebviewManager {
           </div>
           <div id="projectBoardsGrid" class="project-boards-grid"></div>
         </section>
+
+        <section class="overview-section">
+          <div class="section-title" style="display:flex;justify-content:space-between;align-items:center;width:100%;">
+            <div style="display:flex;align-items:center;gap:8px;">
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10"></circle>
+                <polyline points="12 6 12 12 16 14"></polyline>
+              </svg>
+              <h2>Workspace Activity Feed (Work Log Timeline)</h2>
+            </div>
+            <div class="feed-filters" style="display:flex;gap:8px;">
+              <select id="feedDateFilter" class="select-input small">
+                <option value="all">All Dates</option>
+                <option value="today">Today</option>
+                <option value="week">Past 7 Days</option>
+              </select>
+              <select id="feedBoardFilter" class="select-input small">
+                <option value="">All Boards</option>
+              </select>
+            </div>
+          </div>
+          <div id="activityFeedContainer" class="activity-feed-container"></div>
+        </section>
       </div>
     </main>
 
@@ -560,6 +616,15 @@ export class KanbanWebviewManager {
           <button class="modal-close-btn" id="closeNewTicketModal">&times;</button>
         </div>
         <div class="modal-body">
+          <div class="form-group" id="templateGroup">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+              <label for="newTicketTemplate" style="margin-bottom:0;">Template</label>
+              <button type="button" id="btnInitTemplates" class="link-btn" title="Initialize default templates in .templates/">+ Init Templates</button>
+            </div>
+            <select id="newTicketTemplate" class="select-input full">
+              <option value="">(Default Ticket Format)</option>
+            </select>
+          </div>
           <div class="form-group">
             <label for="newTicketTitle">Title *</label>
             <input type="text" id="newTicketTitle" class="text-input" placeholder="e.g. Implement real-time cache layer" required />

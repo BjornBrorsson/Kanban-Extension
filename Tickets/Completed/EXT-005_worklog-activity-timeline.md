@@ -6,7 +6,7 @@
 | **Type** | Feature |
 | **Priority** | P2 |
 | **Estimate** | M (2 days) |
-| **Status** | Ongoing |
+| **Status** | Completed |
 | **Depends on** | EXT-000 |
 | **Blocks** | — |
 | **Labels** | `work-log`, `timeline`, `audit-trail`, `multi-board` |
@@ -34,11 +34,12 @@ This feature:
    - Clickable entries that open the corresponding ticket.
 
 ## Acceptance Criteria
-- [ ] Parser extracts dated entries from `## Work Log` sections.
-- [ ] `MultiBoardOverview` data structure includes `recentWorkLogs: WorkLogEntry[]`.
-- [ ] Overview dashboard displays a "Workspace Activity Feed" section below the Parallel Work grid.
-- [ ] Each entry displays: Date, Board Name, Ticket Title/ID, and Log Snippet.
-- [ ] Clicking an entry opens the markdown file at the work log line.
+- [x] Parser extracts dated entries from `## Work Log` sections.
+- [x] `MultiBoardOverview` data structure includes `recentWorkLogs: WorkLogEntry[]`.
+- [x] Overview dashboard displays a "Workspace Activity Feed" section below the Parallel Work grid.
+- [x] Each entry displays: Date, Board Name, Ticket Title/ID, and Log Snippet.
+- [x] Clicking an entry opens the markdown file at the work log line.
 
 ## Work Log
 - **2026-09-04**: Drafted requirements and added ticket to Ready backlog.
+- **2026-09-07**: Implemented `TicketParser.extractWorkLogEntries` with line number tracking, integrated into `MultiBoardOverview`, built modern Workspace Activity Feed in Overview UI with date and board filters, and enabled jump-to-line text editor navigation on click.

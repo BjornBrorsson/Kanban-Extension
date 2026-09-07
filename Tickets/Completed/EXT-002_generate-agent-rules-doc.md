@@ -6,7 +6,7 @@
 | **Type** | Feature |
 | **Priority** | P1 — Core |
 | **Estimate** | S (1 day) |
-| **Status** | Ongoing |
+| **Status** | Completed |
 | **Depends on** | EXT-000 |
 | **Blocks** | — |
 | **Labels** | `agent-rules`, `agent-md`, `scaffolding`, `ai-native` |
@@ -29,11 +29,12 @@ This feature introduces:
   - Explains that if blocked, move the ticket to `Assistance Required/` or `Blocked/` with details.
 
 ## Acceptance Criteria
-- [ ] Command `agenticKanban.generateAgentRules` registered.
-- [ ] Generates clean, token-efficient Markdown instructions matching the board's columns.
-- [ ] Prompts user if `AGENT.md` already exists to confirm overwrite or append.
-- [ ] Also supports writing to `.agents/rules/kanban.md` if an `.agents/` folder exists.
-- [ ] UI button in the Webview header triggers rule generation.
+- [x] Command `agenticKanban.generateAgentRules` registered.
+- [x] Generates clean, token-efficient Markdown instructions matching the board's columns.
+- [x] Prompts user if `AGENT.md` already exists to confirm overwrite or append.
+- [x] Also supports writing to `.agents/rules/kanban.md` if an `.agents/` folder exists.
+- [x] UI button in the Webview header triggers rule generation.
 
 ## Work Log
 - **2026-09-04**: Drafted requirements and added ticket to Ready backlog.
+- **2026-09-07**: Registered `agenticKanban.generateAgentRules` command, added header UI button in webview, added column-aware Markdown generator supporting root `AGENT.md` and `.agents/rules/kanban.md` with overwrite/append confirmation prompt.

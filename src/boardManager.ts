@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
-import { Board, Ticket, MultiBoardOverview } from './types';
+import { Board, Ticket, MultiBoardOverview, WorkLogEntry } from './types';
 import { BoardDiscovery } from './boardDiscovery';
 import { TicketParser } from './ticketParser';
 
@@ -71,7 +71,9 @@ export class BoardManager {
     let ongoingTicketsCount = 0;
     let blockedTicketsCount = 0;
     let assistanceRequiredCount = 0;
+    let blockedByDependencyCount = 0;
 
+    const recentWorkLogs: WorkLogEntry[] = [];
     const activeTickets: { ticket: Ticket; boardId: string; boardName: string }[] = [];
     const boardsSummary = boardsList.map(b => {
       const colSummary: { [col: string]: number } = {};
@@ -93,6 +95,21 @@ export class BoardManager {
           assistanceRequiredCount += count;
           col.tickets.forEach(t => activeTickets.push({ ticket: t, boardId: b.id, boardName: b.name }));
         }
+
+        // Check blockers and work logs on all tickets
+        for (const t of col.tickets) {
+          if (t.unresolvedDependencies && t.unresolvedDependencies.length > 0) {
+            blockedByDependencyCount++;
+          }
+
+          if (t.hasWorkLog && fs.existsSync(t.path)) {
+            try {
+              const fileContent = fs.readFileSync(t.path, 'utf8');
+              const logs = TicketParser.extractWorkLogEntries(fileContent, t.id, t.title, t.path, b.id, b.name);
+              recentWorkLogs.push(...logs);
+            } catch {}
+          }
+        }
       }
 
       return {
@@ -104,12 +121,21 @@ export class BoardManager {
       };
     });
 
+    // Sort work logs newest first
+    recentWorkLogs.sort((a, b) => {
+      const timeA = a.timestamp || (a.date ? Date.parse(a.date) : 0) || 0;
+      const timeB = b.timestamp || (b.date ? Date.parse(b.date) : 0) || 0;
+      return timeB - timeA;
+    });
+
     return {
       totalBoards: boardsList.length,
       totalTickets,
       ongoingTicketsCount,
       blockedTicketsCount,
       assistanceRequiredCount,
+      blockedByDependencyCount,
+      recentWorkLogs,
       boards: boardsSummary,
       activeTickets
     };
@@ -276,6 +302,37 @@ export class BoardManager {
     }
   }
 
+  public async toggleTicketCriterion(
+    ticketPath: string,
+    index: number,
+    done: boolean
+  ): Promise<boolean> {
+    const board = this.findBoardForTicketPath(ticketPath);
+    const resolvedPath = board
+      ? this.resolveTicketPathOnDisk(board, ticketPath)
+      : (fs.existsSync(ticketPath) ? ticketPath : null);
+
+    if (!resolvedPath) {
+      vscode.window.showErrorMessage(`Ticket file not found: ${ticketPath}`);
+      return false;
+    }
+
+    try {
+      const content = await fs.promises.readFile(resolvedPath, 'utf8');
+      const updated = TicketParser.toggleCriterion(content, index, done);
+      if (updated !== content) {
+        await fs.promises.writeFile(resolvedPath, updated, 'utf8');
+      }
+      if (board) {
+        await this.reloadSingleBoard(board.rootPath);
+      }
+      return true;
+    } catch (err: any) {
+      vscode.window.showErrorMessage(`Failed to update acceptance criterion: ${err?.message || err}`);
+      return false;
+    }
+  }
+
   public async createTicket(
     boardId: string,
     targetColumn: string,
@@ -313,7 +370,18 @@ export class BoardManager {
       counter++;
     }
 
-    const defaultContent = initialContent || `# ${title}
+    let defaultContent = initialContent;
+    if (defaultContent) {
+      const generatedId = `T-${slug.toUpperCase()}`;
+      defaultContent = defaultContent
+        .split('{id}').join(generatedId)
+        .split('{title}').join(title)
+        .split('{column}').join(targetColumn)
+        .split('{date}').join(dateStr)
+        .split('{user}').join('Unassigned')
+        .split('{assignee}').join('Unassigned');
+    } else {
+      defaultContent = `# ${title}
 
 | Field | Value |
 |-------|-------|
@@ -329,10 +397,165 @@ Describe what this ticket is about.
 - [ ] Implementation completed
 - [ ] Tests verified
 `;
+    }
 
     await fs.promises.writeFile(fullPath, defaultContent, 'utf8');
     await this.reloadSingleBoard(board.rootPath);
     return fullPath;
+  }
+
+  public async generateAgentRules(boardId?: string): Promise<{ targetPath: string; created: boolean; content: string } | null> {
+    let board = boardId ? this.getBoard(boardId) : undefined;
+    if (!board) {
+      const boards = this.getAllBoards();
+      if (boards.length > 0) board = boards[0];
+    }
+    if (!board) {
+      vscode.window.showWarningMessage('No active Kanban board found to generate agent rules.');
+      return null;
+    }
+
+    const wsFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || path.dirname(board.rootPath);
+    const agentsDir = path.join(wsFolder, '.agents');
+    let targetPath = path.join(wsFolder, 'AGENT.md');
+    if (fs.existsSync(agentsDir)) {
+      const rulesDir = path.join(agentsDir, 'rules');
+      if (!fs.existsSync(rulesDir)) {
+        await fs.promises.mkdir(rulesDir, { recursive: true });
+      }
+      targetPath = path.join(rulesDir, 'kanban.md');
+    }
+
+    const relBoardPath = path.relative(wsFolder, board.rootPath).replace(/\\/g, '/') || 'Tickets';
+    const colsList = board.columns.map(c => `- \`${relBoardPath}/${c.name}/\``).join('\n');
+    const content = `# Project Operating Rules: Agentic Kanban
+
+This project uses **Agentic Kanban** for task management. All tasks, features, and defects are tracked as Markdown files inside the board directory: \`${relBoardPath}/\`.
+
+## Board Structure & Columns
+${colsList}
+
+## Agent Operating Workflow
+1. **Discover & Inspect**: Look in \`${relBoardPath}/Backlog/\` (or \`${relBoardPath}/Backlog/Ready/\`) for assigned or available tasks.
+2. **Claim a Ticket**:
+   - Move the ticket file into \`${relBoardPath}/Ongoing/\`.
+   - Set the \`| **Assignee** | <YourName> |\` and \`| **Status** | Ongoing |\` in the ticket metadata table.
+3. **Log Progress in Real-Time**:
+   - In the ticket file under \`## Work Log\`, append a timestamped entry for key steps or decisions:
+     \`\`\`markdown
+     - **YYYY-MM-DD**: Started investigation of ...
+     \`\`\`
+4. **Complete Criteria & Verify**:
+   - Check off each criterion under \`## Acceptance Criteria\` by toggling \`- [ ]\` to \`- [x]\`.
+   - Run tests and static analysis to guarantee zero regressions.
+5. **Finalize**:
+   - Move the ticket file to \`${relBoardPath}/Completed/\`.
+   - Update the status field to \`Completed\`.
+6. **Blockers & Assistance**:
+   - If blocked by missing dependencies or external requirements, move the ticket to \`${relBoardPath}/Blocked/\` or \`${relBoardPath}/Assistance Required/\` and record the blocking reason in the \`## Work Log\`.
+`;
+
+    return { targetPath, created: true, content };
+  }
+
+  public async initTemplates(boardId?: string): Promise<string[] | null> {
+    let board = boardId ? this.getBoard(boardId) : undefined;
+    if (!board) {
+      const boards = this.getAllBoards();
+      if (boards.length > 0) board = boards[0];
+    }
+    if (!board) {
+      vscode.window.showWarningMessage('No Kanban board found to initialize templates.');
+      return null;
+    }
+
+    const templatesDir = path.join(board.rootPath, '.templates');
+    if (!fs.existsSync(templatesDir)) {
+      await fs.promises.mkdir(templatesDir, { recursive: true });
+    }
+
+    const created: string[] = [];
+
+    const featurePath = path.join(templatesDir, 'feature.md');
+    if (!fs.existsSync(featurePath)) {
+      const featureContent = `# {id} — {title}
+
+| Field | Value |
+|-------|-------|
+| **Epic** | |
+| **Type** | Feature |
+| **Priority** | P1 — Core |
+| **Estimate** | M (2–3 days) |
+| **Status** | {column} |
+| **Depends on** | — |
+| **Blocks** | — |
+| **Labels** | |
+| **Milestone** | |
+
+## Summary
+Brief description of the feature and what user problem it solves.
+
+## Description
+Detailed background, UX requirements, architecture decisions, and implementation outline.
+
+## Acceptance Criteria
+- [ ] Requirements defined and reviewed
+- [ ] Core implementation complete
+- [ ] Unit & integration tests added and passing
+- [ ] Documentation updated
+
+## Technical Notes
+- Implementation details and architectural guidelines.
+
+## Work Log
+- **{date}**: Created ticket.
+`;
+      await fs.promises.writeFile(featurePath, featureContent, 'utf8');
+      created.push('feature.md');
+    }
+
+    const bugPath = path.join(templatesDir, 'bug.md');
+    if (!fs.existsSync(bugPath)) {
+      const bugContent = `# {id} — Fix: {title}
+
+| Field | Value |
+|-------|-------|
+| **Epic** | |
+| **Type** | Defect / Bug |
+| **Priority** | P0 — Critical |
+| **Estimate** | S (1 day) |
+| **Status** | {column} |
+| **Depends on** | — |
+| **Blocks** | — |
+| **Labels** | \`bug\`, \`fix\` |
+| **Milestone** | |
+
+## Summary
+Brief description of the bug and its impact.
+
+## Steps to Reproduce
+1. Step 1
+2. Step 2
+3. Observe unexpected behavior
+
+## Expected vs Actual Behavior
+- **Expected**: Describe expected behavior.
+- **Actual**: Describe actual observed error or failure.
+
+## Acceptance Criteria
+- [ ] Root cause diagnosed and resolved
+- [ ] Regression test added
+- [ ] Verified fix passes all existing test suites
+
+## Work Log
+- **{date}**: Logged bug.
+`;
+      await fs.promises.writeFile(bugPath, bugContent, 'utf8');
+      created.push('bug.md');
+    }
+
+    await this.reloadSingleBoard(board.rootPath);
+    return created;
   }
 
   public async reloadSingleBoard(rootPath: string): Promise<Board | null> {

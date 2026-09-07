@@ -49,6 +49,7 @@
   const btnNewTicket = document.getElementById('btnNewTicket');
   const btnConfig = document.getElementById('btnConfig');
   const btnRefresh = document.getElementById('btnRefresh');
+  const btnAgentRules = document.getElementById('btnAgentRules');
 
   const boardView = document.getElementById('boardView');
   const overviewView = document.getElementById('overviewView');
@@ -60,14 +61,20 @@
   const statOngoingTickets = document.getElementById('statOngoingTickets');
   const statAssistanceTickets = document.getElementById('statAssistanceTickets');
   const statBlockedTickets = document.getElementById('statBlockedTickets');
+  const statBlockedDependencies = document.getElementById('statBlockedDependencies');
   const parallelWorkContainer = document.getElementById('parallelWorkContainer');
   const projectBoardsGrid = document.getElementById('projectBoardsGrid');
+  const activityFeedContainer = document.getElementById('activityFeedContainer');
+  const feedDateFilter = document.getElementById('feedDateFilter');
+  const feedBoardFilter = document.getElementById('feedBoardFilter');
 
   // Modal elements
   const newTicketModal = document.getElementById('newTicketModal');
   const closeNewTicketModal = document.getElementById('closeNewTicketModal');
   const btnCancelTicket = document.getElementById('btnCancelTicket');
   const btnSubmitTicket = document.getElementById('btnSubmitTicket');
+  const newTicketTemplate = document.getElementById('newTicketTemplate');
+  const btnInitTemplates = document.getElementById('btnInitTemplates');
   const newTicketTitle = document.getElementById('newTicketTitle');
   const newTicketColumn = document.getElementById('newTicketColumn');
   const newTicketSubfolder = document.getElementById('newTicketSubfolder');
@@ -139,6 +146,24 @@
       vscode.postMessage({ type: 'openConfig', boardId: state.currentBoard.id });
     }
   });
+
+  if (btnAgentRules) {
+    btnAgentRules.addEventListener('click', () => {
+      vscode.postMessage({
+        type: 'generateAgentRules',
+        boardId: state.currentBoard ? state.currentBoard.id : ''
+      });
+    });
+  }
+
+  if (btnInitTemplates) {
+    btnInitTemplates.addEventListener('click', () => {
+      vscode.postMessage({
+        type: 'initTemplates',
+        boardId: state.currentBoard ? state.currentBoard.id : ''
+      });
+    });
+  }
 
   btnRefresh.addEventListener('click', () => {
     vscode.postMessage({ type: 'refresh' });
@@ -248,22 +273,35 @@
     const assignee = newTicketAssignee.value;
     const summary = newTicketSummary.value.trim();
 
-    let initialContent = `# ${title}\n\n`;
-    initialContent += `| Field | Value |\n|-------|-------|\n`;
-    initialContent += `| **Priority** | ${priority} |\n`;
-    initialContent += `| **Status** | ${column} |\n`;
-    if (assignee) {
-      initialContent += `| **Assignee** | ${assignee} |\n`;
-    }
-    initialContent += `| **Labels** | |\n\n`;
+    let initialContent = '';
+    const chosenTemplateId = newTicketTemplate ? newTicketTemplate.value : '';
+    const template = (state.currentBoard && state.currentBoard.templates)
+      ? state.currentBoard.templates.find(t => t.id === chosenTemplateId)
+      : null;
 
-    if (summary) {
-      initialContent += `## Summary\n${summary}\n\n`;
+    if (template) {
+      initialContent = template.content;
+      if (summary && initialContent.includes('## Summary')) {
+        initialContent = initialContent.replace(/##\s+Summary\r?\n[^\n#]*/i, `## Summary\n${summary}\n`);
+      }
     } else {
-      initialContent += `## Summary\n\n`;
-    }
+      initialContent = `# ${title}\n\n`;
+      initialContent += `| Field | Value |\n|-------|-------|\n`;
+      initialContent += `| **Priority** | ${priority} |\n`;
+      initialContent += `| **Status** | ${column} |\n`;
+      if (assignee) {
+        initialContent += `| **Assignee** | ${assignee} |\n`;
+      }
+      initialContent += `| **Labels** | |\n\n`;
 
-    initialContent += `## Acceptance Criteria\n- [ ] Requirements specified\n- [ ] Implemented\n- [ ] Tested\n`;
+      if (summary) {
+        initialContent += `## Summary\n${summary}\n\n`;
+      } else {
+        initialContent += `## Summary\n\n`;
+      }
+
+      initialContent += `## Acceptance Criteria\n- [ ] Requirements specified\n- [ ] Implemented\n- [ ] Tested\n`;
+    }
 
     vscode.postMessage({
       type: 'createTicket',
@@ -541,6 +579,9 @@
     statOngoingTickets.textContent = overview.ongoingTicketsCount;
     statAssistanceTickets.textContent = overview.assistanceRequiredCount;
     statBlockedTickets.textContent = overview.blockedTicketsCount;
+    if (statBlockedDependencies) {
+      statBlockedDependencies.textContent = overview.blockedByDependencyCount || 0;
+    }
 
     // Parallel Active Work Grid
     parallelWorkContainer.innerHTML = '';
@@ -593,6 +634,82 @@
       });
 
       projectBoardsGrid.appendChild(boardCard);
+    });
+
+    // Populate feedBoardFilter
+    if (feedBoardFilter) {
+      const selected = feedBoardFilter.value;
+      feedBoardFilter.innerHTML = '<option value="">All Boards</option>';
+      state.boards.forEach(b => {
+        const opt = document.createElement('option');
+        opt.value = b.id;
+        opt.textContent = b.name;
+        if (b.id === selected) opt.selected = true;
+        feedBoardFilter.appendChild(opt);
+      });
+    }
+
+    renderActivityFeed();
+  }
+
+  function renderActivityFeed() {
+    if (!activityFeedContainer || !state.overview) return;
+    const logs = state.overview.recentWorkLogs || [];
+    const dateFilter = feedDateFilter ? feedDateFilter.value : 'all';
+    const boardFilter = feedBoardFilter ? feedBoardFilter.value : '';
+
+    const now = Date.now();
+    const oneDay = 24 * 60 * 60 * 1000;
+    const sevenDays = 7 * oneDay;
+
+    const filtered = logs.filter(log => {
+      if (boardFilter && log.boardId !== boardFilter) return false;
+      if (dateFilter === 'today') {
+        const logTime = log.timestamp || (log.date ? Date.parse(log.date) : 0) || 0;
+        if (logTime && (now - logTime) > oneDay) return false;
+      } else if (dateFilter === 'week') {
+        const logTime = log.timestamp || (log.date ? Date.parse(log.date) : 0) || 0;
+        if (logTime && (now - logTime) > sevenDays) return false;
+      }
+      return true;
+    });
+
+    activityFeedContainer.innerHTML = '';
+    if (filtered.length === 0) {
+      activityFeedContainer.innerHTML = `<div class="empty-state" style="padding: 16px;">No work log entries found matching filter criteria.</div>`;
+      return;
+    }
+
+    filtered.slice(0, 50).forEach(entry => {
+      const item = document.createElement('div');
+      item.className = 'timeline-entry';
+      item.innerHTML = `
+        <div class="timeline-meta">
+          <span class="timeline-date">${escapeHtml(entry.date)}</span>
+          <span class="timeline-board">📂 ${escapeHtml(entry.boardName)}</span>
+          <span class="timeline-ticket" title="Open ticket at line ${entry.line || 1}">🎫 ${escapeHtml(entry.ticketId || entry.ticketTitle)}</span>
+        </div>
+        <div class="timeline-text">${escapeHtml(entry.text)}</div>
+      `;
+      item.addEventListener('click', () => {
+        vscode.postMessage({
+          type: 'openTicketFile',
+          filePath: entry.ticketPath,
+          line: entry.line || 1
+        });
+      });
+      activityFeedContainer.appendChild(item);
+    });
+  }
+
+  if (feedDateFilter) {
+    feedDateFilter.addEventListener('change', () => {
+      renderActivityFeed();
+    });
+  }
+  if (feedBoardFilter) {
+    feedBoardFilter.addEventListener('change', () => {
+      renderActivityFeed();
     });
   }
 
@@ -924,11 +1041,23 @@
       `;
     }
 
+    // Blocker badge for unresolved dependencies
+    let blockerBadgeHtml = '';
+    if (ticket.unresolvedDependencies && ticket.unresolvedDependencies.length > 0) {
+      const depList = ticket.unresolvedDependencies.join(', ');
+      blockerBadgeHtml = `
+        <span class="blocker-warning-badge" title="Blocked by unfinished prerequisite: ${escapeHtml(depList)}">
+          ⛔ Blocked (${ticket.unresolvedDependencies.length})
+        </span>
+      `;
+    }
+
     card.innerHTML = `
       <div class="ticket-card-top">
         <div class="ticket-badges-left">
           <span class="ticket-id-badge">${ticket.id}</span>
           <span class="priority-pill ${priorityClass}">${ticket.priority}</span>
+          ${blockerBadgeHtml}
           ${attemptBadgeHtml}
           ${subfolderHtml}
         </div>
@@ -1203,6 +1332,19 @@
     newTicketTitle.value = '';
     newTicketSummary.value = '';
 
+    // Populate templates dropdown
+    if (newTicketTemplate) {
+      newTicketTemplate.innerHTML = '<option value="">(Default Ticket Format)</option>';
+      if (state.currentBoard && state.currentBoard.templates && state.currentBoard.templates.length > 0) {
+        state.currentBoard.templates.forEach(tpl => {
+          const opt = document.createElement('option');
+          opt.value = tpl.id;
+          opt.textContent = tpl.name;
+          newTicketTemplate.appendChild(opt);
+        });
+      }
+    }
+
     // Populate columns
     newTicketColumn.innerHTML = '';
     state.currentBoard.columns.forEach(c => {
@@ -1267,8 +1409,56 @@
           <td>Assignee</td>
           <td>${ticket.assignee ? `<span class="assignee-pill ${isAgentAssignee(ticket.assignee) ? 'agent' : ''}">${isAgentAssignee(ticket.assignee) ? '🤖' : '👤'} ${ticket.assignee}</span>` : '<span class="assignee-pill unassigned">+ Assign</span>'}</td>
         </tr>
-        ${ticket.dependsOn.length ? `<tr><td>Depends on</td><td>${ticket.dependsOn.join(', ')}</td></tr>` : ''}
-        ${ticket.blocks.length ? `<tr><td>Blocks</td><td>${ticket.blocks.join(', ')}</td></tr>` : ''}
+    // Dependencies and blocks with clickable jump links
+    let dependsOnHtml = '';
+    if (ticket.dependsOn && ticket.dependsOn.length > 0) {
+      const links = ticket.dependsOn.map(dep => {
+        const isUnresolved = ticket.unresolvedDependencies && ticket.unresolvedDependencies.some(u => u.startsWith(dep));
+        return `<span class="dep-link ${isUnresolved ? 'unresolved' : 'resolved'}" data-ticket-id="${escapeHtml(dep)}" title="Click to view ticket ${escapeHtml(dep)}">${escapeHtml(dep)}${isUnresolved ? ' ⚠️' : ' ✓'}</span>`;
+      }).join(' ');
+      dependsOnHtml = `<tr><td>Depends on</td><td>${links}</td></tr>`;
+    }
+
+    let blocksHtml = '';
+    if (ticket.blocks && ticket.blocks.length > 0) {
+      const links = ticket.blocks.map(b => {
+        return `<span class="dep-link" data-ticket-id="${escapeHtml(b)}" title="Click to view ticket ${escapeHtml(b)}">${escapeHtml(b)}</span>`;
+      }).join(' ');
+      blocksHtml = `<tr><td>Blocks</td><td>${links}</td></tr>`;
+    }
+
+    // Check for circular dependency
+    let circularAlertHtml = '';
+    if (state.currentBoard && ticket.dependsOn && ticket.dependsOn.length > 0) {
+      for (const depId of ticket.dependsOn) {
+        for (const col of state.currentBoard.columns) {
+          const foundDep = col.tickets.find(t => t.id && t.id.toUpperCase() === depId.toUpperCase());
+          if (foundDep && foundDep.dependsOn && foundDep.dependsOn.some(d => d.toUpperCase() === ticket.id.toUpperCase())) {
+            circularAlertHtml = `
+              <div class="circular-dep-alert" style="margin: 8px 0; padding: 6px 10px; background: rgba(239, 68, 68, 0.15); border: 1px solid #ef4444; border-radius: 4px; font-size: 11.5px; color: #f87171;">
+                ⚠️ <strong>Circular Dependency Detected</strong>: ${ticket.id} and ${foundDep.id} depend on each other!
+              </div>
+            `;
+            break;
+          }
+        }
+        if (circularAlertHtml) break;
+      }
+    }
+
+    let fieldsHtml = `
+      <table class="detail-table">
+        ${ticket.epic ? `<tr><td>Epic</td><td>${ticket.epic}</td></tr>` : ''}
+        ${ticket.type ? `<tr><td>Type</td><td>${ticket.type}</td></tr>` : ''}
+        ${ticket.status ? `<tr><td>Status</td><td>${ticket.status}</td></tr>` : ''}
+        ${ticket.estimate ? `<tr><td>Estimate</td><td>${ticket.estimate}</td></tr>` : ''}
+        ${ticket.milestone ? `<tr><td>Milestone</td><td>${ticket.milestone}</td></tr>` : ''}
+        <tr class="clickable-row" id="detailAssigneeRow" style="cursor:pointer;" title="Click to assign or re-assign">
+          <td>Assignee</td>
+          <td>${ticket.assignee ? `<span class="assignee-pill ${isAgentAssignee(ticket.assignee) ? 'agent' : ''}">${isAgentAssignee(ticket.assignee) ? '🤖' : '👤'} ${ticket.assignee}</span>` : '<span class="assignee-pill unassigned">+ Assign</span>'}</td>
+        </tr>
+        ${dependsOnHtml}
+        ${blocksHtml}
         ${ticket.labels.length ? `<tr><td>Labels</td><td>${ticket.labels.map(l => `<span class="ticket-label">${l}</span>`).join(' ')}</td></tr>` : ''}
       </table>
     `;
@@ -1276,12 +1466,14 @@
     let checklistHtml = '';
     if (ticket.acceptanceCriteria && ticket.acceptanceCriteria.length > 0) {
       checklistHtml = `
-        <h4 style="margin-top:14px;margin-bottom:6px;font-size:12.5px;color:var(--text-main);">Acceptance Criteria (${ticket.progress.done}/${ticket.progress.total})</h4>
+        <h4 class="checklist-header-progress" style="margin-top:14px;margin-bottom:6px;font-size:12.5px;color:var(--text-main);">
+          Acceptance Criteria (${ticket.progress.done}/${ticket.progress.total})
+        </h4>
         <div class="checklist-container">
-          ${ticket.acceptanceCriteria.map(item => `
+          ${ticket.acceptanceCriteria.map((item, idx) => `
             <div class="checklist-item">
-              <input type="checkbox" ${item.done ? 'checked' : ''} disabled />
-              <span>${item.text}</span>
+              <input type="checkbox" data-index="${idx}" ${item.done ? 'checked' : ''} />
+              <span class="${item.done ? 'criterion-done' : ''}">${escapeHtml(item.text)}</span>
             </div>
           `).join('')}
         </div>
@@ -1345,6 +1537,7 @@
 
     modalDetailBody.innerHTML = `
       <div class="detail-modal-title">${ticket.title}</div>
+      ${circularAlertHtml}
       ${fieldsHtml}
       ${ticket.summary ? `<div style="margin: 10px 0;"><h4 style="font-size:12.5px;margin-bottom:4px;">Summary</h4><p style="font-size:12px;color:var(--text-muted);">${ticket.summary}</p></div>` : ''}
       ${checklistHtml}
@@ -1360,12 +1553,89 @@
       });
     }
 
+    // Configure interactive checkboxes in Acceptance Criteria
+    const checkboxes = modalDetailBody.querySelectorAll('.checklist-item input[type="checkbox"]');
+    checkboxes.forEach(cb => {
+      cb.addEventListener('change', e => {
+        const isDone = e.target.checked;
+        const idx = parseInt(e.target.dataset.index, 10);
+        if (ticket.acceptanceCriteria && ticket.acceptanceCriteria[idx]) {
+          ticket.acceptanceCriteria[idx].done = isDone;
+        }
+        ticket.progress.done = ticket.acceptanceCriteria.filter(c => c.done).length;
+
+        // Update strikethrough styling
+        const span = e.target.parentElement.querySelector('span');
+        if (span) {
+          if (isDone) span.classList.add('criterion-done');
+          else span.classList.remove('criterion-done');
+        }
+
+        // Update modal progress text
+        const progHeader = modalDetailBody.querySelector('.checklist-header-progress');
+        if (progHeader) {
+          progHeader.textContent = `Acceptance Criteria (${ticket.progress.done}/${ticket.progress.total})`;
+        }
+
+        // Update card on board
+        updateCardProgressInBoard(ticket);
+
+        // Send IPC to host to persist change to markdown file
+        vscode.postMessage({
+          type: 'toggleCriterion',
+          ticketPath: ticket.path,
+          index: idx,
+          done: isDone
+        });
+      });
+    });
+
+    // Configure clickable dependency links
+    const depLinks = modalDetailBody.querySelectorAll('.dep-link');
+    depLinks.forEach(link => {
+      link.addEventListener('click', e => {
+        const targetId = link.dataset.ticketId;
+        if (!targetId) return;
+        const found = findTicketById(targetId);
+        if (found) {
+          openTicketDetailModal(found);
+        } else {
+          state.searchQuery = targetId.toLowerCase();
+          searchInput.value = targetId;
+          clearSearchBtn.style.display = 'block';
+          ticketDetailModal.style.display = 'none';
+          filterBoardCards();
+        }
+      });
+    });
+
     // Configure Assign button in footer
     if (btnAssignModal && assignModalBtnText) {
       assignModalBtnText.textContent = ticket.assignee ? `Assigned: ${ticket.assignee}` : 'Assign...';
     }
 
     ticketDetailModal.style.display = 'flex';
+  }
+
+  function findTicketById(id) {
+    if (!id || !state.currentBoard) return null;
+    const norm = id.toUpperCase();
+    for (const col of state.currentBoard.columns) {
+      const found = col.tickets.find(t => t.id && t.id.toUpperCase() === norm);
+      if (found) return found;
+    }
+    return null;
+  }
+
+  function updateCardProgressInBoard(ticket) {
+    const card = document.querySelector(`.ticket-card[data-ticket-path="${CSS.escape(ticket.path)}"]`);
+    if (card && ticket.progress.total > 0) {
+      const pct = Math.round((ticket.progress.done / ticket.progress.total) * 100);
+      const fill = card.querySelector('.progress-bar-fill');
+      if (fill) fill.style.width = `${pct}%`;
+      const progSpan = card.querySelector('.ticket-progress-wrap span');
+      if (progSpan) progSpan.textContent = `${ticket.progress.done}/${ticket.progress.total}`;
+    }
   }
 
   // -------------------------------------------------------------

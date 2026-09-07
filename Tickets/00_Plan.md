@@ -15,11 +15,11 @@ Build a high-performance, developer-friendly VS Code / VSCodium / Devin / Antigr
 
 ## 2. Roadmap & Epics
 
-- **Epic A — Foundation & Bootstrap (v0.1.0)**: Core extension scaffolding, TypeScript architecture, Webview UI, drag-and-drop file mover, real-time filesystem watcher, and multi-board discovery. *(Completed)*
-- **Epic B — Human & Agent Interaction Ergonomics**: "Copy Agent Prompt" button, interactive checklist toggling in UI, and one-click workspace `AGENT.md` rule generation.
-- **Epic C — Workflow Intelligence & Safety**: Dependency graph resolution (`Depends on` / `Blocks`), blocker alert badges, and circular dependency detection.
-- **Epic D — Overview & Team Visibility**: Multi-board Work Log chronological activity feed and parallel agent monitoring dashboard.
-- **Epic E — Ticket Authoring & Templates**: Template-based ticket creation (`.templates/`), auto-id numbering, and batch actions.
+- **Epic A — Foundation & Bootstrap (v0.1.0)**: Core extension scaffolding, TypeScript architecture, Webview UI, drag-and-drop file mover, real-time filesystem watcher, and multi-board discovery. *(Completed — EXT-000)*
+- **Epic B — Human & Agent Interaction Ergonomics**: "Copy Agent Prompt" button, interactive checklist toggling in UI, and one-click workspace `AGENT.md` rule generation. *(Completed — EXT-001, EXT-002, EXT-003)*
+- **Epic C — Workflow Intelligence & Safety**: Dependency graph resolution (`Depends on` / `Blocks`), blocker alert badges, and circular dependency detection. *(Completed — EXT-004)*
+- **Epic D — Overview & Team Visibility**: Multi-board Work Log chronological activity feed and parallel agent monitoring dashboard. *(Completed — EXT-005)*
+- **Epic E — Ticket Authoring & Templates**: Template-based ticket creation (`.templates/`), auto-id numbering, and batch actions. *(Completed — EXT-006)*
 - **Epic F — AI Orchestrator: Vendor-Neutral Multi-Agent Execution Loop**: Expand from passive board to active orchestration layer. Frontier lead agent breaks down outcomes into bounded tasks, economical worker agents execute changes, and deterministic runtime handles leases, budgets, EU/local policies, isolated workspaces, and verification before completion.
   - *M0: Compatibility & Contracts* (`ORCH-001` – `ORCH-004`): Versioned config schema, adapter capability probes, durable ticket/attempt schema. *(Completed)*
   - *M1: One Supervised Task* (`ORCH-005` – `ORCH-008`): Transactional runtime journal, first managed adapter, workspace baseline & guarded patches, lifecycle UI. Initiates the deterministic fake adapter test harness. *(Completed)*

@@ -197,6 +197,60 @@ Acceptance Criteria:
     'Expected fallback criterion text when no criteria present');
   console.log('✓ PromptFormatter custom template & edge cases tests passed!');
 
+  // Test 14: TicketParser.toggleCriterion (EXT-003)
+  console.log('\nTesting TicketParser.toggleCriterion (EXT-003)...');
+  const checklistSample = `# Ticket With Criteria\n\n## Acceptance Criteria\n- [ ] Task 1: Initialize DB\n- [ ] Task 2: Setup routes\n- [x] Task 3: Write tests\n`;
+  const toggled0 = TicketParser.toggleCriterion(checklistSample, 0, true);
+  assert(toggled0.includes('- [x] Task 1: Initialize DB'), 'Expected task 1 to be checked');
+  assert(toggled0.includes('- [ ] Task 2: Setup routes'), 'Expected task 2 to remain unchecked');
+
+  const toggled2 = TicketParser.toggleCriterion(toggled0, 2, false);
+  assert(toggled2.includes('- [ ] Task 3: Write tests'), 'Expected task 3 to be unchecked');
+
+  // Test CRLF preservation during checkbox toggle
+  const crlfChecklist = '# Title\r\n\r\n## Criteria\r\n- [ ] Task 1\r\n- [ ] Task 2\r\n';
+  const crlfToggled = TicketParser.toggleCriterion(crlfChecklist, 1, true);
+  assert(crlfToggled.includes('\r\n- [x] Task 2\r\n'), 'Expected CRLF preserved when toggling checkbox');
+  console.log('✓ TicketParser.toggleCriterion tests passed!');
+
+  // Test 15: TicketParser.extractWorkLogEntries (EXT-005)
+  console.log('\nTesting TicketParser.extractWorkLogEntries (EXT-005)...');
+  const workLogSample = `# Ticket With Log\n\n## Summary\nTicket summary\n\n## Work Log\n- **2026-09-04**: Started implementation of core algorithm\n- **2026-09-05**: Added regression tests and benchmark suite\n\n## Next Steps\nShip it\n`;
+  const entries = TicketParser.extractWorkLogEntries(workLogSample, 'EXT-005', 'Live Timeline', 'Tickets/EXT-005.md', 'board-1', 'Main Board');
+  assert(entries.length === 2, `Expected 2 work log entries, got ${entries.length}`);
+  assert(entries[0].date === '2026-09-04', `Expected date 2026-09-04, got '${entries[0].date}'`);
+  assert(entries[0].text.includes('Started implementation'), `Expected text to include 'Started implementation', got '${entries[0].text}'`);
+  assert(entries[0].line === 7, `Expected line 7, got ${entries[0].line}`);
+  assert(entries[1].date === '2026-09-05', `Expected date 2026-09-05, got '${entries[1].date}'`);
+  assert(entries[1].line === 8, `Expected line 8, got ${entries[1].line}`);
+  console.log('✓ TicketParser.extractWorkLogEntries tests passed!');
+
+  // Test 16: PromptFormatter dependency blocker warning (EXT-004)
+  console.log('\nTesting PromptFormatter dependency blocker warning (EXT-004)...');
+  const blockedTicket = {
+    ...ticket019,
+    dependsOn: ['EXT-000', 'EXT-001'],
+    unresolvedDependencies: ['EXT-000', 'EXT-001 (Ongoing)']
+  };
+  const blockedPrompt = PromptFormatter.formatPrompt(blockedTicket, null, root, ticketsRoot);
+  assert(blockedPrompt.includes('⚠️ **DEPENDENCY WARNING**:'), 'Expected prompt to include dependency blocker warning');
+  assert(blockedPrompt.includes('EXT-000, EXT-001 (Ongoing)'), 'Expected prompt to list unfinished dependencies');
+  console.log('✓ PromptFormatter dependency blocker warning tests passed!');
+
+  // Test 17: Template placeholder replacement (EXT-006)
+  console.log('\nTesting ticket template interpolation (EXT-006)...');
+  const templateSample = `# {id} — Fix: {title}\n\n| Field | Value |\n|---|---|\n| **Status** | {column} |\n\n## Work Log\n- **{date}**: Created ticket.\n`;
+  const dateStr = '2026-09-07';
+  const interpolated = templateSample
+    .split('{id}').join('T-FIX-BUG')
+    .split('{title}').join('Fix memory leak')
+    .split('{column}').join('Backlog')
+    .split('{date}').join(dateStr);
+  assert(interpolated.includes('# T-FIX-BUG — Fix: Fix memory leak'), 'Expected title interpolated');
+  assert(interpolated.includes('| **Status** | Backlog |'), 'Expected status column interpolated');
+  assert(interpolated.includes(`- **${dateStr}**: Created ticket.`), 'Expected date interpolated');
+  console.log('✓ Ticket template interpolation tests passed!');
+
   console.log('\n=== ALL UNIT TESTS PASSED SUCCESSFULLY! ===');
 }
 

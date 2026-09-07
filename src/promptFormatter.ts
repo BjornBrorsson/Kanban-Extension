@@ -71,7 +71,13 @@ export class PromptFormatter {
     const summaryText = ticket.summary || ticket.title;
     const descriptionText = ticket.description || ticket.summary || ticket.title;
 
-    // 5. Build replacement dictionary
+    // 5. Dependency blocker warning
+    let blockerWarning = '';
+    if (ticket.unresolvedDependencies && ticket.unresolvedDependencies.length > 0) {
+      blockerWarning = `\n\n> ⚠️ **DEPENDENCY WARNING**: This ticket is currently blocked by unfinished prerequisite tickets: ${ticket.unresolvedDependencies.join(', ')}. Please verify their status before proceeding or focus on prerequisite work.`;
+    }
+
+    // 6. Build replacement dictionary
     const replacements: Record<string, string> = {
       '{id}': ticket.id || '',
       '{ticket_id}': ticket.id || '',
@@ -95,12 +101,19 @@ export class PromptFormatter {
       '{assignee}': ticket.assignee || 'Unassigned',
       '{epic}': ticket.epic || '',
       '{estimate}': ticket.estimate || '',
-      '{completed_path}': completedPath
+      '{completed_path}': completedPath,
+      '{depends_on}': (ticket.dependsOn || []).join(', '),
+      '{unresolved_dependencies}': (ticket.unresolvedDependencies || []).join(', '),
+      '{blocker_warning}': blockerWarning
     };
 
     let result = template;
     for (const [placeholder, value] of Object.entries(replacements)) {
       result = result.split(placeholder).join(value);
+    }
+
+    if (blockerWarning && !template.includes('{blocker_warning}')) {
+      result += blockerWarning;
     }
 
     return result;

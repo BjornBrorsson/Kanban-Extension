@@ -6,7 +6,7 @@
 | **Type** | Feature |
 | **Priority** | P2 |
 | **Estimate** | S (1–2 days) |
-| **Status** | Ongoing |
+| **Status** | Completed |
 | **Depends on** | EXT-000 |
 | **Blocks** | — |
 | **Labels** | `templates`, `scaffolding`, `authoring`, `customization` |
@@ -25,11 +25,12 @@ This feature:
 4. Auto-substitutes placeholders like `{title}`, `{date}`, `{column}`, `{user}`.
 
 ## Acceptance Criteria
-- [ ] Extension discovers templates in `Tickets/.templates/`.
-- [ ] New Ticket modal provides a template picker if templates exist.
-- [ ] Selecting a template dynamically updates the preview/editor text.
-- [ ] If no `.templates/` folder exists, falls back to the clean default template.
-- [ ] Extension provides a command or button to "Initialize Default Templates".
+- [x] Extension discovers templates in `Tickets/.templates/`.
+- [x] New Ticket modal provides a template picker if templates exist.
+- [x] Selecting a template dynamically updates the preview/editor text.
+- [x] If no `.templates/` folder exists, falls back to the clean default template.
+- [x] Extension provides a command or button to "Initialize Default Templates".
 
 ## Work Log
 - **2026-09-04**: Drafted requirements and added ticket to Ready backlog.
+- **2026-09-07**: Added template scanning for `<boardRoot>/.templates/`, added `initTemplates` command and UI button with standard templates (`feature.md`, `bug.md`, `task.md`), added template dropdown in New Ticket modal with placeholder interpolation (`{id}`, `{title}`, `{column}`, `{date}`, `{user}`).

@@ -2650,6 +2650,82 @@ var TicketParser = class {
     }
     return `${tableBlock}${updated}`;
   }
+  /**
+   * Toggles the Nth acceptance criterion checkbox in the document.
+   * Matches both `- [ ]` and `- [x]`, preserving indentation, prefix, and line endings.
+   */
+  static toggleCriterion(content, index, done) {
+    if (index < 0)
+      return content;
+    const checklistRegex = /^([\s>]*-\s*\[)([ xX])(\]\s+.*)$/gm;
+    let matchCount = 0;
+    let match;
+    while ((match = checklistRegex.exec(content)) !== null) {
+      if (matchCount === index) {
+        const fullMatch = match[0];
+        const matchIndex = match.index;
+        const prefix = match[1];
+        const suffix = match[3];
+        const newChar = done ? "x" : " ";
+        const updatedLine = `${prefix}${newChar}${suffix}`;
+        return content.slice(0, matchIndex) + updatedLine + content.slice(matchIndex + fullMatch.length);
+      }
+      matchCount++;
+    }
+    return content;
+  }
+  /**
+   * Scans ## Work Log in the ticket markdown content and extracts dated log entries.
+   */
+  static extractWorkLogEntries(content, ticketId, ticketTitle, ticketPath, boardId, boardName) {
+    const entries = [];
+    const lines = content.split(/\r?\n/);
+    let inWorkLog = false;
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const trimmed = line.trim();
+      if (/^##\s+Work\s+Log/i.test(trimmed)) {
+        inWorkLog = true;
+        continue;
+      }
+      if (inWorkLog) {
+        if (/^##\s+[^#]/i.test(trimmed)) {
+          break;
+        }
+        const dateMatch = trimmed.match(/^[-*]\s+(?:\*\*)?(\d{4}[-/]\d{2}[-/]\d{2}(?:\s+\d{2}:\d{2})?)(?:\*\*)?[\s:\-—–]+(.*)$/);
+        if (dateMatch) {
+          const dateStr = dateMatch[1].trim();
+          const text = dateMatch[2].trim();
+          entries.push({
+            date: dateStr,
+            timestamp: Date.parse(dateStr) || void 0,
+            boardId,
+            boardName,
+            ticketId,
+            ticketTitle,
+            ticketPath,
+            text,
+            line: i + 1
+          });
+        } else if (trimmed.startsWith("-") || trimmed.startsWith("*")) {
+          const text = trimmed.replace(/^[-*]\s+/, "").trim();
+          if (text) {
+            entries.push({
+              date: "Recent",
+              boardId,
+              boardName,
+              ticketId,
+              ticketTitle,
+              ticketPath,
+              text,
+              line: i + 1
+            });
+          }
+        }
+      }
+    }
+    return entries;
+  }
 };
 
 // test/m2Tests.ts
