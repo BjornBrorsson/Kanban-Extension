@@ -12,7 +12,10 @@ Example Structure/**
 Tickets/**
 scratch/**
 docs/**
+dist/test.js
+dist/*test*.js
 dist/*Test*.js
 dist/*Tests.js
 dist/*Pilot.js
 dist/benchmarks.js
+

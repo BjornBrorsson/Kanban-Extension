@@ -2,7 +2,7 @@
   "name": "agentic-kanban",
   "displayName": "Agentic Kanban (Folders & Markdown)",
   "description": "Folder & markdown-based Kanban project management for VS Code, Codium, Devin, Antigravity, and Cursor — designed for AI agents first, humans second.",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "publisher": "agentic-kanban",
   "engines": {
     "vscode": "^1.80.0"
