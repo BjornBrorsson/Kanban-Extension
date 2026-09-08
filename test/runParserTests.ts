@@ -46,7 +46,7 @@ async function runTests() {
   const ticket019Content = fs.readFileSync(ticket019Path, 'utf8');
   const ticket019 = TicketParser.parse(ticket019Path, ticket019Content, ticketsRoot, 'Ongoing', null);
 
-  assert(ticket019.id === 'ATF-019', `Expected ID ATF-019, got '${ticket019.id}'`);
+  assert(ticket019.id === 'DEMO-019', `Expected ID DEMO-019, got '${ticket019.id}'`);
   assert(ticket019.title.includes('Cleanup + audit-trail framework'), `Expected title to contain cleanup, got '${ticket019.title}'`);
   assert(ticket019.priority === 'P0 — Critical', `Expected P0, got '${ticket019.priority}'`);
   assert(ticket019.epic?.includes('Test Data') === true, `Expected Epic C, got '${ticket019.epic}'`);
@@ -63,7 +63,7 @@ async function runTests() {
   const ticket001Content = fs.readFileSync(ticket001Path, 'utf8');
   const ticket001 = TicketParser.parse(ticket001Path, ticket001Content, ticketsRoot, 'Assistance Required', null);
 
-  assert(ticket001.id === 'ACM-001', `Expected ID ACM-001, got '${ticket001.id}'`);
+  assert(ticket001.id === 'DEMO-005', `Expected ID DEMO-005, got '${ticket001.id}'`);
   assert(ticket001.progress.total === 5, `Expected 5 total criteria, got ${ticket001.progress.total}`);
   assert(ticket001.progress.done === 2, `Expected 2 done criteria, got ${ticket001.progress.done}`);
   assert(ticket001.labels.includes('llm') && ticket001.labels.includes('gpu'), 'Expected llm and gpu labels');
@@ -169,8 +169,8 @@ Acceptance Criteria:
   // Test 12: PromptFormatter default template formatting
   console.log('\nTesting PromptFormatter default template...');
   const defaultPrompt = PromptFormatter.formatPrompt(ticket019, null, root, ticketsRoot);
-  assert(defaultPrompt.includes('Please review and work on ticket **ATF-019:'),
-    `Expected prompt to include 'Please review and work on ticket **ATF-019:', got:\n${defaultPrompt}`);
+  assert(defaultPrompt.includes('Please review and work on ticket **DEMO-019:'),
+    `Expected prompt to include 'Please review and work on ticket **DEMO-019:', got:\n${defaultPrompt}`);
   assert(defaultPrompt.includes('located at `Example Structure/Tickets/Ongoing/Example_ticket-019_cleanup-audit-trail.md`'),
     `Expected relative path to be computed relative to workspace root, got:\n${defaultPrompt}`);
   assert(defaultPrompt.includes('### Summary'), 'Expected prompt to contain ### Summary');
@@ -185,9 +185,9 @@ Acceptance Criteria:
   // Test 13: PromptFormatter with custom config template and edge cases
   console.log('\nTesting PromptFormatter with custom template...');
   const customPrompt = PromptFormatter.formatPrompt(ticket001, sectionTemplateConfig, root, ticketsRoot);
-  assert(customPrompt.includes('Special instructions for **ACM-001:'),
+  assert(customPrompt.includes('Special instructions for **DEMO-005:'),
     `Expected custom template prefix, got:\n${customPrompt}`);
-  assert(customPrompt.includes('- [x] Ollama installed and running locally.') && customPrompt.includes('- [ ] Backend `.env` model endpoint'),
+  assert(customPrompt.includes('- [x] Local inference runtime installed') && customPrompt.includes('- [ ] Configure environment variables'),
     'Expected done/undone checkboxes to reflect criterion state');
 
   // Test with ticket having no acceptance criteria

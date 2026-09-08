@@ -5,6 +5,7 @@
 [![Visual Studio Code](https://img.shields.io/badge/VS%20Code-Compatible-007ACC?logo=visualstudiocode)](https://code.visualstudio.com/)
 [![Built for AI Agents](https://img.shields.io/badge/AI%20Agents-First-8b5cf6)](#)
 [![Filesystem Native](https://img.shields.io/badge/Filesystem-Single%20Source%20of%20Truth-10b981)](#)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 ---
 
@@ -68,7 +69,7 @@ MyProject/
 The parser automatically detects:
 - **Markdown Tables**:
   ```markdown
-  # ATF-019 — Cleanup + audit-trail framework
+  # DEMO-019 — Cleanup + audit-trail framework
 
   | Field | Value |
   |---|---|
@@ -81,7 +82,7 @@ The parser automatically detects:
 - **YAML Frontmatter**:
   ```markdown
   ---
-  id: "ATF-020"
+  id: "DEMO-020"
   title: "Provision local GPU host"
   priority: "P0"
   assignee: "bjorn"
@@ -162,10 +163,10 @@ Have multiple projects with separate `Tickets/` folders in your workspace?
 # Install dependencies
 npm install
 
-# Build extension
+# Build extension and bundle webview assets
 npm run build
 
-# Run unit tests
+# Run unit and integration tests
 npm test
 
 # Watch mode for development
@@ -173,3 +174,51 @@ npm run watch
 ```
 
 Press `F5` in VS Code to launch the Extension Development Host!
+
+---
+
+## 📦 Creating a VSIX Package
+
+To package the extension into a standalone `.vsix` installer for distribution, local testing, or manual installation:
+
+```bash
+# Build production bundle and package into .vsix
+npm run package
+```
+
+This runs the build pipeline, bundles webview styles and scripts into `dist/`, and uses `@vscode/vsce` to assemble `agentic-kanban-<version>.vsix`.
+
+### Installing Your `.vsix`
+
+**Via Terminal:**
+- **VS Code**:
+  ```bash
+  code --install-extension agentic-kanban-1.0.0.vsix
+  ```
+- **VS Code Insiders**:
+  ```bash
+  code-insiders --install-extension agentic-kanban-1.0.0.vsix
+  ```
+- **Devin Desktop / Windsurf**:
+  ```bash
+  devin-desktop --install-extension agentic-kanban-1.0.0.vsix
+  ```
+- **VSCodium**:
+  ```bash
+  codium --install-extension agentic-kanban-1.0.0.vsix
+  ```
+
+> *Tip for Windows PowerShell: If the path contains spaces, wrap it in double quotes (e.g., `code --install-extension "C:\My Projects\agentic-kanban-1.0.0.vsix"`).*
+
+**Via GUI:**
+1. Open the Extensions sidebar (`Ctrl+Shift+X` / `Cmd+Shift+X`).
+2. Click the **`...`** (Views and More Actions) menu in the top-right corner of the Extensions panel.
+3. Select **Install from VSIX...**
+4. Browse to and select your `.vsix` file.
+5. Reload the editor window (`Ctrl+Shift+P` ➔ **Developer: Reload Window**).
+
+---
+
+## 📄 License
+
+This project is open-source software licensed under the [MIT License](LICENSE).

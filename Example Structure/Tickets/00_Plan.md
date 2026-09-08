@@ -71,7 +71,7 @@ The extension does not require an external database or proprietary store. The fi
 The parser supports three complementary ticket authoring styles:
 1. **Markdown Table Specs** (as seen in `ticket-019.md` and `ticket-070.md`):
    ```markdown
-   # ATF-019 — Title
+   # DEMO-019 — Title
 
    | Field | Value |
    |---|---|

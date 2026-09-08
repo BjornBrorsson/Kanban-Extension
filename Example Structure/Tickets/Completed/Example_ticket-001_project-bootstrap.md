@@ -1,4 +1,4 @@
-# ATF-001 — Project bootstrap (workspace, specs, board, AGENT.md, logs)
+# DEMO-001 — Project bootstrap (workspace, specs, board, and documentation)
 
 | Field | Value |
 |-------|-------|
@@ -6,37 +6,36 @@
 | **Type** | Project Setup |
 | **Priority** | P0 — Critical |
 | **Estimate** | S (≤1 day) |
-| **Status** | Done |
+| **Status** | Completed |
 | **Depends on** | — |
-| **Blocks** | ATF-002 |
+| **Blocks** | DEMO-002 |
 | **Labels** | `setup`, `docs`, `planning` |
 | **Milestone** | M0 |
 
 ## Summary
-Stand up the project workspace and planning artifacts so colleagues and AI agents can pick up tickets immediately.
+Stand up the project workspace, documentation, and ticket board so team members and AI agents can begin development immediately.
 
 ## Description
-Create the isolated `WorkInProgress` folder, the specs (single source of truth), the backlog board (plan of record), the project AGENT working rules, the Kanban ticket folders, and the project log/memories.
+Create the repository scaffolding, project architectural overview, initial Kanban board directories, and agent collaboration rules.
 
 ## Acceptance Criteria
-- [x] Folder `WorkInProgress/Internal - Automated Testing - #31516` with `Tickets/{Backlog,Ongoing,Assistance Required,Completed}`.
-- [x] `C000000_ATF_Specs.md` written (architecture, executors, isolation, data model, milestones).
-- [x] `Tickets/00_BACKLOG_BOARD.md` written (epics, ticket tables, dependencies, milestones).
-- [x] `AGENT.md` written (ticket workflow + ATF build rules).
-- [x] `PROJECT_LOG.md` and `PROJECT_MEMORIES.md` seeded.
+- [x] Create project folder layout with standard ticket columns (`Backlog`, `Ongoing`, `Assistance Required`, `Blocked`, `Completed`).
+- [x] Document high-level project vision and architecture in `00_Plan.md`.
+- [x] Define column guidance and usage conventions in `Whatwhy.md` files.
+- [x] Configure team members and AI agent runners in `config.md`.
+- [x] Seed initial project backlog tickets.
 
 ## Technical Notes
-- Prefix all artifacts `C000000`. Mirror the ACM project's ticket format and folder-Kanban.
+- Follow Markdown and folder-based Kanban conventions.
+- Keep agent runner templates modular and configurable per environment.
 
 ## Definition of Done
-- All planning artifacts exist and cross-reference each other; board statuses reflect reality.
+Workspace layout, architectural specification, team configuration, and initial backlog are in place and verified.
 
 ## Work Log
-
-### 2026-06-23
-- Created workspace + ticket folders.
-- Wrote specs, backlog board (48 tickets, A–J), and AGENT.md.
-- Authored all ATF-002 … ATF-048 ticket files in `Backlog/`.
+- Initialized workspace structure and created ticket column folders.
+- Authored architecture plan, column guidance, and agent runner configuration.
+- Seeded initial backlog tickets for Milestone M0.
 
 ## Completion Summary
-Completed 2026-06-23. Workspace, specs, board, AGENT.md and the full ticket set are in place. The project is ready for M0 implementation.
+Completed. Workspace structure, architecture documentation, configuration, and initial ticket set are verified.

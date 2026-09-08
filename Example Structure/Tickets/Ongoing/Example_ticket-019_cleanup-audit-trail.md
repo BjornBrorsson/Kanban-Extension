@@ -1,37 +1,40 @@
-# ATF-019 — Cleanup + audit-trail framework (track + verify mutations)
+# DEMO-019 — Cleanup + audit-trail framework (track + verify mutations)
 
 | Field | Value |
 |-------|-------|
 | **Epic** | C — Test Data, Isolation & Cleanup |
-| **Type** | Runner / Data Integrity |
+| **Type** | Data Integrity |
 | **Priority** | P0 — Critical |
 | **Estimate** | L (4–6 days) |
-| **Status** | Backlog |
-| **Depends on** | ATF-010, ATF-016 |
-| **Blocks** | ATF-038, ATF-040 |
+| **Status** | Ongoing |
+| **Depends on** | DEMO-010, DEMO-016 |
+| **Blocks** | DEMO-038, DEMO-040 |
 | **Labels** | `cleanup`, `audit`, `data-integrity` |
 | **Milestone** | M1 |
 
 ## Summary
-Record every data mutation a test makes (and its cleanup), then verify cleanup actually happened — satisfying "insert/update, clean up afterwards, leave an audit trail."
+Record data mutations made during test runs and background executions, verify that cleanup routines run, and maintain a structured audit trail.
 
 ## Description
-Each executor reports `audit[]` entries `{op, table, key, before, after}`. The framework persists them to `C000000_ATF_Audit`, runs the test's cleanup, then verifies the touched keys are gone/restored. A test that leaves residue is flagged.
+Each worker reports audit records `{operation, table, key, beforeState, afterState}`. The framework persists them to a structured audit store, executes cleanup routines after each run, and verifies that temporary records were removed. Any run that leaves residue triggers a warning.
 
 ## Acceptance Criteria
-- [ ] Mutations captured with before/after into the `Audit` table.
-- [ ] Cleanup step per test; cleanup runs even if asserts failed.
-- [ ] Post-cleanup verification; residue → explicit warning/fail on the run.
-- [ ] Audit survives the run and is viewable in the dashboard drill-in.
-- [ ] Works in both ephemeral and persistent modes.
+- [ ] Mutations captured with before/after state into the audit log.
+- [ ] Cleanup step executed per task; cleanup runs even if earlier assertions fail.
+- [ ] Post-cleanup verification validates that temporary test records are removed.
+- [ ] Audit summary survives the run and is inspectable in dashboard reports.
+- [ ] Works in both ephemeral in-memory and persistent filesystem modes.
 
 ## Technical Notes
-- For SD-driven writes, capture audit via SQL before/after snapshots around the step.
+- Implement snapshot-based verification around stateful operations.
+- Ensure teardown routines handle partially initialized state gracefully.
 
 ## Definition of Done
-- A test that creates + deletes a case shows full audit and passes cleanup verification; an intentionally leaky test is flagged.
+A task that creates and deletes entities produces a complete audit log and passes cleanup verification; leftover state is flagged.
 
 ## Work Log
-- **2026-07-01**: Implemented the core framework in `Atf.Runner.psm1`: `Write-AtfAudit` (persists `{op, table, key, before, after}` to `C000000_ATF_Audit`, gracefully degrading to in-memory-only when no RunId is available), `Invoke-AtfCleanupEntity` (delete by table+key), `Test-AtfCleanupVerified` (post-cleanup residue check), and `Invoke-AtfCleanupAndVerify` (orchestrates both + flags `CleanupVerified` on the audit row, skipping anything tagged `operation = 'existing'`). Wired into `Invoke-AtfSeed`. Added Pester coverage (mocked `Invoke-SQL`). Left Ongoing: no live run has exercised the delete + verify path against a real database yet, and SD-driven (non-`Invoke-AtfSeed`) mutations still need explicit self-cleaning steps per the authoring guide rather than automatic framework coverage.
+- Implemented core audit event logger and in-memory buffer.
+- Added teardown verification hooks.
+- Currently testing residue detection across edge-case failure scenarios.
 
 ## Completion Summary

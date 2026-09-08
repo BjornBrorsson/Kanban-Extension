@@ -1,1 +1,1 @@
-We need to fix the PATHs for Ollama so that a basic "ollama run" command works, without having to point to the specific executable. This needs to be persistent and survive server restarts and closing and reopening the terminal. 
+Configure and persist environment PATH variables for CLI runner utilities across terminal sessions and system restarts, ensuring commands can be dispatched without requiring absolute binary paths.
