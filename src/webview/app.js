@@ -1397,18 +1397,6 @@
       <span class="col-count-badge">${ticket.column}${ticket.subfolder ? ' / ' + ticket.subfolder : ''}</span>
     `;
 
-    // Body content
-    let fieldsHtml = `
-      <table class="detail-table">
-        ${ticket.epic ? `<tr><td>Epic</td><td>${ticket.epic}</td></tr>` : ''}
-        ${ticket.type ? `<tr><td>Type</td><td>${ticket.type}</td></tr>` : ''}
-        ${ticket.status ? `<tr><td>Status</td><td>${ticket.status}</td></tr>` : ''}
-        ${ticket.estimate ? `<tr><td>Estimate</td><td>${ticket.estimate}</td></tr>` : ''}
-        ${ticket.milestone ? `<tr><td>Milestone</td><td>${ticket.milestone}</td></tr>` : ''}
-        <tr class="clickable-row" id="detailAssigneeRow" style="cursor:pointer;" title="Click to assign or re-assign">
-          <td>Assignee</td>
-          <td>${ticket.assignee ? `<span class="assignee-pill ${isAgentAssignee(ticket.assignee) ? 'agent' : ''}">${isAgentAssignee(ticket.assignee) ? '🤖' : '👤'} ${ticket.assignee}</span>` : '<span class="assignee-pill unassigned">+ Assign</span>'}</td>
-        </tr>
     // Dependencies and blocks with clickable jump links
     let dependsOnHtml = '';
     if (ticket.dependsOn && ticket.dependsOn.length > 0) {
