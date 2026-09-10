@@ -28,7 +28,7 @@ AI agents and humans can reference or edit this file.
 - **Antigravity CLI**
   - ID: `antigravity-cli`
   - Type: cli
-  - Command: `agy chat "Review requirements and implement ticket {ticket_path}: {ticket_title}"`
+  - Command: `& "{agy_path}" -p "Review requirements and implement ticket {ticket_path}: {ticket_title}" --dangerously-skip-permissions`
   - WorkingDir: `{workspace_root}`
 
 - **Devin CLI**
@@ -66,3 +66,54 @@ AI agents and humans can reference or edit this file.
   - Type: vscode-command
   - Command: `workbench.action.chat.open`
   - Prompt: `Please review and work on ticket '{ticket_title}' located at: {ticket_path}\n\nTicket Summary:\n{ticket_content}`
+
+## Orchestration & Multi-Model Routing
+
+```yaml
+schemaVersion: 1
+orchestration:
+  enabled: true
+  maxConcurrentWorkers: 2
+  completionTarget: reviewed-patch
+  retryLimit: 2
+
+roles:
+  lead: ide-chat
+  worker: cline-ollama
+  reviewer: ide-chat
+
+modelTiers:
+  - id: fast-discovery
+    name: Gemma 4 E4B (Local / Fast)
+    model: gemma4:e4b
+    provider: ollama
+    costTier: free
+    recommendedFor: [discovery, quick-fix]
+
+  - id: deep-reasoner
+    name: Fable / Astra (Deep Reasoning)
+    model: astra-reasoning-v1
+    provider: openai-compatible
+    costTier: high
+    recommendedFor: [architecture, escalation]
+
+  - id: standard-coder
+    name: Claude 3.7 Sonnet / Copilot
+    model: claude-3-7-sonnet
+    provider: anthropic
+    costTier: medium
+    recommendedFor: [implementation, verification, refactor]
+
+subtaskRouting:
+  defaultTier: standard-coder
+  categoryRoutes:
+    discovery: fast-discovery
+    quick-fix: fast-discovery
+    architecture: deep-reasoner
+    escalation: deep-reasoner
+    implementation: standard-coder
+    verification: standard-coder
+    refactor: standard-coder
+  fallbackTier: standard-coder
+```
+

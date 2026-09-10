@@ -65,6 +65,8 @@ export interface AgentRunnerConfig {
   command: string;
   workingDir?: string;
   prompt?: string;
+  path?: string;
+  executable?: string;
 }
 
 export interface Assignee {
@@ -85,6 +87,7 @@ export interface BoardConfig {
   assignees: Assignee[];
   agentPromptTemplate?: string;
   orchestration?: OrchestrationConfig;
+  antigravityPath?: string;
 }
 
 export interface BoardPlanDocument {

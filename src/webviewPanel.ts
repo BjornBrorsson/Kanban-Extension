@@ -201,7 +201,7 @@ export class KanbanWebviewManager {
         if (targetBoard) {
           const assignee = targetBoard.config.assignees.find(a => a.id === message.agentId);
           if (assignee) {
-            await AgentRunner.dispatch(message.ticket, assignee, targetBoard.rootPath);
+            await AgentRunner.dispatch(message.ticket, assignee, targetBoard.rootPath, targetBoard.config);
           } else {
             vscode.window.showErrorMessage(`Agent with ID "${message.agentId}" not found in board config.`);
           }
@@ -337,7 +337,7 @@ export class KanbanWebviewManager {
               }
 
               if (ticketObj) {
-                await AgentRunner.dispatch(ticketObj, assignee, targetBoard.rootPath);
+                await AgentRunner.dispatch(ticketObj, assignee, targetBoard.rootPath, targetBoard.config);
               }
             } else {
               vscode.window.showInformationMessage(`Assigned ticket to ${targetName}.`);
@@ -461,7 +461,7 @@ export class KanbanWebviewManager {
           <span>Plan</span>
         </button>
 
-        <button id="btnAgentRules" class="nav-action-btn secondary" title="Generate or Update AGENT.md System Rules">
+        <button id="btnAgentRules" class="nav-action-btn secondary" title="Generate or Update AGENTS.md System Rules">
           <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
             <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>

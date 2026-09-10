@@ -432,6 +432,20 @@ var DevinCliAdapter = class extends ManagedProcessAdapter {
   }
 };
 
+// src/orchestrator/adapters/antigravityAdapter.ts
+var AntigravityManagedAdapter = class extends ManagedProcessAdapter {
+  constructor(agyExecutable = "agy") {
+    super("antigravity-cli", "Antigravity CLI", {
+      executable: agyExecutable,
+      argsTemplate: [
+        "-p",
+        "{objective}",
+        "--dangerously-skip-permissions"
+      ]
+    });
+  }
+};
+
 // src/orchestrator/daemon/orchestratorDaemon.ts
 var http = __toESM(require("http"));
 var fs10 = __toESM(require("fs"));
@@ -481,7 +495,7 @@ var TicketAttemptManager = class {
   /**
    * Initializes a new AttemptRecord.
    */
-  static createAttempt(ticketId, generation, agentId, tier, manifest, budgetReservation) {
+  static createAttempt(ticketId, generation, agentId, tier, manifest, budgetReservation, metadata) {
     const now = Date.now();
     return {
       attemptId: this.generateAttemptId(ticketId, generation),
@@ -493,7 +507,9 @@ var TicketAttemptManager = class {
       createdAt: now,
       updatedAt: now,
       manifest,
-      budgetReservation
+      budgetReservation,
+      taskCategory: metadata?.taskCategory,
+      modelTier: metadata?.modelTier
     };
   }
   /**
@@ -2048,6 +2064,138 @@ var CancellationController = class _CancellationController {
   }
 };
 
+// src/orchestrator/scheduler/subtaskRouter.ts
+var SubtaskRouter = class {
+  static DEFAULT_PROFILES = [
+    {
+      id: "fast-discovery",
+      name: "Gemma 4 E4B (Local / Fast)",
+      model: "gemma4:e4b",
+      provider: "ollama",
+      costTier: "free",
+      recommendedFor: ["discovery", "quick-fix"]
+    },
+    {
+      id: "deep-reasoner",
+      name: "Fable / Astra (Deep Reasoning)",
+      model: "astra-reasoning-v1",
+      provider: "openai-compatible",
+      costTier: "high",
+      recommendedFor: ["architecture", "escalation"]
+    },
+    {
+      id: "standard-coder",
+      name: "Claude 3.7 Sonnet / Copilot",
+      model: "claude-3-7-sonnet",
+      provider: "anthropic",
+      costTier: "medium",
+      recommendedFor: ["implementation", "verification", "refactor"]
+    }
+  ];
+  static DEFAULT_ROUTING = {
+    defaultTier: "standard-coder",
+    categoryRoutes: {
+      discovery: "fast-discovery",
+      "quick-fix": "fast-discovery",
+      architecture: "deep-reasoner",
+      escalation: "deep-reasoner",
+      implementation: "standard-coder",
+      verification: "standard-coder",
+      refactor: "standard-coder"
+    },
+    fallbackTier: "standard-coder"
+  };
+  /**
+   * Classifies a planned subtask, ticket, or task description into a TaskCategory.
+   */
+  static classify(task) {
+    const labels = (task.labels || []).map((l) => l.toLowerCase());
+    if (labels.some((l) => l.includes("discover") || l.includes("search") || l.includes("research") || l.includes("probe"))) {
+      return "discovery";
+    }
+    if (labels.some((l) => l.includes("architect") || l.includes("design") || l.includes("spec") || l.includes("plan"))) {
+      return "architecture";
+    }
+    if (labels.some((l) => l.includes("verify") || l.includes("test") || l.includes("qa") || l.includes("audit"))) {
+      return "verification";
+    }
+    if (labels.some((l) => l.includes("quick-fix") || l.includes("typo") || l.includes("lint") || l.includes("whitespace"))) {
+      return "quick-fix";
+    }
+    if (labels.some((l) => l.includes("refactor") || l.includes("cleanup"))) {
+      return "refactor";
+    }
+    if (labels.some((l) => l.includes("escalat"))) {
+      return "escalation";
+    }
+    const combinedText = [
+      task.title || "",
+      task.objective || "",
+      task.summary || ""
+    ].join(" ").toLowerCase();
+    if (/\b(discover|discovery|search|find|locate|inspect|explore|investigate|probe|survey|file listing)\b/i.test(combinedText)) {
+      return "discovery";
+    }
+    if (/\b(architect|architecture|decomposition|decompose|blueprint|high-level design|schema design|cycle resolution)\b/i.test(combinedText)) {
+      return "architecture";
+    }
+    if (/\b(verify|verification|assert|validate|validation|smoke test|unit test|integration test|regression|benchmark)\b/i.test(combinedText)) {
+      return "verification";
+    }
+    if (/\b(typo|lint|formatting|whitespace|rename symbol|docstring|comment fix)\b/i.test(combinedText)) {
+      return "quick-fix";
+    }
+    if (/\b(refactor|restructure|decouple|cleanup|clean up|migrate|migration)\b/i.test(combinedText)) {
+      return "refactor";
+    }
+    if (/\b(escalat|checkpoint takeover|lead resolution)\b/i.test(combinedText)) {
+      return "escalation";
+    }
+    return "implementation";
+  }
+  /**
+   * Resolves the optimal ModelTierProfile for a given TaskCategory, taking into account:
+   * - Configured subtask routing table
+   * - Registered model tier profiles
+   * - Policy constraints (local-only, EU-only)
+   * - Automatic fallback handling
+   */
+  static resolveModel(category, routingConfig, availableTiers, policies) {
+    const routing = routingConfig || this.DEFAULT_ROUTING;
+    const profiles = availableTiers && availableTiers.length > 0 ? availableTiers : this.DEFAULT_PROFILES;
+    const requestedTierId = routing.categoryRoutes?.[category] || routing.defaultTier || "standard-coder";
+    let profile = profiles.find((p) => p.id.toLowerCase() === requestedTierId.toLowerCase());
+    let isFallback = false;
+    let reason;
+    if (!profile) {
+      profile = profiles.find((p) => p.id.toLowerCase() === (routing.fallbackTier || routing.defaultTier).toLowerCase()) || profiles[0];
+      isFallback = true;
+      reason = `Preferred tier "${requestedTierId}" not found; fell back to "${profile.id}".`;
+    }
+    if (policies) {
+      if (policies.localOnly) {
+        const isLocal = profile.provider === "ollama" || profile.provider === "cli-bridge" || profile.costTier === "free";
+        if (!isLocal) {
+          const localProfile = profiles.find((p) => p.provider === "ollama" || p.provider === "cli-bridge" || p.costTier === "free");
+          if (localProfile && localProfile.id !== profile.id) {
+            reason = `Policy "localOnly" active; rerouted from cloud tier "${profile.id}" to local tier "${localProfile.id}".`;
+            profile = localProfile;
+            isFallback = true;
+          }
+        }
+      }
+    }
+    return {
+      profile,
+      category,
+      requestedTierId,
+      effectiveTierId: profile.id,
+      isFallback,
+      reason
+    };
+  }
+};
+
 // src/orchestrator/core/orchestratorRuntime.ts
 var OrchestratorRuntime = class {
   constructor(workspaceRoot) {
@@ -2119,6 +2267,18 @@ var OrchestratorRuntime = class {
         };
       }
     }
+    const taskCategory = options.category || SubtaskRouter.classify({
+      title: ticketId,
+      objective,
+      labels: options.labels,
+      allowedScope: targetFiles
+    });
+    const modelResolution = SubtaskRouter.resolveModel(
+      taskCategory,
+      options.routingConfig,
+      options.modelTiers,
+      options.policies
+    );
     const budgetRequested = options.budgetRequested || 1;
     const reservation = this.budgetManager.reserve({
       ticketId,
@@ -2130,7 +2290,8 @@ var OrchestratorRuntime = class {
         success: false,
         attempt: { ticketId, status: "Blocked", failureReason: reservation.reason },
         reservation,
-        errorMessage: reservation.reason
+        errorMessage: reservation.reason,
+        modelResolution
       };
     }
     const lease = this.leaseManager.acquireLease(ticketId);
@@ -2141,7 +2302,8 @@ var OrchestratorRuntime = class {
       agentId,
       adapter.tier,
       manifest,
-      { currency: "EUR", unitsReserved: 1, unitsSpentReported: 0, unitsSpentEstimated: 0, isSubscriptionQuota: false }
+      { currency: "EUR", unitsReserved: 1, unitsSpentReported: 0, unitsSpentEstimated: 0, isSubscriptionQuota: false },
+      { taskCategory, modelTier: modelResolution.effectiveTierId }
     );
     this.leaseManager.bindAttempt(lease.token, attempt);
     TicketAttemptManager.saveAttempt(this.workspaceRoot, attempt);
@@ -2237,7 +2399,8 @@ var OrchestratorRuntime = class {
       diff,
       verificationPassed,
       integrated,
-      reservation
+      reservation,
+      modelResolution
     };
   }
   /**
@@ -2279,6 +2442,18 @@ var OrchestratorRuntime = class {
         };
       }
     }
+    const taskCategory = options.category || SubtaskRouter.classify({
+      title: ticketId,
+      objective,
+      labels: options.labels,
+      allowedScope
+    });
+    const modelResolution = SubtaskRouter.resolveModel(
+      taskCategory,
+      options.routingConfig,
+      options.modelTiers,
+      options.policies
+    );
     const budgetRequested = options.budgetRequested || 1;
     const reservation = this.budgetManager.reserve({
       ticketId,
@@ -2291,7 +2466,8 @@ var OrchestratorRuntime = class {
         attempt: { ticketId, status: "Blocked", failureReason: reservation.reason },
         delegationPackage: null,
         reservation,
-        errorMessage: reservation.reason
+        errorMessage: reservation.reason,
+        modelResolution
       };
     }
     const lease = this.leaseManager.acquireLease(ticketId);
@@ -2302,7 +2478,8 @@ var OrchestratorRuntime = class {
       workerId,
       workerAdapter.tier,
       manifest,
-      { currency: "EUR", unitsReserved: 1, unitsSpentReported: 0, unitsSpentEstimated: 0, isSubscriptionQuota: false }
+      { currency: "EUR", unitsReserved: 1, unitsSpentReported: 0, unitsSpentEstimated: 0, isSubscriptionQuota: false },
+      { taskCategory, modelTier: modelResolution.effectiveTierId }
     );
     this.leaseManager.bindAttempt(lease.token, attempt);
     TicketAttemptManager.saveAttempt(this.workspaceRoot, attempt);
@@ -2493,7 +2670,8 @@ var OrchestratorRuntime = class {
       verificationEvidence,
       reviewDecision,
       reservation,
-      integrated
+      integrated,
+      modelResolution
     };
   }
   /**
@@ -3203,6 +3381,9 @@ async function runM4Tests() {
   assert(copilotAdapter.name === "github-copilot-cli", "Copilot CLI adapter name correct");
   const devinAdapter = new DevinCliAdapter("devin");
   assert(devinAdapter.name === "devin-cli", "Devin CLI adapter name correct");
+  const antigravityAdapter = new AntigravityManagedAdapter("agy");
+  assert(antigravityAdapter.name === "Antigravity CLI", "Antigravity adapter name correct");
+  assert(antigravityAdapter.tier === "managed", "Antigravity adapter tier is managed");
   console.log("\u2713 Additional runner adapters instantiated and configured.");
   console.log("\n--- Test 4: Bounded Autonomous Execution Profile & Safeguards ---");
   const profileMgr = new AutonomousProfileManager({

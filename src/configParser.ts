@@ -35,6 +35,8 @@ export class ConfigParser {
             config.autoUpdateStatus = val.toLowerCase() !== 'false';
           } else if (key.includes('default agent')) {
             config.defaultAgent = val;
+          } else if (key.includes('antigravity path') || key.includes('agy path') || key.includes('antigravity executable') || key.includes('agy executable')) {
+            config.antigravityPath = val.replace(/^["'`](.*)["'`]$/, '$1');
           } else if (key.includes('prompt template') || key.includes('agent prompt')) {
             config.agentPromptTemplate = val.replace(/^["'`](.*)["'`]$/, '$1');
           }
@@ -106,6 +108,7 @@ export class ConfigParser {
       let command = '';
       let workingDir: string | undefined;
       let prompt: string | undefined;
+      let agentPath: string | undefined;
 
       for (let i = 1; i < lines.length; i++) {
         const subLine = lines[i].trim();
@@ -139,6 +142,8 @@ export class ConfigParser {
             workingDir = v;
           } else if (k === 'prompt') {
             prompt = v;
+          } else if (k === 'path' || k === 'executable' || k === 'bin' || k === 'agentpath' || k === 'exec') {
+            agentPath = v;
           }
         }
       }
@@ -149,7 +154,9 @@ export class ConfigParser {
           type: agentType,
           command,
           workingDir,
-          prompt
+          prompt,
+          path: agentPath,
+          executable: agentPath
         };
       }
 
@@ -180,6 +187,11 @@ export class ConfigParser {
   - Type: human
 
 ### Agents
+- **Antigravity CLI**
+  - ID: antigravity-cli
+  - Type: cli
+  - Command: \`& "{agy_path}" -p "Review requirements and implement ticket {ticket_path}: {ticket_title}" --dangerously-skip-permissions\`
+
 - **Claude Code**
   - ID: claude-code
   - Type: cli

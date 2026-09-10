@@ -3,7 +3,7 @@ import { LeaseManager } from './leaseManager';
 import { WorkspaceManager, WorkspaceAllocation } from '../workspaces/workspaceManager';
 import { RunnerAdapter, AttemptContext, ExecutionEvent } from '../adapters/types';
 import { TicketAttemptManager } from '../models/ticketAttempt';
-import { AttemptRecord, AttemptOutcome, BoardPoliciesConfig } from '../types';
+import { AttemptRecord, AttemptOutcome, BoardPoliciesConfig, TaskCategory, ModelTierProfile, SubtaskRoutingConfig } from '../types';
 import { ContextPackager, DelegationPackage } from '../context/contextPackager';
 import { DelegationProtocol } from '../lead/delegationProtocol';
 import { EscalationHandler, EscalationRecord, TakeoverResult } from '../lead/escalationHandler';
@@ -12,6 +12,7 @@ import { PolicyEngine } from '../policy/policyEngine';
 import { BudgetManager, ReservationResult } from '../policy/budgetManager';
 import { EgressController } from '../policy/egressController';
 import { CancellationController, CancellationResult } from './cancellationController';
+import { SubtaskRouter, ModelResolutionResult } from '../scheduler/subtaskRouter';
 
 export interface ExecutionAttemptOptions {
   ticketId: string;
@@ -23,6 +24,11 @@ export interface ExecutionAttemptOptions {
   autoIntegrate?: boolean;
   policies?: BoardPoliciesConfig;
   budgetRequested?: number;
+  category?: TaskCategory;
+  modelTier?: string;
+  routingConfig?: SubtaskRoutingConfig;
+  modelTiers?: ModelTierProfile[];
+  labels?: string[];
 }
 
 export interface ExecutionAttemptOutput {
@@ -33,6 +39,7 @@ export interface ExecutionAttemptOutput {
   integrated?: boolean;
   reservation?: ReservationResult;
   errorMessage?: string;
+  modelResolution?: ModelResolutionResult;
 }
 
 export interface DelegatedAttemptOptions {
@@ -50,6 +57,11 @@ export interface DelegatedAttemptOptions {
   maxRetries?: number;
   policies?: BoardPoliciesConfig;
   budgetRequested?: number;
+  category?: TaskCategory;
+  modelTier?: string;
+  routingConfig?: SubtaskRoutingConfig;
+  modelTiers?: ModelTierProfile[];
+  labels?: string[];
 }
 
 export interface DelegatedAttemptOutput {
@@ -64,6 +76,7 @@ export interface DelegatedAttemptOutput {
   reservation?: ReservationResult;
   integrated?: boolean;
   errorMessage?: string;
+  modelResolution?: ModelResolutionResult;
 }
 
 export class OrchestratorRuntime {
@@ -122,7 +135,7 @@ export class OrchestratorRuntime {
   ): Promise<ExecutionAttemptOutput> {
     const { ticketId, agentId, objective, targetFiles = [], verificationCommand, autoIntegrate } = options;
 
-    // 0. Pre-dispatch checks: Policy eligibility & Budget reservation
+    // 0. Pre-dispatch checks: Policy eligibility, Subtask routing & Budget reservation
     if (options.policies) {
       const policyCheck = PolicyEngine.evaluateEligibility({
         providerId: agentId,
@@ -148,6 +161,19 @@ export class OrchestratorRuntime {
       }
     }
 
+    const taskCategory = options.category || SubtaskRouter.classify({
+      title: ticketId,
+      objective,
+      labels: options.labels,
+      allowedScope: targetFiles
+    });
+    const modelResolution = SubtaskRouter.resolveModel(
+      taskCategory,
+      options.routingConfig,
+      options.modelTiers,
+      options.policies
+    );
+
     const budgetRequested = options.budgetRequested || 1.0;
     const reservation = this.budgetManager.reserve({
       ticketId,
@@ -159,7 +185,8 @@ export class OrchestratorRuntime {
         success: false,
         attempt: { ticketId, status: 'Blocked', failureReason: reservation.reason } as any,
         reservation,
-        errorMessage: reservation.reason
+        errorMessage: reservation.reason,
+        modelResolution
       };
     }
 
@@ -176,7 +203,8 @@ export class OrchestratorRuntime {
       agentId,
       adapter.tier,
       manifest,
-      { currency: 'EUR', unitsReserved: 1, unitsSpentReported: 0, unitsSpentEstimated: 0, isSubscriptionQuota: false }
+      { currency: 'EUR', unitsReserved: 1, unitsSpentReported: 0, unitsSpentEstimated: 0, isSubscriptionQuota: false },
+      { taskCategory, modelTier: modelResolution.effectiveTierId }
     );
     this.leaseManager.bindAttempt(lease.token, attempt);
     TicketAttemptManager.saveAttempt(this.workspaceRoot, attempt);
@@ -292,7 +320,8 @@ export class OrchestratorRuntime {
       diff,
       verificationPassed,
       integrated,
-      reservation
+      reservation,
+      modelResolution
     };
   }
 
@@ -341,6 +370,19 @@ export class OrchestratorRuntime {
       }
     }
 
+    const taskCategory = options.category || SubtaskRouter.classify({
+      title: ticketId,
+      objective,
+      labels: options.labels,
+      allowedScope
+    });
+    const modelResolution = SubtaskRouter.resolveModel(
+      taskCategory,
+      options.routingConfig,
+      options.modelTiers,
+      options.policies
+    );
+
     const budgetRequested = options.budgetRequested || 1.0;
     const reservation = this.budgetManager.reserve({
       ticketId,
@@ -353,7 +395,8 @@ export class OrchestratorRuntime {
         attempt: { ticketId, status: 'Blocked', failureReason: reservation.reason } as any,
         delegationPackage: null as any,
         reservation,
-        errorMessage: reservation.reason
+        errorMessage: reservation.reason,
+        modelResolution
       };
     }
 
@@ -368,7 +411,8 @@ export class OrchestratorRuntime {
       workerId,
       workerAdapter.tier,
       manifest,
-      { currency: 'EUR', unitsReserved: 1, unitsSpentReported: 0, unitsSpentEstimated: 0, isSubscriptionQuota: false }
+      { currency: 'EUR', unitsReserved: 1, unitsSpentReported: 0, unitsSpentEstimated: 0, isSubscriptionQuota: false },
+      { taskCategory, modelTier: modelResolution.effectiveTierId }
     );
     this.leaseManager.bindAttempt(lease.token, attempt);
     TicketAttemptManager.saveAttempt(this.workspaceRoot, attempt);
@@ -589,7 +633,8 @@ export class OrchestratorRuntime {
       verificationEvidence,
       reviewDecision,
       reservation,
-      integrated
+      integrated,
+      modelResolution
     };
   }
 

@@ -1,5 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { TaskCategory, SubtaskRoutingConfig, ModelTierProfile, BoardPoliciesConfig } from '../types';
+import { SubtaskRouter } from '../scheduler/subtaskRouter';
 
 export interface PlannedSubtask {
   id: string;
@@ -13,6 +15,8 @@ export interface PlannedSubtask {
   objective: string;
   acceptanceCriteria: string[];
   verificationCommand?: string;
+  category?: TaskCategory;
+  modelTier?: string;
 }
 
 export interface PlanningDecompositionResult {
@@ -25,6 +29,9 @@ export interface PlanningDecompositionResult {
 export interface PlanningOptions {
   maxSubtasks?: number;
   maxDepth?: number;
+  subtaskRouting?: SubtaskRoutingConfig;
+  modelTiers?: ModelTierProfile[];
+  policies?: BoardPoliciesConfig;
 }
 
 export class LeadPlanningEngine {
@@ -97,6 +104,22 @@ export class LeadPlanningEngine {
       throw new Error(`Planning error: Circular dependency detected in plan: ${validation.cycle?.join(' -> ')}`);
     }
 
+    // Auto-classify category and resolve modelTier for subtasks
+    for (const task of proposedSubtasks) {
+      if (!task.category) {
+        task.category = SubtaskRouter.classify(task);
+      }
+      if (!task.modelTier) {
+        const resolved = SubtaskRouter.resolveModel(
+          task.category,
+          options.subtaskRouting,
+          options.modelTiers,
+          options.policies
+        );
+        task.modelTier = resolved.effectiveTierId;
+      }
+    }
+
     // Populate cross-linking Blocks fields
     const taskMap = new Map<string, PlannedSubtask>();
     for (const task of proposedSubtasks) {
@@ -144,6 +167,12 @@ export class LeadPlanningEngine {
     }
     lines.push(`| **Type** | ${subtask.type || 'Feature'} |`);
     lines.push(`| **Priority** | ${subtask.priority} |`);
+    if (subtask.category) {
+      lines.push(`| **Category** | \`${subtask.category}\` |`);
+    }
+    if (subtask.modelTier) {
+      lines.push(`| **Model Tier** | \`${subtask.modelTier}\` |`);
+    }
     if (subtask.estimate) {
       lines.push(`| **Estimate** | ${subtask.estimate} |`);
     }

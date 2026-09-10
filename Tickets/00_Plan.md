@@ -16,7 +16,7 @@ Build a high-performance, developer-friendly VS Code / VSCodium / Devin / Antigr
 ## 2. Roadmap & Epics
 
 - **Epic A — Foundation & Bootstrap (v0.1.0)**: Core extension scaffolding, TypeScript architecture, Webview UI, drag-and-drop file mover, real-time filesystem watcher, and multi-board discovery. *(Completed — EXT-000)*
-- **Epic B — Human & Agent Interaction Ergonomics**: "Copy Agent Prompt" button, interactive checklist toggling in UI, and one-click workspace `AGENT.md` rule generation. *(Completed — EXT-001, EXT-002, EXT-003)*
+- **Epic B — Human & Agent Interaction Ergonomics**: "Copy Agent Prompt" button, interactive checklist toggling in UI, workspace `AGENTS.md` operating manual, and one-click agent rule generation. *(Completed — EXT-001, EXT-002, EXT-003, ticket-2026-09-08-create-an-agents-file)*
 - **Epic C — Workflow Intelligence & Safety**: Dependency graph resolution (`Depends on` / `Blocks`), blocker alert badges, and circular dependency detection. *(Completed — EXT-004)*
 - **Epic D — Overview & Team Visibility**: Multi-board Work Log chronological activity feed and parallel agent monitoring dashboard. *(Completed — EXT-005)*
 - **Epic E — Ticket Authoring & Templates**: Template-based ticket creation (`.templates/`), auto-id numbering, and batch actions. *(Completed — EXT-006)*

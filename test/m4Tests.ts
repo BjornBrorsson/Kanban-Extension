@@ -6,6 +6,7 @@ import { AutonomousProfileManager } from '../src/orchestrator/scheduler/autonomo
 import { ClineManagedAdapter } from '../src/orchestrator/adapters/clineAdapter';
 import { CopilotCliAdapter } from '../src/orchestrator/adapters/copilotCliAdapter';
 import { DevinCliAdapter } from '../src/orchestrator/adapters/devinCliAdapter';
+import { AntigravityManagedAdapter } from '../src/orchestrator/adapters/antigravityAdapter';
 import { OrchestratorDaemon } from '../src/orchestrator/daemon/orchestratorDaemon';
 import { DaemonClient } from '../src/orchestrator/daemon/daemonClient';
 import { runCli } from '../src/orchestrator/cli/orchestratorCli';
@@ -122,6 +123,10 @@ async function runM4Tests() {
 
   const devinAdapter = new DevinCliAdapter('devin');
   assert(devinAdapter.name === 'devin-cli', 'Devin CLI adapter name correct');
+
+  const antigravityAdapter = new AntigravityManagedAdapter('agy');
+  assert(antigravityAdapter.name === 'Antigravity CLI', 'Antigravity adapter name correct');
+  assert(antigravityAdapter.tier === 'managed', 'Antigravity adapter tier is managed');
   console.log('✓ Additional runner adapters instantiated and configured.');
 
   // --- Test 4: Bounded Autonomous Execution Profile & Safeguards (ORCH-020) ---

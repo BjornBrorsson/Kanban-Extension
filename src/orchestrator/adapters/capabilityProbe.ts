@@ -1,5 +1,7 @@
 import * as cp from 'child_process';
+import * as fs from 'fs';
 import { AdapterCapabilities, ExecutionTier } from './types';
+import { AgentRunner } from '../../agentRunner';
 
 export interface KnownToolSpec {
   id: string;
@@ -17,6 +19,20 @@ export interface KnownToolSpec {
 }
 
 export const KNOWN_RUNNERS: KnownToolSpec[] = [
+  {
+    id: 'antigravity-cli',
+    name: 'Antigravity CLI',
+    command: 'agy',
+    versionArgs: ['--help'],
+    defaultTier: 'managed',
+    supportsStructuredOutput: true,
+    supportsResumableSessions: true,
+    supportsTokenReporting: false,
+    supportsCostLimits: false,
+    supportsModelSelection: true,
+    supportsNetworkRestrictions: false,
+    supportsToolWhitelisting: true
+  },
   {
     id: 'cline',
     name: 'Cline CLI',
@@ -112,15 +128,30 @@ export class CapabilityProbe {
     const checkCmd = isWindows ? `where ${spec.command}` : `which ${spec.command}`;
 
     try {
-      const detectedPath = await this.execWithTimeout(checkCmd, 2000);
-      const versionOutput = await this.execWithTimeout(`${spec.command} ${spec.versionArgs.join(' ')}`, 3000);
+      let detectedPath: string | undefined;
+      let execCmd = spec.command;
+
+      if (spec.id === 'antigravity-cli' || spec.command === 'agy') {
+        const resolved = AgentRunner.resolveAntigravityPath();
+        if (resolved && fs.existsSync(resolved)) {
+          detectedPath = resolved;
+          execCmd = `"${resolved}"`;
+        }
+      }
+
+      if (!detectedPath) {
+        const checkOut = await this.execWithTimeout(checkCmd, 2000);
+        detectedPath = checkOut.trim().split(/\r?\n/)[0];
+      }
+
+      const versionOutput = await this.execWithTimeout(`${execCmd} ${spec.versionArgs.join(' ')}`, 3000);
       const cleanVersion = versionOutput.trim().split(/\r?\n/)[0] || undefined;
 
       return {
         tier: spec.defaultTier,
         installed: true,
         version: cleanVersion,
-        detectedPath: detectedPath.trim().split(/\r?\n/)[0],
+        detectedPath,
         supportsStructuredOutput: spec.supportsStructuredOutput,
         supportsResumableSessions: spec.supportsResumableSessions,
         supportsTokenReporting: spec.supportsTokenReporting,
@@ -128,7 +159,7 @@ export class CapabilityProbe {
         supportsModelSelection: spec.supportsModelSelection,
         supportsNetworkRestrictions: spec.supportsNetworkRestrictions,
         supportsToolWhitelisting: spec.supportsToolWhitelisting,
-        notes: `Detected at ${detectedPath.trim().split(/\r?\n/)[0]}`
+        notes: `Detected at ${detectedPath}`
       };
     } catch {
       return {

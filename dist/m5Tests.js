@@ -69,7 +69,7 @@ var TicketAttemptManager = class {
   /**
    * Initializes a new AttemptRecord.
    */
-  static createAttempt(ticketId, generation, agentId, tier, manifest, budgetReservation) {
+  static createAttempt(ticketId, generation, agentId, tier, manifest, budgetReservation, metadata) {
     const now = Date.now();
     return {
       attemptId: this.generateAttemptId(ticketId, generation),
@@ -81,7 +81,9 @@ var TicketAttemptManager = class {
       createdAt: now,
       updatedAt: now,
       manifest,
-      budgetReservation
+      budgetReservation,
+      taskCategory: metadata?.taskCategory,
+      modelTier: metadata?.modelTier
     };
   }
   /**

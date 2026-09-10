@@ -89,12 +89,41 @@ export class OrchestrationConfigParser {
       };
     }
 
+    let modelTiers: any[] | undefined;
+    if (Array.isArray(raw.modelTiers)) {
+      modelTiers = raw.modelTiers.map((m: any) => ({
+        id: String(m.id || ''),
+        name: String(m.name || m.id || ''),
+        model: String(m.model || ''),
+        provider: m.provider || 'ollama',
+        costTier: m.costTier || 'low',
+        maxInputTokens: m.maxInputTokens ? Number(m.maxInputTokens) : undefined,
+        maxOutputTokens: m.maxOutputTokens ? Number(m.maxOutputTokens) : undefined,
+        temperature: m.temperature !== undefined ? Number(m.temperature) : undefined,
+        recommendedFor: Array.isArray(m.recommendedFor) ? m.recommendedFor : undefined
+      }));
+    }
+
+    let subtaskRouting: any | undefined;
+    if (raw.subtaskRouting && typeof raw.subtaskRouting === 'object') {
+      const srObj = raw.subtaskRouting as any;
+      subtaskRouting = {
+        defaultTier: String(srObj.defaultTier || 'standard-coder'),
+        categoryRoutes: (srObj.categoryRoutes && typeof srObj.categoryRoutes === 'object')
+          ? srObj.categoryRoutes
+          : undefined,
+        fallbackTier: srObj.fallbackTier ? String(srObj.fallbackTier) : undefined
+      };
+    }
+
     return {
       schemaVersion: 1,
       orchestration,
       roles,
       policies,
-      budgets
+      budgets,
+      modelTiers,
+      subtaskRouting
     };
   }
 
@@ -155,19 +184,37 @@ export class OrchestrationConfigParser {
       // Handle list item: - value or - key: value
       const listMatch = trimmed.match(/^-\s+(.*)$/);
       if (listMatch) {
+        let listContext = currentContext;
+        if (!Array.isArray(listContext) && typeof listContext === 'object' && Object.keys(listContext).length === 0) {
+          const parent = stack.length > 1 ? stack[stack.length - 2].target : null;
+          if (parent && typeof parent === 'object' && !Array.isArray(parent)) {
+            const parentRecord = parent as Record<string, any>;
+            for (const pk of Object.keys(parentRecord)) {
+              if (parentRecord[pk] === listContext) {
+                const arr: any[] = [];
+                parentRecord[pk] = arr;
+                stack[stack.length - 1].target = arr;
+                listContext = arr;
+                break;
+              }
+            }
+          }
+        }
+
         const itemContent = listMatch[1].trim();
         const subKv = itemContent.match(/^([A-Za-z0-9_-]+)\s*:\s*(.*)$/);
         if (subKv) {
           const itemKey = subKv[1];
           const itemVal = this.parseScalarOrInlineArray(subKv[2].trim());
-          const itemObj = { [itemKey]: itemVal };
-          if (Array.isArray(currentContext)) {
-            currentContext.push(itemObj);
+          const itemObj: Record<string, any> = { [itemKey]: itemVal };
+          if (Array.isArray(listContext)) {
+            listContext.push(itemObj);
+            stack.push({ indent, target: itemObj });
           }
         } else {
           const val = this.parseScalarOrInlineArray(itemContent);
-          if (Array.isArray(currentContext)) {
-            currentContext.push(val);
+          if (Array.isArray(listContext)) {
+            listContext.push(val);
           }
         }
       }

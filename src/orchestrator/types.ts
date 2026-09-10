@@ -34,6 +34,33 @@ export interface BudgetConfig {
   maxPerTicketSpend?: number;
 }
 
+export type TaskCategory =
+  | 'discovery'
+  | 'architecture'
+  | 'implementation'
+  | 'verification'
+  | 'refactor'
+  | 'quick-fix'
+  | 'escalation';
+
+export interface ModelTierProfile {
+  id: string;
+  name: string;
+  model: string;
+  provider: 'ollama' | 'openai-compatible' | 'anthropic' | 'gemini' | 'cli-bridge';
+  costTier: 'free' | 'low' | 'medium' | 'high';
+  maxInputTokens?: number;
+  maxOutputTokens?: number;
+  temperature?: number;
+  recommendedFor?: TaskCategory[];
+}
+
+export interface SubtaskRoutingConfig {
+  defaultTier: string;
+  categoryRoutes?: Partial<Record<TaskCategory, string>>;
+  fallbackTier?: string;
+}
+
 export interface RoleBindings {
   lead?: string;
   worker?: string;
@@ -54,6 +81,8 @@ export interface OrchestrationConfig {
   roles?: RoleBindings;
   policies?: Record<string, PolicyConfig>;
   budgets?: BudgetConfig;
+  modelTiers?: ModelTierProfile[];
+  subtaskRouting?: SubtaskRoutingConfig;
 }
 
 export type AttemptOutcome =
@@ -101,6 +130,8 @@ export interface AttemptRecord {
   handoffPath?: string;
   exitCode?: number;
   failureReason?: string;
+  taskCategory?: TaskCategory;
+  modelTier?: string;
 }
 
 export interface TicketFrontmatterExtension {

@@ -1,7 +1,7 @@
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
-import { AttemptRecord, AttemptManifest, AttemptOutcome, ExecutionTier, BudgetReservation } from '../types';
+import { AttemptRecord, AttemptManifest, AttemptOutcome, ExecutionTier, BudgetReservation, TaskCategory } from '../types';
 
 export class TicketAttemptManager {
   /**
@@ -49,7 +49,8 @@ export class TicketAttemptManager {
     agentId: string,
     tier: ExecutionTier,
     manifest: AttemptManifest,
-    budgetReservation: BudgetReservation
+    budgetReservation: BudgetReservation,
+    metadata?: { taskCategory?: TaskCategory; modelTier?: string }
   ): AttemptRecord {
     const now = Date.now();
     return {
@@ -62,7 +63,9 @@ export class TicketAttemptManager {
       createdAt: now,
       updatedAt: now,
       manifest,
-      budgetReservation
+      budgetReservation,
+      taskCategory: metadata?.taskCategory,
+      modelTier: metadata?.modelTier
     };
   }
 

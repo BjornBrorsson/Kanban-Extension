@@ -3,8 +3,9 @@ import * as path from 'path';
 import { TicketParser } from '../src/ticketParser';
 import { ConfigParser } from '../src/configParser';
 import { PromptFormatter } from '../src/promptFormatter';
+import { AgentRunner } from '../src/agentRunner';
 
-export { TicketParser, ConfigParser, PromptFormatter };
+export { TicketParser, ConfigParser, PromptFormatter, AgentRunner };
 
 function assert(condition: boolean, message: string) {
   if (!condition) {
@@ -249,7 +250,89 @@ Acceptance Criteria:
   assert(interpolated.includes('# T-FIX-BUG — Fix: Fix memory leak'), 'Expected title interpolated');
   assert(interpolated.includes('| **Status** | Backlog |'), 'Expected status column interpolated');
   assert(interpolated.includes(`- **${dateStr}**: Created ticket.`), 'Expected date interpolated');
-  console.log('✓ Ticket template interpolation tests passed!');
+  // Test 18: AGENTS.md Operating Rules & Resolution
+  console.log('\nTesting AGENTS.md file existence and structure...');
+  const agentsMdPath = path.join(root, 'AGENTS.md');
+  assert(fs.existsSync(agentsMdPath), 'Expected root AGENTS.md to exist');
+  const agentsMdContent = fs.readFileSync(agentsMdPath, 'utf8');
+  assert(agentsMdContent.includes('# AGENTS.md — Agentic Kanban Operating Rules & Guidelines'), 'Expected AGENTS.md header');
+  assert(agentsMdContent.includes('## 1. Core Philosophy: Filesystem as Single Source of Truth'), 'Expected Philosophy section');
+  assert(agentsMdContent.includes('## 2. Directory Structure & Board Organization'), 'Expected Directory Structure section');
+  assert(agentsMdContent.includes('## 3. Ticket Anatomy & Schema Conventions'), 'Expected Ticket Anatomy section');
+  assert(agentsMdContent.includes('## 4. Standard Agent Operating Protocol'), 'Expected Operating Protocol section');
+  assert(agentsMdContent.includes('## 5. Multi-Model Orchestration & Subtask Routing'), 'Expected Orchestration section');
+  assert(agentsMdContent.includes('## 6. Critical Invariants for Agents'), 'Expected Invariants section');
+
+  const agentMdPath = path.join(root, 'AGENT.md');
+  assert(fs.existsSync(agentMdPath), 'Expected root AGENT.md compatibility file to exist');
+  const agentMdContent = fs.readFileSync(agentMdPath, 'utf8');
+  assert(agentMdContent.includes('[AGENTS.md](AGENTS.md)'), 'Expected AGENT.md to reference AGENTS.md');
+
+  const exampleAgentsMd = path.join(root, 'Example Structure', 'AGENTS.md');
+  assert(fs.existsSync(exampleAgentsMd), 'Expected Example Structure/AGENTS.md to exist');
+  console.log('✓ AGENTS.md operating rules tests passed!');
+
+  // Test 19: Antigravity CLI Config Parsing, Path Resolution & Dispatch Formatting
+  console.log('\nTesting Antigravity CLI Config Parsing, Path Resolution & Dispatch...');
+  const sampleConfigText = `# Test Board Config
+
+## Settings
+- **Board Name**: Antigravity Test Board
+- **Antigravity Path**: C:\\Custom\\agy.exe
+
+## Assignees
+### Agents
+- **Antigravity CLI**
+  - ID: antigravity-cli
+  - Type: cli
+  - Path: C:\\Custom\\Agent\\agy.exe
+  - Command: & "{agy_path}" -p "Review requirements and implement ticket {ticket_path}: {ticket_title}" --dangerously-skip-permissions
+`;
+  const parsedBoardConfig = ConfigParser.parse(sampleConfigText, 'Default Board');
+  assert(parsedBoardConfig.antigravityPath === 'C:\\Custom\\agy.exe', 'Expected Settings Antigravity Path parsed');
+  const parsedAgyAgent = parsedBoardConfig.assignees.find(a => a.id === 'antigravity-cli');
+  assert(!!parsedAgyAgent, 'Expected antigravity-cli agent parsed');
+  assert(parsedAgyAgent?.agentConfig?.path === 'C:\\Custom\\Agent\\agy.exe', 'Expected agent-level Path parsed');
+
+  // Test resolution priority: Agent config > Board config > Auto-detect
+  const resolvedFromAgent = AgentRunner.resolveAntigravityPath('D:\\explicit\\agy.exe', parsedBoardConfig);
+  assert(resolvedFromAgent === 'D:\\explicit\\agy.exe', 'Agent explicit path should take precedence');
+
+  const resolvedFromBoard = AgentRunner.resolveAntigravityPath(undefined, parsedBoardConfig);
+  assert(resolvedFromBoard === 'C:\\Custom\\agy.exe', 'Board-level path should be resolved when agent path absent');
+
+  // Format command test
+  const fakeTicket: any = {
+    id: 'TICK-101',
+    title: 'Implement CLI Dispatch',
+    filename: 'ticket-101.md',
+    path: 'Tickets/Ongoing/ticket-101.md',
+    relativePath: 'Ongoing/ticket-101.md',
+    column: 'Ongoing',
+    summary: 'Ensure agy command runs with call operator'
+  };
+
+  const formattedCmd = AgentRunner.formatCliCommand(fakeTicket, parsedAgyAgent!, 'c:\\board', parsedBoardConfig);
+  assert(formattedCmd.includes('& "C:\\Custom\\Agent\\agy.exe" -p'), 'Expected formatted command to contain call operator and resolved path');
+  assert(formattedCmd.includes('--dangerously-skip-permissions'), 'Expected --dangerously-skip-permissions flag in command');
+  assert(formattedCmd.includes('Tickets/Ongoing/ticket-101.md'), 'Expected ticket path interpolated');
+  assert(formattedCmd.includes('Implement CLI Dispatch'), 'Expected ticket title interpolated');
+
+  // Test legacy agy chat syntax auto-upgrade
+  const legacyAgent: any = {
+    id: 'antigravity-cli',
+    name: 'Antigravity CLI',
+    type: 'agent',
+    agentConfig: {
+      type: 'cli',
+      command: 'agy chat "Review ticket {ticket_path}: {ticket_title}"'
+    }
+  };
+  const upgradedCmd = AgentRunner.formatCliCommand(fakeTicket, legacyAgent, 'c:\\board', parsedBoardConfig);
+  assert(upgradedCmd.includes('-p'), 'Expected legacy agy chat to be upgraded to -p');
+  assert(upgradedCmd.includes('--dangerously-skip-permissions'), 'Expected upgraded command to include --dangerously-skip-permissions');
+
+  console.log('✓ Antigravity CLI config parsing, path resolution, and dispatch tests passed!');
 
   console.log('\n=== ALL UNIT TESTS PASSED SUCCESSFULLY! ===');
 }

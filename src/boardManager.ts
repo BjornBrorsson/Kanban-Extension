@@ -417,13 +417,15 @@ Describe what this ticket is about.
 
     const wsFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || path.dirname(board.rootPath);
     const agentsDir = path.join(wsFolder, '.agents');
-    let targetPath = path.join(wsFolder, 'AGENT.md');
+    let targetPath = path.join(wsFolder, 'AGENTS.md');
     if (fs.existsSync(agentsDir)) {
       const rulesDir = path.join(agentsDir, 'rules');
       if (!fs.existsSync(rulesDir)) {
         await fs.promises.mkdir(rulesDir, { recursive: true });
       }
       targetPath = path.join(rulesDir, 'kanban.md');
+    } else if (fs.existsSync(path.join(wsFolder, 'AGENT.md')) && !fs.existsSync(path.join(wsFolder, 'AGENTS.md'))) {
+      targetPath = path.join(wsFolder, 'AGENT.md');
     }
 
     const relBoardPath = path.relative(wsFolder, board.rootPath).replace(/\\/g, '/') || 'Tickets';
@@ -436,23 +438,32 @@ This project uses **Agentic Kanban** for task management. All tasks, features, a
 ${colsList}
 
 ## Agent Operating Workflow
-1. **Discover & Inspect**: Look in \`${relBoardPath}/Backlog/\` (or \`${relBoardPath}/Backlog/Ready/\`) for assigned or available tasks.
+1. **Discover & Inspect**:
+   - Look in \`${relBoardPath}/Backlog/\` (or \`${relBoardPath}/Backlog/Ready/\`) for assigned or available tasks.
+   - Check \`| **Depends on** |\` field: do not proceed if prerequisite tickets are not yet in \`${relBoardPath}/Completed/\`.
 2. **Claim a Ticket**:
-   - Move the ticket file into \`${relBoardPath}/Ongoing/\`.
+   - Move the ticket file into \`${relBoardPath}/Ongoing/\` (prefer \`git mv\` to preserve history).
    - Set the \`| **Assignee** | <YourName> |\` and \`| **Status** | Ongoing |\` in the ticket metadata table.
-3. **Log Progress in Real-Time**:
-   - In the ticket file under \`## Work Log\`, append a timestamped entry for key steps or decisions:
+   - Add an initial timestamped entry under \`## Work Log\`.
+3. **Specify Requirements (if needed)**:
+   - Ensure the ticket has a clear summary, technical specification, and structured acceptance criteria with checkboxes (\`- [ ]\`).
+4. **Log Progress in Real-Time**:
+   - In the ticket file under \`## Work Log\`, append timestamped entries for key steps, investigations, and decisions:
      \`\`\`markdown
      - **YYYY-MM-DD**: Started investigation of ...
      \`\`\`
-4. **Complete Criteria & Verify**:
+   - Work logs are append-only; never delete previous entries.
+5. **Complete Criteria & Verify**:
    - Check off each criterion under \`## Acceptance Criteria\` by toggling \`- [ ]\` to \`- [x]\`.
-   - Run tests and static analysis to guarantee zero regressions.
-5. **Finalize**:
+   - Run tests, builds, and static analysis to guarantee zero regressions.
+6. **Finalize**:
    - Move the ticket file to \`${relBoardPath}/Completed/\`.
    - Update the status field to \`Completed\`.
-6. **Blockers & Assistance**:
-   - If blocked by missing dependencies or external requirements, move the ticket to \`${relBoardPath}/Blocked/\` or \`${relBoardPath}/Assistance Required/\` and record the blocking reason in the \`## Work Log\`.
+   - Record a final verification log in \`## Work Log\`.
+7. **Blockers & Assistance**:
+   - If blocked by human review, credentials, or questions, move ticket to \`${relBoardPath}/Assistance Required/\`.
+   - If blocked by dependencies or external factors, move ticket to \`${relBoardPath}/Blocked/\`.
+   - Clearly document the blocking factor in \`## Work Log\`.
 `;
 
     return { targetPath, created: true, content };

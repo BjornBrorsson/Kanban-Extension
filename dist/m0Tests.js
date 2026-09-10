@@ -23,8 +23,8 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 ));
 
 // test/m0Tests.ts
-var fs2 = __toESM(require("fs"));
-var path3 = __toESM(require("path"));
+var fs4 = __toESM(require("fs"));
+var path4 = __toESM(require("path"));
 
 // src/orchestrator/config/orchestrationConfig.ts
 var OrchestrationConfigParser = class {
@@ -98,12 +98,37 @@ var OrchestrationConfigParser = class {
         maxPerTicketSpend: typeof bObj.maxPerTicketSpend === "number" ? bObj.maxPerTicketSpend : parseFloat(bObj.maxPerTicketSpend) || void 0
       };
     }
+    let modelTiers;
+    if (Array.isArray(raw.modelTiers)) {
+      modelTiers = raw.modelTiers.map((m) => ({
+        id: String(m.id || ""),
+        name: String(m.name || m.id || ""),
+        model: String(m.model || ""),
+        provider: m.provider || "ollama",
+        costTier: m.costTier || "low",
+        maxInputTokens: m.maxInputTokens ? Number(m.maxInputTokens) : void 0,
+        maxOutputTokens: m.maxOutputTokens ? Number(m.maxOutputTokens) : void 0,
+        temperature: m.temperature !== void 0 ? Number(m.temperature) : void 0,
+        recommendedFor: Array.isArray(m.recommendedFor) ? m.recommendedFor : void 0
+      }));
+    }
+    let subtaskRouting;
+    if (raw.subtaskRouting && typeof raw.subtaskRouting === "object") {
+      const srObj = raw.subtaskRouting;
+      subtaskRouting = {
+        defaultTier: String(srObj.defaultTier || "standard-coder"),
+        categoryRoutes: srObj.categoryRoutes && typeof srObj.categoryRoutes === "object" ? srObj.categoryRoutes : void 0,
+        fallbackTier: srObj.fallbackTier ? String(srObj.fallbackTier) : void 0
+      };
+    }
     return {
       schemaVersion: 1,
       orchestration,
       roles,
       policies,
-      budgets
+      budgets,
+      modelTiers,
+      subtaskRouting
     };
   }
   /**
@@ -150,19 +175,36 @@ var OrchestrationConfigParser = class {
       }
       const listMatch = trimmed.match(/^-\s+(.*)$/);
       if (listMatch) {
+        let listContext = currentContext;
+        if (!Array.isArray(listContext) && typeof listContext === "object" && Object.keys(listContext).length === 0) {
+          const parent = stack.length > 1 ? stack[stack.length - 2].target : null;
+          if (parent && typeof parent === "object" && !Array.isArray(parent)) {
+            const parentRecord = parent;
+            for (const pk of Object.keys(parentRecord)) {
+              if (parentRecord[pk] === listContext) {
+                const arr = [];
+                parentRecord[pk] = arr;
+                stack[stack.length - 1].target = arr;
+                listContext = arr;
+                break;
+              }
+            }
+          }
+        }
         const itemContent = listMatch[1].trim();
         const subKv = itemContent.match(/^([A-Za-z0-9_-]+)\s*:\s*(.*)$/);
         if (subKv) {
           const itemKey = subKv[1];
           const itemVal = this.parseScalarOrInlineArray(subKv[2].trim());
           const itemObj = { [itemKey]: itemVal };
-          if (Array.isArray(currentContext)) {
-            currentContext.push(itemObj);
+          if (Array.isArray(listContext)) {
+            listContext.push(itemObj);
+            stack.push({ indent, target: itemObj });
           }
         } else {
           const val = this.parseScalarOrInlineArray(itemContent);
-          if (Array.isArray(currentContext)) {
-            currentContext.push(val);
+          if (Array.isArray(listContext)) {
+            listContext.push(val);
           }
         }
       }
@@ -224,6 +266,8 @@ var ConfigParser = class {
             config.autoUpdateStatus = val.toLowerCase() !== "false";
           } else if (key.includes("default agent")) {
             config.defaultAgent = val;
+          } else if (key.includes("antigravity path") || key.includes("agy path") || key.includes("antigravity executable") || key.includes("agy executable")) {
+            config.antigravityPath = val.replace(/^["'`](.*)["'`]$/, "$1");
           } else if (key.includes("prompt template") || key.includes("agent prompt")) {
             config.agentPromptTemplate = val.replace(/^["'`](.*)["'`]$/, "$1");
           }
@@ -280,6 +324,7 @@ var ConfigParser = class {
       let command = "";
       let workingDir;
       let prompt;
+      let agentPath;
       for (let i = 1; i < lines.length; i++) {
         const subLine = lines[i].trim();
         const kv = subLine.match(/^[-*]\s*([^:]+)\s*:\s*(.+)$/);
@@ -311,6 +356,8 @@ var ConfigParser = class {
             workingDir = v;
           } else if (k === "prompt") {
             prompt = v;
+          } else if (k === "path" || k === "executable" || k === "bin" || k === "agentpath" || k === "exec") {
+            agentPath = v;
           }
         }
       }
@@ -320,7 +367,9 @@ var ConfigParser = class {
           type: agentType,
           command,
           workingDir,
-          prompt
+          prompt,
+          path: agentPath,
+          executable: agentPath
         };
       }
       config.assignees.push({
@@ -349,6 +398,11 @@ var ConfigParser = class {
   - Type: human
 
 ### Agents
+- **Antigravity CLI**
+  - ID: antigravity-cli
+  - Type: cli
+  - Command: \`& "{agy_path}" -p "Review requirements and implement ticket {ticket_path}: {ticket_title}" --dangerously-skip-permissions\`
+
 - **Claude Code**
   - ID: claude-code
   - Type: cli
@@ -375,7 +429,235 @@ var ConfigParser = class {
 
 // src/orchestrator/adapters/capabilityProbe.ts
 var cp = __toESM(require("child_process"));
+var fs2 = __toESM(require("fs"));
+
+// src/agentRunner.ts
+var path = __toESM(require("path"));
+var fs = __toESM(require("fs"));
+function getVsCode() {
+  try {
+    return require("vscode");
+  } catch {
+    return void 0;
+  }
+}
+var AgentRunner = class {
+  static terminals = /* @__PURE__ */ new Map();
+  /**
+   * Resolves the executable path for the Antigravity CLI (agy).
+   * Resolution priority:
+   * 1. Explicitly configured path on assignee agentConfig
+   * 2. BoardConfig.antigravityPath (from Settings)
+   * 3. VS Code configuration 'agenticKanban.antigravityPath'
+   * 4. Environment variables AGY_PATH or ANTIGRAVITY_PATH
+   * 5. Standard installation paths on Windows/POSIX
+   * 6. Fallback to 'agy.exe' (Windows) or 'agy' (POSIX)
+   */
+  static resolveAntigravityPath(configuredPath, boardConfig) {
+    if (configuredPath && configuredPath.trim()) {
+      return configuredPath.trim();
+    }
+    if (boardConfig?.antigravityPath && boardConfig.antigravityPath.trim()) {
+      return boardConfig.antigravityPath.trim();
+    }
+    try {
+      const vscode = getVsCode();
+      const vscodeConfig = vscode?.workspace?.getConfiguration?.("agenticKanban")?.get("antigravityPath");
+      if (vscodeConfig && vscodeConfig.trim()) {
+        return vscodeConfig.trim();
+      }
+    } catch {
+    }
+    if (process.env.AGY_PATH && process.env.AGY_PATH.trim()) {
+      return process.env.AGY_PATH.trim();
+    }
+    if (process.env.ANTIGRAVITY_PATH && process.env.ANTIGRAVITY_PATH.trim()) {
+      return process.env.ANTIGRAVITY_PATH.trim();
+    }
+    const candidates = [];
+    if (process.platform === "win32") {
+      const localAppData = process.env.LOCALAPPDATA;
+      if (localAppData) {
+        candidates.push(path.join(localAppData, "agy", "bin", "agy.exe"));
+      }
+      const userProfile = process.env.USERPROFILE;
+      if (userProfile) {
+        candidates.push(path.join(userProfile, "AppData", "Local", "agy", "bin", "agy.exe"));
+      }
+      const programFiles = process.env.ProgramFiles;
+      if (programFiles) {
+        candidates.push(path.join(programFiles, "agy", "bin", "agy.exe"));
+      }
+    } else {
+      const home = process.env.HOME;
+      if (home) {
+        candidates.push(path.join(home, ".agy", "bin", "agy"));
+        candidates.push(path.join(home, ".local", "bin", "agy"));
+      }
+      candidates.push("/usr/local/bin/agy");
+      candidates.push("/usr/bin/agy");
+    }
+    for (const candidate of candidates) {
+      if (candidate && fs.existsSync(candidate)) {
+        return candidate;
+      }
+    }
+    return process.platform === "win32" ? "agy.exe" : "agy";
+  }
+  /**
+   * Formats the CLI command string for an agent, performing template substitution,
+   * path resolution, and legacy syntax upgrade.
+   */
+  static formatCliCommand(ticket, assignee, boardRoot, boardConfig, rawTicketContent) {
+    const config = assignee.agentConfig;
+    if (!config)
+      return "";
+    const vscode = getVsCode();
+    const workspaceFolder = vscode?.workspace?.workspaceFolders?.[0]?.uri.fsPath || path.dirname(boardRoot);
+    const content = rawTicketContent ?? ticket.summary ?? ticket.title;
+    let effectiveBoardConfig = boardConfig;
+    if (!effectiveBoardConfig) {
+      const configPath = path.join(boardRoot, "config.md");
+      if (fs.existsSync(configPath)) {
+        try {
+          const cfgText = fs.readFileSync(configPath, "utf8");
+          effectiveBoardConfig = ConfigParser.parse(cfgText, "board");
+        } catch {
+        }
+      }
+    }
+    const agyPath = this.resolveAntigravityPath(config.path || config.executable, effectiveBoardConfig);
+    const replacements = {
+      "{ticket_path}": ticket.path,
+      "{ticket_rel_path}": ticket.relativePath,
+      "{ticket_name}": ticket.filename,
+      "{ticket_id}": ticket.id,
+      "{ticket_title}": ticket.title,
+      "{ticket_summary}": ticket.summary,
+      "{ticket_content}": content.replace(/"/g, '\\"').slice(0, 1500),
+      "{workspace_root}": workspaceFolder,
+      "{board_root}": boardRoot,
+      "{column}": ticket.column,
+      "{agy_path}": agyPath,
+      "{antigravity_path}": agyPath,
+      "{executable}": config.path || config.executable || agyPath,
+      "{agent_path}": config.path || config.executable || agyPath
+    };
+    const isAntigravity = assignee.id === "antigravity-cli" || assignee.id === "agy" || assignee.name.toLowerCase().includes("antigravity");
+    let command = config.command || "";
+    if (isAntigravity) {
+      if (!command || !command.trim()) {
+        command = `& "{agy_path}" -p "Review requirements and implement ticket {ticket_path}: {ticket_title}" --dangerously-skip-permissions`;
+      } else if (/^agy\s+chat\b/i.test(command)) {
+        command = command.replace(/^agy\s+chat\b/i, `& "{agy_path}" -p`);
+        if (!command.includes("--dangerously-skip-permissions")) {
+          command += " --dangerously-skip-permissions";
+        }
+      } else if (/^agy\b/i.test(command) && !command.startsWith("&")) {
+        command = command.replace(/^agy\b/i, `& "{agy_path}"`);
+      }
+    }
+    for (const [placeholder, value] of Object.entries(replacements)) {
+      const safeValue = placeholder === "{ticket_title}" || placeholder === "{ticket_summary}" || placeholder === "{ticket_name}" ? value.replace(/"/g, '\\"') : value;
+      command = command.split(placeholder).join(safeValue);
+    }
+    if (process.platform === "win32") {
+      const trimmed = command.trim();
+      if (trimmed.startsWith('"') && !trimmed.startsWith("&")) {
+        command = "& " + trimmed;
+      }
+    }
+    return command;
+  }
+  static async dispatch(ticket, assignee, boardRoot, boardConfig) {
+    const vscode = getVsCode();
+    if (assignee.type !== "agent" || !assignee.agentConfig) {
+      vscode?.window.showWarningMessage(`Assignee "${assignee.name}" is not configured as an executable agent.`);
+      return false;
+    }
+    const config = assignee.agentConfig;
+    const workspaceFolder = vscode?.workspace?.workspaceFolders?.[0]?.uri.fsPath || path.dirname(boardRoot);
+    let ticketContent = "";
+    try {
+      ticketContent = await fs.promises.readFile(ticket.path, "utf8");
+    } catch {
+      ticketContent = ticket.summary || ticket.title;
+    }
+    if (config.type === "cli") {
+      const command = this.formatCliCommand(ticket, assignee, boardRoot, boardConfig, ticketContent);
+      const cwd = config.workingDir ? config.workingDir.replace("{workspace_root}", workspaceFolder).replace("{board_root}", boardRoot) : workspaceFolder;
+      const terminalName = `Agent: ${assignee.name}`;
+      let terminal = this.terminals.get(terminalName);
+      const existing = vscode?.window.terminals?.find((t) => t.name === terminalName);
+      if (!existing) {
+        terminal = vscode?.window.createTerminal({
+          name: terminalName,
+          cwd
+        });
+        if (terminal) {
+          this.terminals.set(terminalName, terminal);
+        }
+      } else {
+        terminal = existing;
+      }
+      terminal?.show(false);
+      if (!existing) {
+        await new Promise((r) => setTimeout(r, 600));
+      }
+      terminal?.sendText(command);
+      vscode?.window.showInformationMessage(`Dispatched ticket "${ticket.title}" to ${assignee.name}.`);
+      return true;
+    } else if (config.type === "vscode-command") {
+      const replacements = {
+        "{ticket_path}": ticket.path,
+        "{ticket_rel_path}": ticket.relativePath,
+        "{ticket_name}": ticket.filename,
+        "{ticket_id}": ticket.id,
+        "{ticket_title}": ticket.title,
+        "{ticket_summary}": ticket.summary,
+        "{ticket_content}": ticketContent.replace(/"/g, '\\"').slice(0, 1500),
+        "{workspace_root}": workspaceFolder,
+        "{board_root}": boardRoot,
+        "{column}": ticket.column
+      };
+      let prompt = config.prompt || `Please review and work on ticket "${ticket.title}" at: ${ticket.path}
+
+Summary:
+${ticket.summary}`;
+      for (const [placeholder, value] of Object.entries(replacements)) {
+        prompt = prompt.split(placeholder).join(value);
+      }
+      await vscode?.env.clipboard.writeText(prompt);
+      vscode?.window.showInformationMessage(
+        `Copied ticket context to clipboard! Triggering ${assignee.name} (${config.command})...`
+      );
+      try {
+        await vscode?.commands.executeCommand(config.command);
+      } catch (err) {
+        vscode?.window.showErrorMessage(`Failed to execute command "${config.command}": ${err?.message || err}`);
+      }
+      return true;
+    }
+    return false;
+  }
+};
+
+// src/orchestrator/adapters/capabilityProbe.ts
 var KNOWN_RUNNERS = [
+  {
+    id: "antigravity-cli",
+    name: "Antigravity CLI",
+    command: "agy",
+    versionArgs: ["--help"],
+    defaultTier: "managed",
+    supportsStructuredOutput: true,
+    supportsResumableSessions: true,
+    supportsTokenReporting: false,
+    supportsCostLimits: false,
+    supportsModelSelection: true,
+    supportsNetworkRestrictions: false,
+    supportsToolWhitelisting: true
+  },
   {
     id: "cline",
     name: "Cline CLI",
@@ -469,14 +751,26 @@ var CapabilityProbe = class {
     const isWindows = process.platform === "win32";
     const checkCmd = isWindows ? `where ${spec.command}` : `which ${spec.command}`;
     try {
-      const detectedPath = await this.execWithTimeout(checkCmd, 2e3);
-      const versionOutput = await this.execWithTimeout(`${spec.command} ${spec.versionArgs.join(" ")}`, 3e3);
+      let detectedPath;
+      let execCmd = spec.command;
+      if (spec.id === "antigravity-cli" || spec.command === "agy") {
+        const resolved = AgentRunner.resolveAntigravityPath();
+        if (resolved && fs2.existsSync(resolved)) {
+          detectedPath = resolved;
+          execCmd = `"${resolved}"`;
+        }
+      }
+      if (!detectedPath) {
+        const checkOut = await this.execWithTimeout(checkCmd, 2e3);
+        detectedPath = checkOut.trim().split(/\r?\n/)[0];
+      }
+      const versionOutput = await this.execWithTimeout(`${execCmd} ${spec.versionArgs.join(" ")}`, 3e3);
       const cleanVersion = versionOutput.trim().split(/\r?\n/)[0] || void 0;
       return {
         tier: spec.defaultTier,
         installed: true,
         version: cleanVersion,
-        detectedPath: detectedPath.trim().split(/\r?\n/)[0],
+        detectedPath,
         supportsStructuredOutput: spec.supportsStructuredOutput,
         supportsResumableSessions: spec.supportsResumableSessions,
         supportsTokenReporting: spec.supportsTokenReporting,
@@ -484,7 +778,7 @@ var CapabilityProbe = class {
         supportsModelSelection: spec.supportsModelSelection,
         supportsNetworkRestrictions: spec.supportsNetworkRestrictions,
         supportsToolWhitelisting: spec.supportsToolWhitelisting,
-        notes: `Detected at ${detectedPath.trim().split(/\r?\n/)[0]}`
+        notes: `Detected at ${detectedPath}`
       };
     } catch {
       return {
@@ -526,8 +820,8 @@ var CapabilityProbe = class {
 
 // src/orchestrator/models/ticketAttempt.ts
 var crypto = __toESM(require("crypto"));
-var fs = __toESM(require("fs"));
-var path = __toESM(require("path"));
+var fs3 = __toESM(require("fs"));
+var path2 = __toESM(require("path"));
 var TicketAttemptManager = class {
   /**
    * Generates a unique monotonic attempt ID.
@@ -549,8 +843,8 @@ var TicketAttemptManager = class {
   static createManifest(baseRevision, filePaths) {
     const fileHashes = {};
     for (const fp of filePaths) {
-      if (fs.existsSync(fp) && !fs.statSync(fp).isDirectory()) {
-        const fileData = fs.readFileSync(fp);
+      if (fs3.existsSync(fp) && !fs3.statSync(fp).isDirectory()) {
+        const fileData = fs3.readFileSync(fp);
         fileHashes[fp] = this.computeHash(fileData);
       }
     }
@@ -563,7 +857,7 @@ var TicketAttemptManager = class {
   /**
    * Initializes a new AttemptRecord.
    */
-  static createAttempt(ticketId, generation, agentId, tier, manifest, budgetReservation) {
+  static createAttempt(ticketId, generation, agentId, tier, manifest, budgetReservation, metadata) {
     const now = Date.now();
     return {
       attemptId: this.generateAttemptId(ticketId, generation),
@@ -575,7 +869,9 @@ var TicketAttemptManager = class {
       createdAt: now,
       updatedAt: now,
       manifest,
-      budgetReservation
+      budgetReservation,
+      taskCategory: metadata?.taskCategory,
+      modelTier: metadata?.modelTier
     };
   }
   /**
@@ -584,9 +880,9 @@ var TicketAttemptManager = class {
    * and never wiped while active attempts or recovery obligations exist.
    */
   static getRuntimeStoreDir(workspaceRoot) {
-    const dir = path.join(workspaceRoot, ".agentic-kanban", "runtime");
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
+    const dir = path2.join(workspaceRoot, ".agentic-kanban", "runtime");
+    if (!fs3.existsSync(dir)) {
+      fs3.mkdirSync(dir, { recursive: true });
     }
     return dir;
   }
@@ -594,26 +890,26 @@ var TicketAttemptManager = class {
    * Persists an attempt record durably to the runtime store.
    */
   static saveAttempt(workspaceRoot, attempt) {
-    const attemptsDir = path.join(this.getRuntimeStoreDir(workspaceRoot), "attempts");
-    if (!fs.existsSync(attemptsDir)) {
-      fs.mkdirSync(attemptsDir, { recursive: true });
+    const attemptsDir = path2.join(this.getRuntimeStoreDir(workspaceRoot), "attempts");
+    if (!fs3.existsSync(attemptsDir)) {
+      fs3.mkdirSync(attemptsDir, { recursive: true });
     }
     attempt.updatedAt = Date.now();
-    const filePath = path.join(attemptsDir, `${attempt.attemptId}.json`);
+    const filePath = path2.join(attemptsDir, `${attempt.attemptId}.json`);
     const tempPath = `${filePath}.tmp`;
-    fs.writeFileSync(tempPath, JSON.stringify(attempt, null, 2), "utf8");
-    fs.renameSync(tempPath, filePath);
+    fs3.writeFileSync(tempPath, JSON.stringify(attempt, null, 2), "utf8");
+    fs3.renameSync(tempPath, filePath);
   }
   /**
    * Reads an attempt record from disk.
    */
   static loadAttempt(workspaceRoot, attemptId) {
-    const filePath = path.join(this.getRuntimeStoreDir(workspaceRoot), "attempts", `${attemptId}.json`);
-    if (!fs.existsSync(filePath)) {
+    const filePath = path2.join(this.getRuntimeStoreDir(workspaceRoot), "attempts", `${attemptId}.json`);
+    if (!fs3.existsSync(filePath)) {
       return null;
     }
     try {
-      const data = fs.readFileSync(filePath, "utf8");
+      const data = fs3.readFileSync(filePath, "utf8");
       return JSON.parse(data);
     } catch {
       return null;
@@ -622,7 +918,7 @@ var TicketAttemptManager = class {
 };
 
 // src/orchestrator/models/migration.ts
-var path2 = __toESM(require("path"));
+var path3 = __toESM(require("path"));
 var TicketMigrationUtility = class {
   /**
    * Assigns a stable ID to a ticket if it lacks one, updating the file content
@@ -673,7 +969,7 @@ id: ${generatedId}` + frontmatter;
     let maxSeq = 0;
     const regex = new RegExp(`^${prefix}-(\\d+)`, "i");
     for (const f of ticketFiles) {
-      const base = path2.basename(f);
+      const base = path3.basename(f);
       const match = base.match(regex);
       if (match) {
         const num = parseInt(match[1], 10);
@@ -767,10 +1063,10 @@ orchestration:
   assert(probeResults["copilot-cli"] !== void 0, "Probe results should include copilot-cli");
   console.log("\u2713 Capability discovery probes evaluated successfully across all runners.");
   console.log("\nTesting ORCH-004: Ticket Attempt Model, Manifest, and Migration...");
-  const tempWorkspace = path3.join(__dirname, "..", "scratch", "test-orch");
-  fs2.mkdirSync(tempWorkspace, { recursive: true });
-  const testFilePath = path3.join(tempWorkspace, "sample.txt");
-  fs2.writeFileSync(testFilePath, "Hello Orchestrator!", "utf8");
+  const tempWorkspace = path4.join(__dirname, "..", "scratch", "test-orch");
+  fs4.mkdirSync(tempWorkspace, { recursive: true });
+  const testFilePath = path4.join(tempWorkspace, "sample.txt");
+  fs4.writeFileSync(testFilePath, "Hello Orchestrator!", "utf8");
   const manifest = TicketAttemptManager.createManifest("commit-sha-12345", [testFilePath]);
   assert(manifest.baseRevision === "commit-sha-12345", "Manifest baseRevision should match");
   assert(manifest.fileHashes[testFilePath] !== void 0, "File hash should be present in manifest");
@@ -813,7 +1109,7 @@ Add dark mode.`;
   assert(noopResult.migrated === false, "Already numbered ticket should not be re-migrated");
   console.log("\u2713 Non-destructive ticket ID migration verified.");
   try {
-    fs2.rmSync(tempWorkspace, { recursive: true, force: true });
+    fs4.rmSync(tempWorkspace, { recursive: true, force: true });
   } catch {
   }
   console.log("\n=== ALL M0 TESTS PASSED SUCCESSFULLY! ===\n");

@@ -34,7 +34,7 @@ __export(extension_exports, {
   deactivate: () => deactivate
 });
 module.exports = __toCommonJS(extension_exports);
-var vscode6 = __toESM(require("vscode"));
+var vscode5 = __toESM(require("vscode"));
 var path7 = __toESM(require("path"));
 var fs5 = __toESM(require("fs"));
 
@@ -484,12 +484,37 @@ var OrchestrationConfigParser = class {
         maxPerTicketSpend: typeof bObj.maxPerTicketSpend === "number" ? bObj.maxPerTicketSpend : parseFloat(bObj.maxPerTicketSpend) || void 0
       };
     }
+    let modelTiers;
+    if (Array.isArray(raw.modelTiers)) {
+      modelTiers = raw.modelTiers.map((m) => ({
+        id: String(m.id || ""),
+        name: String(m.name || m.id || ""),
+        model: String(m.model || ""),
+        provider: m.provider || "ollama",
+        costTier: m.costTier || "low",
+        maxInputTokens: m.maxInputTokens ? Number(m.maxInputTokens) : void 0,
+        maxOutputTokens: m.maxOutputTokens ? Number(m.maxOutputTokens) : void 0,
+        temperature: m.temperature !== void 0 ? Number(m.temperature) : void 0,
+        recommendedFor: Array.isArray(m.recommendedFor) ? m.recommendedFor : void 0
+      }));
+    }
+    let subtaskRouting;
+    if (raw.subtaskRouting && typeof raw.subtaskRouting === "object") {
+      const srObj = raw.subtaskRouting;
+      subtaskRouting = {
+        defaultTier: String(srObj.defaultTier || "standard-coder"),
+        categoryRoutes: srObj.categoryRoutes && typeof srObj.categoryRoutes === "object" ? srObj.categoryRoutes : void 0,
+        fallbackTier: srObj.fallbackTier ? String(srObj.fallbackTier) : void 0
+      };
+    }
     return {
       schemaVersion: 1,
       orchestration,
       roles,
       policies,
-      budgets
+      budgets,
+      modelTiers,
+      subtaskRouting
     };
   }
   /**
@@ -536,19 +561,36 @@ var OrchestrationConfigParser = class {
       }
       const listMatch = trimmed.match(/^-\s+(.*)$/);
       if (listMatch) {
+        let listContext = currentContext;
+        if (!Array.isArray(listContext) && typeof listContext === "object" && Object.keys(listContext).length === 0) {
+          const parent = stack.length > 1 ? stack[stack.length - 2].target : null;
+          if (parent && typeof parent === "object" && !Array.isArray(parent)) {
+            const parentRecord = parent;
+            for (const pk of Object.keys(parentRecord)) {
+              if (parentRecord[pk] === listContext) {
+                const arr = [];
+                parentRecord[pk] = arr;
+                stack[stack.length - 1].target = arr;
+                listContext = arr;
+                break;
+              }
+            }
+          }
+        }
         const itemContent = listMatch[1].trim();
         const subKv = itemContent.match(/^([A-Za-z0-9_-]+)\s*:\s*(.*)$/);
         if (subKv) {
           const itemKey = subKv[1];
           const itemVal = this.parseScalarOrInlineArray(subKv[2].trim());
           const itemObj = { [itemKey]: itemVal };
-          if (Array.isArray(currentContext)) {
-            currentContext.push(itemObj);
+          if (Array.isArray(listContext)) {
+            listContext.push(itemObj);
+            stack.push({ indent, target: itemObj });
           }
         } else {
           const val = this.parseScalarOrInlineArray(itemContent);
-          if (Array.isArray(currentContext)) {
-            currentContext.push(val);
+          if (Array.isArray(listContext)) {
+            listContext.push(val);
           }
         }
       }
@@ -610,6 +652,8 @@ var ConfigParser = class {
             config.autoUpdateStatus = val.toLowerCase() !== "false";
           } else if (key.includes("default agent")) {
             config.defaultAgent = val;
+          } else if (key.includes("antigravity path") || key.includes("agy path") || key.includes("antigravity executable") || key.includes("agy executable")) {
+            config.antigravityPath = val.replace(/^["'`](.*)["'`]$/, "$1");
           } else if (key.includes("prompt template") || key.includes("agent prompt")) {
             config.agentPromptTemplate = val.replace(/^["'`](.*)["'`]$/, "$1");
           }
@@ -666,6 +710,7 @@ var ConfigParser = class {
       let command = "";
       let workingDir;
       let prompt;
+      let agentPath;
       for (let i = 1; i < lines.length; i++) {
         const subLine = lines[i].trim();
         const kv = subLine.match(/^[-*]\s*([^:]+)\s*:\s*(.+)$/);
@@ -697,6 +742,8 @@ var ConfigParser = class {
             workingDir = v;
           } else if (k === "prompt") {
             prompt = v;
+          } else if (k === "path" || k === "executable" || k === "bin" || k === "agentpath" || k === "exec") {
+            agentPath = v;
           }
         }
       }
@@ -706,7 +753,9 @@ var ConfigParser = class {
           type: agentType,
           command,
           workingDir,
-          prompt
+          prompt,
+          path: agentPath,
+          executable: agentPath
         };
       }
       config.assignees.push({
@@ -735,6 +784,11 @@ var ConfigParser = class {
   - Type: human
 
 ### Agents
+- **Antigravity CLI**
+  - ID: antigravity-cli
+  - Type: cli
+  - Command: \`& "{agy_path}" -p "Review requirements and implement ticket {ticket_path}: {ticket_title}" --dangerously-skip-permissions\`
+
 - **Claude Code**
   - ID: claude-code
   - Type: cli
@@ -1375,13 +1429,15 @@ Describe what this ticket is about.
     }
     const wsFolder = vscode2.workspace.workspaceFolders?.[0]?.uri.fsPath || path3.dirname(board.rootPath);
     const agentsDir = path3.join(wsFolder, ".agents");
-    let targetPath = path3.join(wsFolder, "AGENT.md");
+    let targetPath = path3.join(wsFolder, "AGENTS.md");
     if (fs2.existsSync(agentsDir)) {
       const rulesDir = path3.join(agentsDir, "rules");
       if (!fs2.existsSync(rulesDir)) {
         await fs2.promises.mkdir(rulesDir, { recursive: true });
       }
       targetPath = path3.join(rulesDir, "kanban.md");
+    } else if (fs2.existsSync(path3.join(wsFolder, "AGENT.md")) && !fs2.existsSync(path3.join(wsFolder, "AGENTS.md"))) {
+      targetPath = path3.join(wsFolder, "AGENT.md");
     }
     const relBoardPath = path3.relative(wsFolder, board.rootPath).replace(/\\/g, "/") || "Tickets";
     const colsList = board.columns.map((c) => `- \`${relBoardPath}/${c.name}/\``).join("\n");
@@ -1393,23 +1449,32 @@ This project uses **Agentic Kanban** for task management. All tasks, features, a
 ${colsList}
 
 ## Agent Operating Workflow
-1. **Discover & Inspect**: Look in \`${relBoardPath}/Backlog/\` (or \`${relBoardPath}/Backlog/Ready/\`) for assigned or available tasks.
+1. **Discover & Inspect**:
+   - Look in \`${relBoardPath}/Backlog/\` (or \`${relBoardPath}/Backlog/Ready/\`) for assigned or available tasks.
+   - Check \`| **Depends on** |\` field: do not proceed if prerequisite tickets are not yet in \`${relBoardPath}/Completed/\`.
 2. **Claim a Ticket**:
-   - Move the ticket file into \`${relBoardPath}/Ongoing/\`.
+   - Move the ticket file into \`${relBoardPath}/Ongoing/\` (prefer \`git mv\` to preserve history).
    - Set the \`| **Assignee** | <YourName> |\` and \`| **Status** | Ongoing |\` in the ticket metadata table.
-3. **Log Progress in Real-Time**:
-   - In the ticket file under \`## Work Log\`, append a timestamped entry for key steps or decisions:
+   - Add an initial timestamped entry under \`## Work Log\`.
+3. **Specify Requirements (if needed)**:
+   - Ensure the ticket has a clear summary, technical specification, and structured acceptance criteria with checkboxes (\`- [ ]\`).
+4. **Log Progress in Real-Time**:
+   - In the ticket file under \`## Work Log\`, append timestamped entries for key steps, investigations, and decisions:
      \`\`\`markdown
      - **YYYY-MM-DD**: Started investigation of ...
      \`\`\`
-4. **Complete Criteria & Verify**:
+   - Work logs are append-only; never delete previous entries.
+5. **Complete Criteria & Verify**:
    - Check off each criterion under \`## Acceptance Criteria\` by toggling \`- [ ]\` to \`- [x]\`.
-   - Run tests and static analysis to guarantee zero regressions.
-5. **Finalize**:
+   - Run tests, builds, and static analysis to guarantee zero regressions.
+6. **Finalize**:
    - Move the ticket file to \`${relBoardPath}/Completed/\`.
    - Update the status field to \`Completed\`.
-6. **Blockers & Assistance**:
-   - If blocked by missing dependencies or external requirements, move the ticket to \`${relBoardPath}/Blocked/\` or \`${relBoardPath}/Assistance Required/\` and record the blocking reason in the \`## Work Log\`.
+   - Record a final verification log in \`## Work Log\`.
+7. **Blockers & Assistance**:
+   - If blocked by human review, credentials, or questions, move ticket to \`${relBoardPath}/Assistance Required/\`.
+   - If blocked by dependencies or external factors, move ticket to \`${relBoardPath}/Blocked/\`.
+   - Clearly document the blocking factor in \`## Work Log\`.
 `;
     return { targetPath, created: true, content };
   }
@@ -1650,29 +1715,106 @@ var TreeItemNode = class extends vscode3.TreeItem {
 };
 
 // src/webviewPanel.ts
-var vscode5 = __toESM(require("vscode"));
+var vscode4 = __toESM(require("vscode"));
 var path6 = __toESM(require("path"));
 var fs4 = __toESM(require("fs"));
 
 // src/agentRunner.ts
-var vscode4 = __toESM(require("vscode"));
 var path4 = __toESM(require("path"));
 var fs3 = __toESM(require("fs"));
+function getVsCode() {
+  try {
+    return require("vscode");
+  } catch {
+    return void 0;
+  }
+}
 var AgentRunner = class {
   static terminals = /* @__PURE__ */ new Map();
-  static async dispatch(ticket, assignee, boardRoot) {
-    if (assignee.type !== "agent" || !assignee.agentConfig) {
-      vscode4.window.showWarningMessage(`Assignee "${assignee.name}" is not configured as an executable agent.`);
-      return false;
+  /**
+   * Resolves the executable path for the Antigravity CLI (agy).
+   * Resolution priority:
+   * 1. Explicitly configured path on assignee agentConfig
+   * 2. BoardConfig.antigravityPath (from Settings)
+   * 3. VS Code configuration 'agenticKanban.antigravityPath'
+   * 4. Environment variables AGY_PATH or ANTIGRAVITY_PATH
+   * 5. Standard installation paths on Windows/POSIX
+   * 6. Fallback to 'agy.exe' (Windows) or 'agy' (POSIX)
+   */
+  static resolveAntigravityPath(configuredPath, boardConfig) {
+    if (configuredPath && configuredPath.trim()) {
+      return configuredPath.trim();
     }
-    const config = assignee.agentConfig;
-    const workspaceFolder = vscode4.workspace.workspaceFolders?.[0]?.uri.fsPath || path4.dirname(boardRoot);
-    let ticketContent = "";
+    if (boardConfig?.antigravityPath && boardConfig.antigravityPath.trim()) {
+      return boardConfig.antigravityPath.trim();
+    }
     try {
-      ticketContent = await fs3.promises.readFile(ticket.path, "utf8");
+      const vscode6 = getVsCode();
+      const vscodeConfig = vscode6?.workspace?.getConfiguration?.("agenticKanban")?.get("antigravityPath");
+      if (vscodeConfig && vscodeConfig.trim()) {
+        return vscodeConfig.trim();
+      }
     } catch {
-      ticketContent = ticket.summary || ticket.title;
     }
+    if (process.env.AGY_PATH && process.env.AGY_PATH.trim()) {
+      return process.env.AGY_PATH.trim();
+    }
+    if (process.env.ANTIGRAVITY_PATH && process.env.ANTIGRAVITY_PATH.trim()) {
+      return process.env.ANTIGRAVITY_PATH.trim();
+    }
+    const candidates = [];
+    if (process.platform === "win32") {
+      const localAppData = process.env.LOCALAPPDATA;
+      if (localAppData) {
+        candidates.push(path4.join(localAppData, "agy", "bin", "agy.exe"));
+      }
+      const userProfile = process.env.USERPROFILE;
+      if (userProfile) {
+        candidates.push(path4.join(userProfile, "AppData", "Local", "agy", "bin", "agy.exe"));
+      }
+      const programFiles = process.env.ProgramFiles;
+      if (programFiles) {
+        candidates.push(path4.join(programFiles, "agy", "bin", "agy.exe"));
+      }
+    } else {
+      const home = process.env.HOME;
+      if (home) {
+        candidates.push(path4.join(home, ".agy", "bin", "agy"));
+        candidates.push(path4.join(home, ".local", "bin", "agy"));
+      }
+      candidates.push("/usr/local/bin/agy");
+      candidates.push("/usr/bin/agy");
+    }
+    for (const candidate of candidates) {
+      if (candidate && fs3.existsSync(candidate)) {
+        return candidate;
+      }
+    }
+    return process.platform === "win32" ? "agy.exe" : "agy";
+  }
+  /**
+   * Formats the CLI command string for an agent, performing template substitution,
+   * path resolution, and legacy syntax upgrade.
+   */
+  static formatCliCommand(ticket, assignee, boardRoot, boardConfig, rawTicketContent) {
+    const config = assignee.agentConfig;
+    if (!config)
+      return "";
+    const vscode6 = getVsCode();
+    const workspaceFolder = vscode6?.workspace?.workspaceFolders?.[0]?.uri.fsPath || path4.dirname(boardRoot);
+    const content = rawTicketContent ?? ticket.summary ?? ticket.title;
+    let effectiveBoardConfig = boardConfig;
+    if (!effectiveBoardConfig) {
+      const configPath = path4.join(boardRoot, "config.md");
+      if (fs3.existsSync(configPath)) {
+        try {
+          const cfgText = fs3.readFileSync(configPath, "utf8");
+          effectiveBoardConfig = ConfigParser.parse(cfgText, "board");
+        } catch {
+        }
+      }
+    }
+    const agyPath = this.resolveAntigravityPath(config.path || config.executable, effectiveBoardConfig);
     const replacements = {
       "{ticket_path}": ticket.path,
       "{ticket_rel_path}": ticket.relativePath,
@@ -1680,38 +1822,92 @@ var AgentRunner = class {
       "{ticket_id}": ticket.id,
       "{ticket_title}": ticket.title,
       "{ticket_summary}": ticket.summary,
-      "{ticket_content}": ticketContent.replace(/"/g, '\\"').slice(0, 1500),
+      "{ticket_content}": content.replace(/"/g, '\\"').slice(0, 1500),
       "{workspace_root}": workspaceFolder,
       "{board_root}": boardRoot,
-      "{column}": ticket.column
+      "{column}": ticket.column,
+      "{agy_path}": agyPath,
+      "{antigravity_path}": agyPath,
+      "{executable}": config.path || config.executable || agyPath,
+      "{agent_path}": config.path || config.executable || agyPath
     };
-    if (config.type === "cli") {
-      let command = config.command;
-      for (const [placeholder, value] of Object.entries(replacements)) {
-        const safeValue = placeholder === "{ticket_title}" || placeholder === "{ticket_summary}" || placeholder === "{ticket_name}" ? value.replace(/"/g, '\\"') : value;
-        command = command.split(placeholder).join(safeValue);
+    const isAntigravity = assignee.id === "antigravity-cli" || assignee.id === "agy" || assignee.name.toLowerCase().includes("antigravity");
+    let command = config.command || "";
+    if (isAntigravity) {
+      if (!command || !command.trim()) {
+        command = `& "{agy_path}" -p "Review requirements and implement ticket {ticket_path}: {ticket_title}" --dangerously-skip-permissions`;
+      } else if (/^agy\s+chat\b/i.test(command)) {
+        command = command.replace(/^agy\s+chat\b/i, `& "{agy_path}" -p`);
+        if (!command.includes("--dangerously-skip-permissions")) {
+          command += " --dangerously-skip-permissions";
+        }
+      } else if (/^agy\b/i.test(command) && !command.startsWith("&")) {
+        command = command.replace(/^agy\b/i, `& "{agy_path}"`);
       }
+    }
+    for (const [placeholder, value] of Object.entries(replacements)) {
+      const safeValue = placeholder === "{ticket_title}" || placeholder === "{ticket_summary}" || placeholder === "{ticket_name}" ? value.replace(/"/g, '\\"') : value;
+      command = command.split(placeholder).join(safeValue);
+    }
+    if (process.platform === "win32") {
+      const trimmed = command.trim();
+      if (trimmed.startsWith('"') && !trimmed.startsWith("&")) {
+        command = "& " + trimmed;
+      }
+    }
+    return command;
+  }
+  static async dispatch(ticket, assignee, boardRoot, boardConfig) {
+    const vscode6 = getVsCode();
+    if (assignee.type !== "agent" || !assignee.agentConfig) {
+      vscode6?.window.showWarningMessage(`Assignee "${assignee.name}" is not configured as an executable agent.`);
+      return false;
+    }
+    const config = assignee.agentConfig;
+    const workspaceFolder = vscode6?.workspace?.workspaceFolders?.[0]?.uri.fsPath || path4.dirname(boardRoot);
+    let ticketContent = "";
+    try {
+      ticketContent = await fs3.promises.readFile(ticket.path, "utf8");
+    } catch {
+      ticketContent = ticket.summary || ticket.title;
+    }
+    if (config.type === "cli") {
+      const command = this.formatCliCommand(ticket, assignee, boardRoot, boardConfig, ticketContent);
       const cwd = config.workingDir ? config.workingDir.replace("{workspace_root}", workspaceFolder).replace("{board_root}", boardRoot) : workspaceFolder;
       const terminalName = `Agent: ${assignee.name}`;
       let terminal = this.terminals.get(terminalName);
-      const existing = vscode4.window.terminals.find((t) => t.name === terminalName);
+      const existing = vscode6?.window.terminals?.find((t) => t.name === terminalName);
       if (!existing) {
-        terminal = vscode4.window.createTerminal({
+        terminal = vscode6?.window.createTerminal({
           name: terminalName,
           cwd
         });
-        this.terminals.set(terminalName, terminal);
+        if (terminal) {
+          this.terminals.set(terminalName, terminal);
+        }
       } else {
         terminal = existing;
       }
-      terminal.show(false);
+      terminal?.show(false);
       if (!existing) {
         await new Promise((r) => setTimeout(r, 600));
       }
-      terminal.sendText(command);
-      vscode4.window.showInformationMessage(`Dispatched ticket "${ticket.title}" to ${assignee.name}.`);
+      terminal?.sendText(command);
+      vscode6?.window.showInformationMessage(`Dispatched ticket "${ticket.title}" to ${assignee.name}.`);
       return true;
     } else if (config.type === "vscode-command") {
+      const replacements = {
+        "{ticket_path}": ticket.path,
+        "{ticket_rel_path}": ticket.relativePath,
+        "{ticket_name}": ticket.filename,
+        "{ticket_id}": ticket.id,
+        "{ticket_title}": ticket.title,
+        "{ticket_summary}": ticket.summary,
+        "{ticket_content}": ticketContent.replace(/"/g, '\\"').slice(0, 1500),
+        "{workspace_root}": workspaceFolder,
+        "{board_root}": boardRoot,
+        "{column}": ticket.column
+      };
       let prompt = config.prompt || `Please review and work on ticket "${ticket.title}" at: ${ticket.path}
 
 Summary:
@@ -1719,14 +1915,14 @@ ${ticket.summary}`;
       for (const [placeholder, value] of Object.entries(replacements)) {
         prompt = prompt.split(placeholder).join(value);
       }
-      await vscode4.env.clipboard.writeText(prompt);
-      vscode4.window.showInformationMessage(
+      await vscode6?.env.clipboard.writeText(prompt);
+      vscode6?.window.showInformationMessage(
         `Copied ticket context to clipboard! Triggering ${assignee.name} (${config.command})...`
       );
       try {
-        await vscode4.commands.executeCommand(config.command);
+        await vscode6?.commands.executeCommand(config.command);
       } catch (err) {
-        vscode4.window.showErrorMessage(`Failed to execute command "${config.command}": ${err?.message || err}`);
+        vscode6?.window.showErrorMessage(`Failed to execute command "${config.command}": ${err?.message || err}`);
       }
       return true;
     }
@@ -1841,7 +2037,7 @@ var KanbanWebviewManager = class _KanbanWebviewManager {
   currentBoardId = null;
   isOverviewMode = false;
   static createOrShow(extensionUri, initialBoardId, isOverview = false) {
-    const column = vscode5.window.activeTextEditor ? vscode5.window.activeTextEditor.viewColumn : void 0;
+    const column = vscode4.window.activeTextEditor ? vscode4.window.activeTextEditor.viewColumn : void 0;
     if (_KanbanWebviewManager.currentPanel) {
       _KanbanWebviewManager.currentPanel.panel.reveal(column);
       if (isOverview) {
@@ -1851,17 +2047,17 @@ var KanbanWebviewManager = class _KanbanWebviewManager {
       }
       return _KanbanWebviewManager.currentPanel;
     }
-    const panel = vscode5.window.createWebviewPanel(
+    const panel = vscode4.window.createWebviewPanel(
       "agenticKanban",
       "Agentic Kanban",
-      column || vscode5.ViewColumn.One,
+      column || vscode4.ViewColumn.One,
       {
         enableScripts: true,
         retainContextWhenHidden: true,
         localResourceRoots: [
-          vscode5.Uri.joinPath(extensionUri, "dist", "webview"),
-          vscode5.Uri.joinPath(extensionUri, "src", "webview"),
-          vscode5.Uri.joinPath(extensionUri, "media")
+          vscode4.Uri.joinPath(extensionUri, "dist", "webview"),
+          vscode4.Uri.joinPath(extensionUri, "src", "webview"),
+          vscode4.Uri.joinPath(extensionUri, "media")
         ]
       }
     );
@@ -1873,7 +2069,7 @@ var KanbanWebviewManager = class _KanbanWebviewManager {
     this.extensionUri = extensionUri;
     this.currentBoardId = initialBoardId || null;
     this.isOverviewMode = isOverview;
-    this.panel.iconPath = vscode5.Uri.joinPath(this.extensionUri, "media", "kanban-icon.svg");
+    this.panel.iconPath = vscode4.Uri.joinPath(this.extensionUri, "media", "kanban-icon.svg");
     this.panel.webview.html = this.getHtmlForWebview(this.panel.webview);
     this.panel.onDidDispose(() => this.dispose(), null, this.disposables);
     this.panel.webview.onDidReceiveMessage(
@@ -1923,36 +2119,36 @@ var KanbanWebviewManager = class _KanbanWebviewManager {
         break;
       case "openTicketFile":
         try {
-          const doc = await vscode5.workspace.openTextDocument(vscode5.Uri.file(message.filePath));
-          const editor = await vscode5.window.showTextDocument(doc, { viewColumn: vscode5.ViewColumn.Beside });
+          const doc = await vscode4.workspace.openTextDocument(vscode4.Uri.file(message.filePath));
+          const editor = await vscode4.window.showTextDocument(doc, { viewColumn: vscode4.ViewColumn.Beside });
           if (message.line && typeof message.line === "number" && message.line > 0) {
-            const pos = new vscode5.Position(message.line - 1, 0);
-            editor.selection = new vscode5.Selection(pos, pos);
-            editor.revealRange(new vscode5.Range(pos, pos), vscode5.TextEditorRevealType.InCenter);
+            const pos = new vscode4.Position(message.line - 1, 0);
+            editor.selection = new vscode4.Selection(pos, pos);
+            editor.revealRange(new vscode4.Range(pos, pos), vscode4.TextEditorRevealType.InCenter);
           }
         } catch (err) {
-          vscode5.window.showErrorMessage(`Failed to open ticket: ${err?.message || err}`);
+          vscode4.window.showErrorMessage(`Failed to open ticket: ${err?.message || err}`);
         }
         break;
       case "toggleCriterion":
         await boardManager.toggleTicketCriterion(message.ticketPath, message.index, message.done);
         break;
       case "generateAgentRules":
-        await vscode5.commands.executeCommand("agenticKanban.generateAgentRules", {
+        await vscode4.commands.executeCommand("agenticKanban.generateAgentRules", {
           board: boardManager.getBoard(message.boardId)
         });
         break;
       case "initTemplates":
-        await vscode5.commands.executeCommand("agenticKanban.initTemplates", {
+        await vscode4.commands.executeCommand("agenticKanban.initTemplates", {
           board: boardManager.getBoard(message.boardId)
         });
         break;
       case "openPlan":
         try {
-          const doc = await vscode5.workspace.openTextDocument(vscode5.Uri.file(message.filePath));
-          await vscode5.window.showTextDocument(doc, { viewColumn: vscode5.ViewColumn.Beside });
+          const doc = await vscode4.workspace.openTextDocument(vscode4.Uri.file(message.filePath));
+          await vscode4.window.showTextDocument(doc, { viewColumn: vscode4.ViewColumn.Beside });
         } catch (err) {
-          vscode5.window.showErrorMessage(`Failed to open plan document: ${err?.message || err}`);
+          vscode4.window.showErrorMessage(`Failed to open plan document: ${err?.message || err}`);
         }
         break;
       case "openConfig":
@@ -1961,14 +2157,14 @@ var KanbanWebviewManager = class _KanbanWebviewManager {
           if (board) {
             const configPath = path6.join(board.rootPath, "config.md");
             if (fs4.existsSync(configPath)) {
-              const doc = await vscode5.workspace.openTextDocument(vscode5.Uri.file(configPath));
-              await vscode5.window.showTextDocument(doc, { viewColumn: vscode5.ViewColumn.Beside });
+              const doc = await vscode4.workspace.openTextDocument(vscode4.Uri.file(configPath));
+              await vscode4.window.showTextDocument(doc, { viewColumn: vscode4.ViewColumn.Beside });
             } else {
-              vscode5.window.showInformationMessage(`No config.md found at board root.`);
+              vscode4.window.showInformationMessage(`No config.md found at board root.`);
             }
           }
         } catch (err) {
-          vscode5.window.showErrorMessage(`Failed to open config: ${err?.message || err}`);
+          vscode4.window.showErrorMessage(`Failed to open config: ${err?.message || err}`);
         }
         break;
       case "createTicket":
@@ -1980,8 +2176,8 @@ var KanbanWebviewManager = class _KanbanWebviewManager {
           message.content
         );
         if (createdPath && message.openImmediately) {
-          const doc = await vscode5.workspace.openTextDocument(vscode5.Uri.file(createdPath));
-          await vscode5.window.showTextDocument(doc, { viewColumn: vscode5.ViewColumn.Beside });
+          const doc = await vscode4.workspace.openTextDocument(vscode4.Uri.file(createdPath));
+          await vscode4.window.showTextDocument(doc, { viewColumn: vscode4.ViewColumn.Beside });
         }
         break;
       case "dispatchAgent":
@@ -1989,9 +2185,9 @@ var KanbanWebviewManager = class _KanbanWebviewManager {
         if (targetBoard) {
           const assignee = targetBoard.config.assignees.find((a) => a.id === message.agentId);
           if (assignee) {
-            await AgentRunner.dispatch(message.ticket, assignee, targetBoard.rootPath);
+            await AgentRunner.dispatch(message.ticket, assignee, targetBoard.rootPath, targetBoard.config);
           } else {
-            vscode5.window.showErrorMessage(`Agent with ID "${message.agentId}" not found in board config.`);
+            vscode4.window.showErrorMessage(`Agent with ID "${message.agentId}" not found in board config.`);
           }
         }
         break;
@@ -2017,18 +2213,18 @@ Instructions:
 1. Implement the requested changes.
 2. Verify tests pass.
 3. Update the ticket's Work Log and move to Completed when finished.`;
-          await vscode5.env.clipboard.writeText(prompt);
-          vscode5.window.showInformationMessage(`Copied ticket prompt to clipboard. Opening IDE Chat...`);
+          await vscode4.env.clipboard.writeText(prompt);
+          vscode4.window.showInformationMessage(`Copied ticket prompt to clipboard. Opening IDE Chat...`);
           try {
-            await vscode5.commands.executeCommand("workbench.action.chat.open");
+            await vscode4.commands.executeCommand("workbench.action.chat.open");
           } catch {
             try {
-              await vscode5.commands.executeCommand("aichat.opensidebar");
+              await vscode4.commands.executeCommand("aichat.opensidebar");
             } catch {
             }
           }
         } catch (err) {
-          vscode5.window.showErrorMessage(`Failed to open IDE chat: ${err?.message || err}`);
+          vscode4.window.showErrorMessage(`Failed to open IDE chat: ${err?.message || err}`);
         }
         break;
       case "copyAgentPrompt":
@@ -2049,19 +2245,19 @@ Instructions:
           if (!targetBoard2 && allBoards.length > 0) {
             targetBoard2 = allBoards[0];
           }
-          const workspaceFolder = vscode5.workspace.workspaceFolders?.[0]?.uri.fsPath;
+          const workspaceFolder = vscode4.workspace.workspaceFolders?.[0]?.uri.fsPath;
           const prompt = PromptFormatter.formatPrompt(
             t,
             targetBoard2 ? targetBoard2.config : null,
             workspaceFolder,
             targetBoard2 ? targetBoard2.rootPath : void 0
           );
-          await vscode5.env.clipboard.writeText(prompt);
-          vscode5.window.showInformationMessage(
+          await vscode4.env.clipboard.writeText(prompt);
+          vscode4.window.showInformationMessage(
             `Copied Agent Task Prompt for "${t.id ? t.id + ": " : ""}${t.title}" to clipboard!`
           );
         } catch (err) {
-          vscode5.window.showErrorMessage(`Failed to copy agent prompt: ${err?.message || err}`);
+          vscode4.window.showErrorMessage(`Failed to copy agent prompt: ${err?.message || err}`);
         }
         break;
       case "assignTicket":
@@ -2079,7 +2275,7 @@ Instructions:
             targetBoard2 = allBoards[0];
           }
           if (!targetBoard2) {
-            vscode5.window.showErrorMessage("No board found to assign ticket.");
+            vscode4.window.showErrorMessage("No board found to assign ticket.");
             break;
           }
           this.currentBoardId = targetBoard2.id;
@@ -2087,7 +2283,7 @@ Instructions:
           const assigneeId = message.assigneeId ? message.assigneeId.trim() : "";
           const assigned = await boardManager.assignTicket(targetBoard2.id, message.ticketPath, targetName);
           if (!assigned) {
-            vscode5.window.showErrorMessage(`Failed to assign ticket at ${message.ticketPath}`);
+            vscode4.window.showErrorMessage(`Failed to assign ticket at ${message.ticketPath}`);
             break;
           }
           this.broadcastCurrentState();
@@ -2116,24 +2312,24 @@ Instructions:
                 }
               }
               if (ticketObj) {
-                await AgentRunner.dispatch(ticketObj, assignee, targetBoard2.rootPath);
+                await AgentRunner.dispatch(ticketObj, assignee, targetBoard2.rootPath, targetBoard2.config);
               }
             } else {
-              vscode5.window.showInformationMessage(`Assigned ticket to ${targetName}.`);
+              vscode4.window.showInformationMessage(`Assigned ticket to ${targetName}.`);
             }
           } else if (targetName) {
-            vscode5.window.showInformationMessage(`Assigned ticket to ${targetName}.`);
+            vscode4.window.showInformationMessage(`Assigned ticket to ${targetName}.`);
           } else {
-            vscode5.window.showInformationMessage("Unassigned ticket.");
+            vscode4.window.showInformationMessage("Unassigned ticket.");
           }
         } catch (err) {
-          vscode5.window.showErrorMessage(`Failed to assign ticket: ${err?.message || err}`);
+          vscode4.window.showErrorMessage(`Failed to assign ticket: ${err?.message || err}`);
         }
         break;
       case "log":
         console.log(`[Webview ${message.level || "info"}] ${message.text}`);
         if (message.level === "error") {
-          vscode5.window.showErrorMessage(`[Agentic Kanban UI Error] ${message.text}`);
+          vscode4.window.showErrorMessage(`[Agentic Kanban UI Error] ${message.text}`);
         }
         break;
       case "refresh":
@@ -2182,13 +2378,13 @@ Instructions:
     });
   }
   getHtmlForWebview(webview) {
-    let webviewDir = vscode5.Uri.joinPath(this.extensionUri, "dist", "webview");
+    let webviewDir = vscode4.Uri.joinPath(this.extensionUri, "dist", "webview");
     if (!fs4.existsSync(webviewDir.fsPath)) {
-      webviewDir = vscode5.Uri.joinPath(this.extensionUri, "src", "webview");
+      webviewDir = vscode4.Uri.joinPath(this.extensionUri, "src", "webview");
     }
     const v = Date.now();
-    const scriptUri = webview.asWebviewUri(vscode5.Uri.joinPath(webviewDir, "app.js")).with({ query: `v=${v}` });
-    const stylesUri = webview.asWebviewUri(vscode5.Uri.joinPath(webviewDir, "styles.css")).with({ query: `v=${v}` });
+    const scriptUri = webview.asWebviewUri(vscode4.Uri.joinPath(webviewDir, "app.js")).with({ query: `v=${v}` });
+    const stylesUri = webview.asWebviewUri(vscode4.Uri.joinPath(webviewDir, "styles.css")).with({ query: `v=${v}` });
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -2228,7 +2424,7 @@ Instructions:
           <span>Plan</span>
         </button>
 
-        <button id="btnAgentRules" class="nav-action-btn secondary" title="Generate or Update AGENT.md System Rules">
+        <button id="btnAgentRules" class="nav-action-btn secondary" title="Generate or Update AGENTS.md System Rules">
           <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
             <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
@@ -2505,27 +2701,27 @@ async function activate(context) {
   await boardManager.reloadBoards();
   boardManager.setupWatchers(context);
   const treeProvider = new BoardsTreeProvider(boardManager);
-  vscode6.window.registerTreeDataProvider("agenticKanban.boardsView", treeProvider);
+  vscode5.window.registerTreeDataProvider("agenticKanban.boardsView", treeProvider);
   context.subscriptions.push(
-    vscode6.commands.registerCommand("agenticKanban.openBoard", (boardId) => {
+    vscode5.commands.registerCommand("agenticKanban.openBoard", (boardId) => {
       KanbanWebviewManager.createOrShow(context.extensionUri, boardId, false);
     }),
-    vscode6.commands.registerCommand("agenticKanban.openOverview", () => {
+    vscode5.commands.registerCommand("agenticKanban.openOverview", () => {
       KanbanWebviewManager.createOrShow(context.extensionUri, void 0, true);
     }),
-    vscode6.commands.registerCommand("agenticKanban.refreshBoards", async () => {
+    vscode5.commands.registerCommand("agenticKanban.refreshBoards", async () => {
       await boardManager.reloadBoards();
-      vscode6.window.showInformationMessage("Agentic Kanban: Boards refreshed.");
+      vscode5.window.showInformationMessage("Agentic Kanban: Boards refreshed.");
     }),
-    vscode6.commands.registerCommand("agenticKanban.createTicket", async () => {
+    vscode5.commands.registerCommand("agenticKanban.createTicket", async () => {
       const boards = boardManager.getAllBoards();
       if (boards.length === 0) {
-        vscode6.window.showWarningMessage("No Kanban boards discovered in the workspace.");
+        vscode5.window.showWarningMessage("No Kanban boards discovered in the workspace.");
         return;
       }
       let selectedBoard = boards[0];
       if (boards.length > 1) {
-        const boardPick = await vscode6.window.showQuickPick(
+        const boardPick = await vscode5.window.showQuickPick(
           boards.map((b) => ({ label: b.name, description: b.rootPath, board: b })),
           { placeHolder: "Select target board" }
         );
@@ -2533,7 +2729,7 @@ async function activate(context) {
           return;
         selectedBoard = boardPick.board;
       }
-      const columnPick = await vscode6.window.showQuickPick(
+      const columnPick = await vscode5.window.showQuickPick(
         selectedBoard.columns.map((c) => ({ label: c.name, description: `${c.tickets.length} tickets`, column: c })),
         { placeHolder: "Select destination column" }
       );
@@ -2541,7 +2737,7 @@ async function activate(context) {
         return;
       let subfolder = null;
       if (columnPick.column.subfolders.length > 0) {
-        const subfolderPick = await vscode6.window.showQuickPick(
+        const subfolderPick = await vscode5.window.showQuickPick(
           [
             { label: "(Column Root)", subfolder: null },
             ...columnPick.column.subfolders.map((s) => ({ label: s.name, subfolder: s.name }))
@@ -2552,7 +2748,7 @@ async function activate(context) {
           subfolder = subfolderPick.subfolder;
         }
       }
-      const title = await vscode6.window.showInputBox({
+      const title = await vscode5.window.showInputBox({
         prompt: "Enter ticket title",
         placeHolder: "e.g. Implement resilient retry loop"
       });
@@ -2565,11 +2761,11 @@ async function activate(context) {
         title.trim()
       );
       if (createdPath) {
-        const doc = await vscode6.workspace.openTextDocument(vscode6.Uri.file(createdPath));
-        await vscode6.window.showTextDocument(doc);
+        const doc = await vscode5.workspace.openTextDocument(vscode5.Uri.file(createdPath));
+        await vscode5.window.showTextDocument(doc);
       }
     }),
-    vscode6.commands.registerCommand("agenticKanban.openConfig", async (item) => {
+    vscode5.commands.registerCommand("agenticKanban.openConfig", async (item) => {
       const boards = boardManager.getAllBoards();
       if (boards.length === 0)
         return;
@@ -2577,7 +2773,7 @@ async function activate(context) {
       if (item && item.board) {
         board = item.board;
       } else if (boards.length > 1) {
-        const pick = await vscode6.window.showQuickPick(
+        const pick = await vscode5.window.showQuickPick(
           boards.map((b) => ({ label: b.name, description: b.rootPath, board: b })),
           { placeHolder: "Select board" }
         );
@@ -2590,20 +2786,20 @@ async function activate(context) {
         const defaultConfig = ConfigParser.generateDefaultConfig(board.name);
         await fs5.promises.writeFile(configPath, defaultConfig, "utf8");
       }
-      const doc = await vscode6.workspace.openTextDocument(vscode6.Uri.file(configPath));
-      await vscode6.window.showTextDocument(doc);
+      const doc = await vscode5.workspace.openTextDocument(vscode5.Uri.file(configPath));
+      await vscode5.window.showTextDocument(doc);
     }),
-    vscode6.commands.registerCommand("agenticKanban.generateAgentRules", async (item) => {
+    vscode5.commands.registerCommand("agenticKanban.generateAgentRules", async (item) => {
       const boards = boardManager.getAllBoards();
       if (boards.length === 0) {
-        vscode6.window.showWarningMessage("No active Kanban boards found.");
+        vscode5.window.showWarningMessage("No active Kanban boards found.");
         return;
       }
       let board = boards[0];
       if (item && item.board) {
         board = item.board;
       } else if (boards.length > 1) {
-        const pick = await vscode6.window.showQuickPick(
+        const pick = await vscode5.window.showQuickPick(
           boards.map((b) => ({ label: b.name, description: b.rootPath, board: b })),
           { placeHolder: "Select board to generate agent rules for" }
         );
@@ -2615,7 +2811,7 @@ async function activate(context) {
       if (!res)
         return;
       if (fs5.existsSync(res.targetPath)) {
-        const choice = await vscode6.window.showQuickPick(
+        const choice = await vscode5.window.showQuickPick(
           [
             { label: "Overwrite", description: `Replace entire ${path7.basename(res.targetPath)}` },
             { label: "Append", description: `Append Kanban rules to existing ${path7.basename(res.targetPath)}` },
@@ -2636,21 +2832,21 @@ ${res.content}`, "utf8");
       } else {
         await fs5.promises.writeFile(res.targetPath, res.content, "utf8");
       }
-      vscode6.window.showInformationMessage(`Agent rules generated at ${path7.basename(res.targetPath)}`);
-      const doc = await vscode6.workspace.openTextDocument(vscode6.Uri.file(res.targetPath));
-      await vscode6.window.showTextDocument(doc);
+      vscode5.window.showInformationMessage(`Agent rules generated at ${path7.basename(res.targetPath)}`);
+      const doc = await vscode5.workspace.openTextDocument(vscode5.Uri.file(res.targetPath));
+      await vscode5.window.showTextDocument(doc);
     }),
-    vscode6.commands.registerCommand("agenticKanban.initTemplates", async (item) => {
+    vscode5.commands.registerCommand("agenticKanban.initTemplates", async (item) => {
       const boards = boardManager.getAllBoards();
       if (boards.length === 0) {
-        vscode6.window.showWarningMessage("No active Kanban boards found.");
+        vscode5.window.showWarningMessage("No active Kanban boards found.");
         return;
       }
       let board = boards[0];
       if (item && item.board) {
         board = item.board;
       } else if (boards.length > 1) {
-        const pick = await vscode6.window.showQuickPick(
+        const pick = await vscode5.window.showQuickPick(
           boards.map((b) => ({ label: b.name, description: b.rootPath, board: b })),
           { placeHolder: "Select board to initialize templates in" }
         );
@@ -2660,14 +2856,14 @@ ${res.content}`, "utf8");
       }
       const created = await boardManager.initTemplates(board.id);
       if (created && created.length > 0) {
-        vscode6.window.showInformationMessage(`Initialized templates: ${created.join(", ")} in ${board.name}/.templates/`);
+        vscode5.window.showInformationMessage(`Initialized templates: ${created.join(", ")} in ${board.name}/.templates/`);
         const firstTemplate = path7.join(board.rootPath, ".templates", created[0]);
         if (fs5.existsSync(firstTemplate)) {
-          const doc = await vscode6.workspace.openTextDocument(vscode6.Uri.file(firstTemplate));
-          await vscode6.window.showTextDocument(doc);
+          const doc = await vscode5.workspace.openTextDocument(vscode5.Uri.file(firstTemplate));
+          await vscode5.window.showTextDocument(doc);
         }
       } else {
-        vscode6.window.showInformationMessage(`.templates/ already contains templates for ${board.name}.`);
+        vscode5.window.showInformationMessage(`.templates/ already contains templates for ${board.name}.`);
       }
     })
   );

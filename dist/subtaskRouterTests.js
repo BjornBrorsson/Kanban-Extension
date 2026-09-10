@@ -22,18 +22,324 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// test/m1Tests.ts
-var fs9 = __toESM(require("fs"));
-var path10 = __toESM(require("path"));
+// test/subtaskRouterTests.ts
+var fs10 = __toESM(require("fs"));
+var path11 = __toESM(require("path"));
+
+// src/orchestrator/scheduler/subtaskRouter.ts
+var SubtaskRouter = class {
+  static DEFAULT_PROFILES = [
+    {
+      id: "fast-discovery",
+      name: "Gemma 4 E4B (Local / Fast)",
+      model: "gemma4:e4b",
+      provider: "ollama",
+      costTier: "free",
+      recommendedFor: ["discovery", "quick-fix"]
+    },
+    {
+      id: "deep-reasoner",
+      name: "Fable / Astra (Deep Reasoning)",
+      model: "astra-reasoning-v1",
+      provider: "openai-compatible",
+      costTier: "high",
+      recommendedFor: ["architecture", "escalation"]
+    },
+    {
+      id: "standard-coder",
+      name: "Claude 3.7 Sonnet / Copilot",
+      model: "claude-3-7-sonnet",
+      provider: "anthropic",
+      costTier: "medium",
+      recommendedFor: ["implementation", "verification", "refactor"]
+    }
+  ];
+  static DEFAULT_ROUTING = {
+    defaultTier: "standard-coder",
+    categoryRoutes: {
+      discovery: "fast-discovery",
+      "quick-fix": "fast-discovery",
+      architecture: "deep-reasoner",
+      escalation: "deep-reasoner",
+      implementation: "standard-coder",
+      verification: "standard-coder",
+      refactor: "standard-coder"
+    },
+    fallbackTier: "standard-coder"
+  };
+  /**
+   * Classifies a planned subtask, ticket, or task description into a TaskCategory.
+   */
+  static classify(task) {
+    const labels = (task.labels || []).map((l) => l.toLowerCase());
+    if (labels.some((l) => l.includes("discover") || l.includes("search") || l.includes("research") || l.includes("probe"))) {
+      return "discovery";
+    }
+    if (labels.some((l) => l.includes("architect") || l.includes("design") || l.includes("spec") || l.includes("plan"))) {
+      return "architecture";
+    }
+    if (labels.some((l) => l.includes("verify") || l.includes("test") || l.includes("qa") || l.includes("audit"))) {
+      return "verification";
+    }
+    if (labels.some((l) => l.includes("quick-fix") || l.includes("typo") || l.includes("lint") || l.includes("whitespace"))) {
+      return "quick-fix";
+    }
+    if (labels.some((l) => l.includes("refactor") || l.includes("cleanup"))) {
+      return "refactor";
+    }
+    if (labels.some((l) => l.includes("escalat"))) {
+      return "escalation";
+    }
+    const combinedText = [
+      task.title || "",
+      task.objective || "",
+      task.summary || ""
+    ].join(" ").toLowerCase();
+    if (/\b(discover|discovery|search|find|locate|inspect|explore|investigate|probe|survey|file listing)\b/i.test(combinedText)) {
+      return "discovery";
+    }
+    if (/\b(architect|architecture|decomposition|decompose|blueprint|high-level design|schema design|cycle resolution)\b/i.test(combinedText)) {
+      return "architecture";
+    }
+    if (/\b(verify|verification|assert|validate|validation|smoke test|unit test|integration test|regression|benchmark)\b/i.test(combinedText)) {
+      return "verification";
+    }
+    if (/\b(typo|lint|formatting|whitespace|rename symbol|docstring|comment fix)\b/i.test(combinedText)) {
+      return "quick-fix";
+    }
+    if (/\b(refactor|restructure|decouple|cleanup|clean up|migrate|migration)\b/i.test(combinedText)) {
+      return "refactor";
+    }
+    if (/\b(escalat|checkpoint takeover|lead resolution)\b/i.test(combinedText)) {
+      return "escalation";
+    }
+    return "implementation";
+  }
+  /**
+   * Resolves the optimal ModelTierProfile for a given TaskCategory, taking into account:
+   * - Configured subtask routing table
+   * - Registered model tier profiles
+   * - Policy constraints (local-only, EU-only)
+   * - Automatic fallback handling
+   */
+  static resolveModel(category, routingConfig, availableTiers, policies) {
+    const routing = routingConfig || this.DEFAULT_ROUTING;
+    const profiles = availableTiers && availableTiers.length > 0 ? availableTiers : this.DEFAULT_PROFILES;
+    const requestedTierId = routing.categoryRoutes?.[category] || routing.defaultTier || "standard-coder";
+    let profile = profiles.find((p) => p.id.toLowerCase() === requestedTierId.toLowerCase());
+    let isFallback = false;
+    let reason;
+    if (!profile) {
+      profile = profiles.find((p) => p.id.toLowerCase() === (routing.fallbackTier || routing.defaultTier).toLowerCase()) || profiles[0];
+      isFallback = true;
+      reason = `Preferred tier "${requestedTierId}" not found; fell back to "${profile.id}".`;
+    }
+    if (policies) {
+      if (policies.localOnly) {
+        const isLocal = profile.provider === "ollama" || profile.provider === "cli-bridge" || profile.costTier === "free";
+        if (!isLocal) {
+          const localProfile = profiles.find((p) => p.provider === "ollama" || p.provider === "cli-bridge" || p.costTier === "free");
+          if (localProfile && localProfile.id !== profile.id) {
+            reason = `Policy "localOnly" active; rerouted from cloud tier "${profile.id}" to local tier "${localProfile.id}".`;
+            profile = localProfile;
+            isFallback = true;
+          }
+        }
+      }
+    }
+    return {
+      profile,
+      category,
+      requestedTierId,
+      effectiveTierId: profile.id,
+      isFallback,
+      reason
+    };
+  }
+};
+
+// src/orchestrator/lead/planningSession.ts
+var fs = __toESM(require("fs"));
+var path = __toESM(require("path"));
+var LeadPlanningEngine = class {
+  static DEFAULT_MAX_SUBTASKS = 20;
+  /**
+   * Validates a set of planned subtasks for circular dependencies using depth-first search.
+   */
+  static validateDependencyGraph(subtasks) {
+    const adjList = /* @__PURE__ */ new Map();
+    const taskIds = new Set(subtasks.map((s) => s.id));
+    for (const task of subtasks) {
+      const deps = (task.dependsOn || []).filter((d) => taskIds.has(d));
+      adjList.set(task.id, deps);
+    }
+    const visited = /* @__PURE__ */ new Set();
+    const recStack = /* @__PURE__ */ new Set();
+    const currentPath = [];
+    function dfs(node) {
+      visited.add(node);
+      recStack.add(node);
+      currentPath.push(node);
+      const neighbors = adjList.get(node) || [];
+      for (const neighbor of neighbors) {
+        if (!visited.has(neighbor)) {
+          const cycle = dfs(neighbor);
+          if (cycle)
+            return cycle;
+        } else if (recStack.has(neighbor)) {
+          const cycleStart = currentPath.indexOf(neighbor);
+          return [...currentPath.slice(cycleStart), neighbor];
+        }
+      }
+      recStack.delete(node);
+      currentPath.pop();
+      return null;
+    }
+    for (const task of subtasks) {
+      if (!visited.has(task.id)) {
+        const cycle = dfs(task.id);
+        if (cycle) {
+          return { valid: false, cycle };
+        }
+      }
+    }
+    return { valid: true };
+  }
+  /**
+   * Plans and decomposes a goal into bounded subtasks with safeguards.
+   */
+  static planGoal(goalDescription, proposedSubtasks, options = {}) {
+    const maxSubtasks = options.maxSubtasks || this.DEFAULT_MAX_SUBTASKS;
+    if (proposedSubtasks.length > maxSubtasks) {
+      throw new Error(`Planning error: Decomposed subtask count (${proposedSubtasks.length}) exceeds safety limit (${maxSubtasks}).`);
+    }
+    const validation = this.validateDependencyGraph(proposedSubtasks);
+    if (!validation.valid) {
+      throw new Error(`Planning error: Circular dependency detected in plan: ${validation.cycle?.join(" -> ")}`);
+    }
+    for (const task of proposedSubtasks) {
+      if (!task.category) {
+        task.category = SubtaskRouter.classify(task);
+      }
+      if (!task.modelTier) {
+        const resolved = SubtaskRouter.resolveModel(
+          task.category,
+          options.subtaskRouting,
+          options.modelTiers,
+          options.policies
+        );
+        task.modelTier = resolved.effectiveTierId;
+      }
+    }
+    const taskMap = /* @__PURE__ */ new Map();
+    for (const task of proposedSubtasks) {
+      taskMap.set(task.id, task);
+    }
+    for (const task of proposedSubtasks) {
+      if (task.dependsOn) {
+        for (const depId of task.dependsOn) {
+          const parent = taskMap.get(depId);
+          if (parent) {
+            parent.blocks = parent.blocks || [];
+            if (!parent.blocks.includes(task.id)) {
+              parent.blocks.push(task.id);
+            }
+          }
+        }
+      }
+    }
+    const dependencyGraph = {};
+    for (const task of proposedSubtasks) {
+      dependencyGraph[task.id] = task.dependsOn || [];
+    }
+    return {
+      epicOrGoal: goalDescription,
+      summary: `Decomposed goal into ${proposedSubtasks.length} bounded subtasks with verified dependency ordering.`,
+      subtasks: proposedSubtasks,
+      dependencyGraph
+    };
+  }
+  /**
+   * Generates a standard markdown ticket file content adhering to TicketParser conventions.
+   */
+  static formatTicketMarkdown(subtask, epicName) {
+    const lines = [];
+    lines.push(`# ${subtask.id} \u2014 ${subtask.title}`);
+    lines.push("");
+    lines.push("| Field | Value |");
+    lines.push("|-------|-------|");
+    if (epicName) {
+      lines.push(`| **Epic** | ${epicName} |`);
+    }
+    lines.push(`| **Type** | ${subtask.type || "Feature"} |`);
+    lines.push(`| **Priority** | ${subtask.priority} |`);
+    if (subtask.category) {
+      lines.push(`| **Category** | \`${subtask.category}\` |`);
+    }
+    if (subtask.modelTier) {
+      lines.push(`| **Model Tier** | \`${subtask.modelTier}\` |`);
+    }
+    if (subtask.estimate) {
+      lines.push(`| **Estimate** | ${subtask.estimate} |`);
+    }
+    lines.push("| **Status** | Backlog |");
+    lines.push("| **Assignee** | \u2014 |");
+    if (subtask.dependsOn && subtask.dependsOn.length > 0) {
+      lines.push(`| **Depends on** | ${subtask.dependsOn.join(", ")} |`);
+    }
+    if (subtask.blocks && subtask.blocks.length > 0) {
+      lines.push(`| **Blocks** | ${subtask.blocks.join(", ")} |`);
+    }
+    if (subtask.allowedScope && subtask.allowedScope.length > 0) {
+      lines.push(`| **Scope** | \`${subtask.allowedScope.join("`, `")}\` |`);
+    }
+    lines.push("");
+    lines.push("## Summary");
+    lines.push(subtask.objective);
+    lines.push("");
+    lines.push("## Acceptance Criteria");
+    for (const criterion of subtask.acceptanceCriteria) {
+      lines.push(`- [ ] ${criterion}`);
+    }
+    lines.push("");
+    if (subtask.verificationCommand) {
+      lines.push("## Verification");
+      lines.push(`Run: \`${subtask.verificationCommand}\``);
+      lines.push("");
+    }
+    lines.push("## Work Log");
+    lines.push(`- **${(/* @__PURE__ */ new Date()).toISOString().split("T")[0]}**: Created via Lead Agent Planning Session.`);
+    lines.push("");
+    return lines.join("\n");
+  }
+  /**
+   * Materializes planned subtasks as markdown cards in the board's Backlog folder.
+   */
+  static writeSubtasksToBoard(boardBacklogDir, result) {
+    if (!fs.existsSync(boardBacklogDir)) {
+      fs.mkdirSync(boardBacklogDir, { recursive: true });
+    }
+    const createdFiles = [];
+    for (const subtask of result.subtasks) {
+      const sanitizedTitle = subtask.title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+      const filename = `${subtask.id}_${sanitizedTitle}.md`;
+      const filePath = path.join(boardBacklogDir, filename);
+      const content = this.formatTicketMarkdown(subtask, result.epicOrGoal);
+      fs.writeFileSync(filePath, content, "utf8");
+      createdFiles.push(filePath);
+    }
+    return createdFiles;
+  }
+};
 
 // src/orchestrator/core/runtimeJournal.ts
-var fs2 = __toESM(require("fs"));
-var path2 = __toESM(require("path"));
+var fs3 = __toESM(require("fs"));
+var path3 = __toESM(require("path"));
 
 // src/orchestrator/models/ticketAttempt.ts
 var crypto = __toESM(require("crypto"));
-var fs = __toESM(require("fs"));
-var path = __toESM(require("path"));
+var fs2 = __toESM(require("fs"));
+var path2 = __toESM(require("path"));
 var TicketAttemptManager = class {
   /**
    * Generates a unique monotonic attempt ID.
@@ -55,8 +361,8 @@ var TicketAttemptManager = class {
   static createManifest(baseRevision, filePaths) {
     const fileHashes = {};
     for (const fp of filePaths) {
-      if (fs.existsSync(fp) && !fs.statSync(fp).isDirectory()) {
-        const fileData = fs.readFileSync(fp);
+      if (fs2.existsSync(fp) && !fs2.statSync(fp).isDirectory()) {
+        const fileData = fs2.readFileSync(fp);
         fileHashes[fp] = this.computeHash(fileData);
       }
     }
@@ -92,9 +398,9 @@ var TicketAttemptManager = class {
    * and never wiped while active attempts or recovery obligations exist.
    */
   static getRuntimeStoreDir(workspaceRoot) {
-    const dir = path.join(workspaceRoot, ".agentic-kanban", "runtime");
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
+    const dir = path2.join(workspaceRoot, ".agentic-kanban", "runtime");
+    if (!fs2.existsSync(dir)) {
+      fs2.mkdirSync(dir, { recursive: true });
     }
     return dir;
   }
@@ -102,26 +408,26 @@ var TicketAttemptManager = class {
    * Persists an attempt record durably to the runtime store.
    */
   static saveAttempt(workspaceRoot, attempt) {
-    const attemptsDir = path.join(this.getRuntimeStoreDir(workspaceRoot), "attempts");
-    if (!fs.existsSync(attemptsDir)) {
-      fs.mkdirSync(attemptsDir, { recursive: true });
+    const attemptsDir = path2.join(this.getRuntimeStoreDir(workspaceRoot), "attempts");
+    if (!fs2.existsSync(attemptsDir)) {
+      fs2.mkdirSync(attemptsDir, { recursive: true });
     }
     attempt.updatedAt = Date.now();
-    const filePath = path.join(attemptsDir, `${attempt.attemptId}.json`);
+    const filePath = path2.join(attemptsDir, `${attempt.attemptId}.json`);
     const tempPath = `${filePath}.tmp`;
-    fs.writeFileSync(tempPath, JSON.stringify(attempt, null, 2), "utf8");
-    fs.renameSync(tempPath, filePath);
+    fs2.writeFileSync(tempPath, JSON.stringify(attempt, null, 2), "utf8");
+    fs2.renameSync(tempPath, filePath);
   }
   /**
    * Reads an attempt record from disk.
    */
   static loadAttempt(workspaceRoot, attemptId) {
-    const filePath = path.join(this.getRuntimeStoreDir(workspaceRoot), "attempts", `${attemptId}.json`);
-    if (!fs.existsSync(filePath)) {
+    const filePath = path2.join(this.getRuntimeStoreDir(workspaceRoot), "attempts", `${attemptId}.json`);
+    if (!fs2.existsSync(filePath)) {
       return null;
     }
     try {
-      const data = fs.readFileSync(filePath, "utf8");
+      const data = fs2.readFileSync(filePath, "utf8");
       return JSON.parse(data);
     } catch {
       return null;
@@ -134,8 +440,8 @@ var RuntimeJournal = class {
   constructor(workspaceRoot) {
     this.workspaceRoot = workspaceRoot;
     this.runtimeDir = TicketAttemptManager.getRuntimeStoreDir(workspaceRoot);
-    this.lockFile = path2.join(this.runtimeDir, "workspace.lock");
-    this.journalFile = path2.join(this.runtimeDir, "journal.jsonl");
+    this.lockFile = path3.join(this.runtimeDir, "workspace.lock");
+    this.journalFile = path3.join(this.runtimeDir, "journal.jsonl");
     this.ensureGitIgnore();
   }
   runtimeDir;
@@ -148,15 +454,15 @@ var RuntimeJournal = class {
    */
   ensureGitIgnore() {
     try {
-      const gitIgnorePath = path2.join(this.workspaceRoot, ".gitignore");
-      if (fs2.existsSync(path2.join(this.workspaceRoot, ".git"))) {
+      const gitIgnorePath = path3.join(this.workspaceRoot, ".gitignore");
+      if (fs3.existsSync(path3.join(this.workspaceRoot, ".git"))) {
         let content = "";
-        if (fs2.existsSync(gitIgnorePath)) {
-          content = fs2.readFileSync(gitIgnorePath, "utf8");
+        if (fs3.existsSync(gitIgnorePath)) {
+          content = fs3.readFileSync(gitIgnorePath, "utf8");
         }
         if (!content.includes(".agentic-kanban")) {
           const suffix = content.endsWith("\n") || !content ? "" : "\n";
-          fs2.writeFileSync(gitIgnorePath, `${content}${suffix}# Agentic Kanban local runtime store
+          fs3.writeFileSync(gitIgnorePath, `${content}${suffix}# Agentic Kanban local runtime store
 .agentic-kanban/
 `, "utf8");
         }
@@ -169,9 +475,9 @@ var RuntimeJournal = class {
    * Stale lock recovery: If recorded process is no longer running, the stale lock is safely replaced.
    */
   acquireWorkspaceLock(ownerId = `process_${process.pid}`) {
-    if (fs2.existsSync(this.lockFile)) {
+    if (fs3.existsSync(this.lockFile)) {
       try {
-        const lockContent = fs2.readFileSync(this.lockFile, "utf8");
+        const lockContent = fs3.readFileSync(this.lockFile, "utf8");
         const lock = JSON.parse(lockContent);
         if (this.isPidAlive(lock.pid)) {
           if (lock.ownerId === ownerId || lock.pid === process.pid) {
@@ -196,8 +502,8 @@ var RuntimeJournal = class {
       acquiredAt: Date.now()
     };
     const tempLock = `${this.lockFile}.tmp`;
-    fs2.writeFileSync(tempLock, JSON.stringify(lockData, null, 2), "utf8");
-    fs2.renameSync(tempLock, this.lockFile);
+    fs3.writeFileSync(tempLock, JSON.stringify(lockData, null, 2), "utf8");
+    fs3.renameSync(tempLock, this.lockFile);
     this.isOwner = true;
     this.currentOwnerId = ownerId;
     this.logEntry({
@@ -211,9 +517,9 @@ var RuntimeJournal = class {
    * Releases workspace lock.
    */
   releaseWorkspaceLock() {
-    if (this.isOwner && fs2.existsSync(this.lockFile)) {
+    if (this.isOwner && fs3.existsSync(this.lockFile)) {
       try {
-        fs2.unlinkSync(this.lockFile);
+        fs3.unlinkSync(this.lockFile);
         this.logEntry({
           timestamp: Date.now(),
           type: "LOCK_RELEASED",
@@ -230,7 +536,7 @@ var RuntimeJournal = class {
   logEntry(entry) {
     try {
       const line = JSON.stringify(entry) + "\n";
-      fs2.appendFileSync(this.journalFile, line, "utf8");
+      fs3.appendFileSync(this.journalFile, line, "utf8");
     } catch {
     }
   }
@@ -270,14 +576,14 @@ var RuntimeJournal = class {
    * Scans store for active attempts interrupted by crash/restart.
    */
   scanInterruptedAttempts() {
-    const attemptsDir = path2.join(this.runtimeDir, "attempts");
-    if (!fs2.existsSync(attemptsDir))
+    const attemptsDir = path3.join(this.runtimeDir, "attempts");
+    if (!fs3.existsSync(attemptsDir))
       return [];
     const interrupted = [];
-    const files = fs2.readdirSync(attemptsDir).filter((f) => f.endsWith(".json") && !f.endsWith(".tmp"));
+    const files = fs3.readdirSync(attemptsDir).filter((f) => f.endsWith(".json") && !f.endsWith(".tmp"));
     for (const f of files) {
       try {
-        const data = fs2.readFileSync(path2.join(attemptsDir, f), "utf8");
+        const data = fs3.readFileSync(path3.join(attemptsDir, f), "utf8");
         const attempt = JSON.parse(data);
         if (attempt.status === "Running" || attempt.status === "Pending") {
           interrupted.push(attempt);
@@ -416,14 +722,14 @@ var LeaseManager = class {
 
 // src/orchestrator/workspaces/workspaceManager.ts
 var cp = __toESM(require("child_process"));
-var fs3 = __toESM(require("fs"));
-var path3 = __toESM(require("path"));
+var fs4 = __toESM(require("fs"));
+var path4 = __toESM(require("path"));
 var WorkspaceManager = class {
   constructor(workspaceRoot) {
     this.workspaceRoot = workspaceRoot;
-    this.worktreesDir = path3.join(this.workspaceRoot, ".agentic-kanban", "worktrees");
-    if (!fs3.existsSync(this.worktreesDir)) {
-      fs3.mkdirSync(this.worktreesDir, { recursive: true });
+    this.worktreesDir = path4.join(this.workspaceRoot, ".agentic-kanban", "worktrees");
+    if (!fs4.existsSync(this.worktreesDir)) {
+      fs4.mkdirSync(this.worktreesDir, { recursive: true });
     }
   }
   worktreesDir;
@@ -446,8 +752,8 @@ var WorkspaceManager = class {
    * Uses git worktree if git repo is clean; otherwise creates a guarded snapshot copy.
    */
   async allocate(attemptId, manifest) {
-    const targetDir = path3.join(this.worktreesDir, attemptId);
-    if (fs3.existsSync(targetDir)) {
+    const targetDir = path4.join(this.worktreesDir, attemptId);
+    if (fs4.existsSync(targetDir)) {
       this.cleanup(attemptId);
     }
     const isCleanGit = this.isGitClean();
@@ -463,13 +769,13 @@ var WorkspaceManager = class {
       } catch {
       }
     }
-    fs3.mkdirSync(targetDir, { recursive: true });
+    fs4.mkdirSync(targetDir, { recursive: true });
     for (const [filePath] of Object.entries(manifest.fileHashes)) {
-      if (fs3.existsSync(filePath)) {
-        const relPath = path3.relative(this.workspaceRoot, filePath);
-        const destPath = path3.join(targetDir, relPath);
-        fs3.mkdirSync(path3.dirname(destPath), { recursive: true });
-        fs3.copyFileSync(filePath, destPath);
+      if (fs4.existsSync(filePath)) {
+        const relPath = path4.relative(this.workspaceRoot, filePath);
+        const destPath = path4.join(targetDir, relPath);
+        fs4.mkdirSync(path4.dirname(destPath), { recursive: true });
+        fs4.copyFileSync(filePath, destPath);
       }
     }
     return {
@@ -485,13 +791,13 @@ var WorkspaceManager = class {
   captureDiff(allocation) {
     const diffs = [];
     for (const [origPath, origHash] of Object.entries(allocation.manifest.fileHashes)) {
-      const relPath = path3.relative(this.workspaceRoot, origPath);
-      const allocatedFilePath = path3.join(allocation.workspacePath, relPath);
-      if (fs3.existsSync(allocatedFilePath)) {
-        const newContent = fs3.readFileSync(allocatedFilePath, "utf8");
+      const relPath = path4.relative(this.workspaceRoot, origPath);
+      const allocatedFilePath = path4.join(allocation.workspacePath, relPath);
+      if (fs4.existsSync(allocatedFilePath)) {
+        const newContent = fs4.readFileSync(allocatedFilePath, "utf8");
         const newHash = TicketAttemptManager.computeHash(Buffer.from(newContent, "utf8"));
         if (newHash !== origHash) {
-          const oldContent = fs3.existsSync(origPath) ? fs3.readFileSync(origPath, "utf8") : "";
+          const oldContent = fs4.existsSync(origPath) ? fs4.readFileSync(origPath, "utf8") : "";
           diffs.push(this.createSimpleUnifiedDiff(relPath, oldContent, newContent));
         }
       }
@@ -524,14 +830,14 @@ var WorkspaceManager = class {
     const conflicts = [];
     const filesToApply = [];
     for (const [origPath, expectedHash] of Object.entries(allocation.manifest.fileHashes)) {
-      const relPath = path3.relative(this.workspaceRoot, origPath);
-      const allocatedFilePath = path3.join(allocation.workspacePath, relPath);
-      if (fs3.existsSync(allocatedFilePath)) {
-        const newContent = fs3.readFileSync(allocatedFilePath);
+      const relPath = path4.relative(this.workspaceRoot, origPath);
+      const allocatedFilePath = path4.join(allocation.workspacePath, relPath);
+      if (fs4.existsSync(allocatedFilePath)) {
+        const newContent = fs4.readFileSync(allocatedFilePath);
         const newHash = TicketAttemptManager.computeHash(newContent);
         if (newHash !== expectedHash) {
-          if (fs3.existsSync(origPath)) {
-            const currentTargetContent = fs3.readFileSync(origPath);
+          if (fs4.existsSync(origPath)) {
+            const currentTargetContent = fs4.readFileSync(origPath);
             const currentTargetHash = TicketAttemptManager.computeHash(currentTargetContent);
             if (currentTargetHash !== expectedHash) {
               conflicts.push(relPath);
@@ -552,9 +858,9 @@ var WorkspaceManager = class {
     }
     const applied = [];
     for (const item of filesToApply) {
-      fs3.mkdirSync(path3.dirname(item.destPath), { recursive: true });
-      fs3.copyFileSync(item.sourcePath, item.destPath);
-      applied.push(path3.relative(this.workspaceRoot, item.destPath));
+      fs4.mkdirSync(path4.dirname(item.destPath), { recursive: true });
+      fs4.copyFileSync(item.sourcePath, item.destPath);
+      applied.push(path4.relative(this.workspaceRoot, item.destPath));
     }
     this.cleanup(allocation.attemptId);
     return {
@@ -566,8 +872,8 @@ var WorkspaceManager = class {
    * Cleans up allocated worktree or snapshot directory.
    */
   cleanup(attemptId) {
-    const targetDir = path3.join(this.worktreesDir, attemptId);
-    if (!fs3.existsSync(targetDir))
+    const targetDir = path4.join(this.worktreesDir, attemptId);
+    if (!fs4.existsSync(targetDir))
       return;
     try {
       if (this.isGitRepo()) {
@@ -576,14 +882,14 @@ var WorkspaceManager = class {
         } catch {
         }
       }
-      if (fs3.existsSync(targetDir)) {
-        fs3.rmSync(targetDir, { recursive: true, force: true });
+      if (fs4.existsSync(targetDir)) {
+        fs4.rmSync(targetDir, { recursive: true, force: true });
       }
     } catch {
     }
   }
   isGitRepo() {
-    return fs3.existsSync(path3.join(this.workspaceRoot, ".git"));
+    return fs4.existsSync(path4.join(this.workspaceRoot, ".git"));
   }
   isGitClean() {
     if (!this.isGitRepo())
@@ -605,18 +911,18 @@ var WorkspaceManager = class {
 };
 
 // src/orchestrator/context/contextPackager.ts
-var fs4 = __toESM(require("fs"));
-var path4 = __toESM(require("path"));
+var fs5 = __toESM(require("fs"));
+var path5 = __toESM(require("path"));
 var crypto3 = __toESM(require("crypto"));
 var ContextPackager = class {
   /**
    * Computes SHA-256 hash for a file.
    */
   static hashFile(filePath) {
-    if (!fs4.existsSync(filePath)) {
+    if (!fs5.existsSync(filePath)) {
       return "";
     }
-    const content = fs4.readFileSync(filePath);
+    const content = fs5.readFileSync(filePath);
     return crypto3.createHash("sha256").update(content).digest("hex");
   }
   /**
@@ -626,9 +932,9 @@ var ContextPackager = class {
     const sourceReferences = [];
     const targets = input.targetFiles || [];
     for (const relOrAbs of targets) {
-      const absPath = path4.isAbsolute(relOrAbs) ? relOrAbs : path4.join(input.workspaceRoot, relOrAbs);
-      if (fs4.existsSync(absPath) && fs4.statSync(absPath).isFile()) {
-        const relPath = path4.relative(input.workspaceRoot, absPath).replace(/\\/g, "/");
+      const absPath = path5.isAbsolute(relOrAbs) ? relOrAbs : path5.join(input.workspaceRoot, relOrAbs);
+      if (fs5.existsSync(absPath) && fs5.statSync(absPath).isFile()) {
+        const relPath = path5.relative(input.workspaceRoot, absPath).replace(/\\/g, "/");
         sourceReferences.push({
           path: relPath,
           hash: this.hashFile(absPath)
@@ -661,24 +967,24 @@ var ContextPackager = class {
    * Persists the delegation package in .agentic-kanban/runtime/handoffs/
    */
   static persistPackage(workspaceRoot, pkg) {
-    const handoffsDir = path4.join(workspaceRoot, ".agentic-kanban", "runtime", "handoffs");
-    if (!fs4.existsSync(handoffsDir)) {
-      fs4.mkdirSync(handoffsDir, { recursive: true });
+    const handoffsDir = path5.join(workspaceRoot, ".agentic-kanban", "runtime", "handoffs");
+    if (!fs5.existsSync(handoffsDir)) {
+      fs5.mkdirSync(handoffsDir, { recursive: true });
     }
-    const filePath = path4.join(handoffsDir, `${pkg.attemptId}.json`);
-    fs4.writeFileSync(filePath, JSON.stringify(pkg, null, 2), "utf8");
+    const filePath = path5.join(handoffsDir, `${pkg.attemptId}.json`);
+    fs5.writeFileSync(filePath, JSON.stringify(pkg, null, 2), "utf8");
     return filePath;
   }
   /**
    * Loads a persisted delegation package.
    */
   static loadPackage(workspaceRoot, attemptId) {
-    const filePath = path4.join(workspaceRoot, ".agentic-kanban", "runtime", "handoffs", `${attemptId}.json`);
-    if (!fs4.existsSync(filePath)) {
+    const filePath = path5.join(workspaceRoot, ".agentic-kanban", "runtime", "handoffs", `${attemptId}.json`);
+    if (!fs5.existsSync(filePath)) {
       return null;
     }
     try {
-      return JSON.parse(fs4.readFileSync(filePath, "utf8"));
+      return JSON.parse(fs5.readFileSync(filePath, "utf8"));
     } catch {
       return null;
     }
@@ -686,11 +992,11 @@ var ContextPackager = class {
 };
 
 // src/orchestrator/lead/escalationHandler.ts
-var fs5 = __toESM(require("fs"));
-var path6 = __toESM(require("path"));
+var fs6 = __toESM(require("fs"));
+var path7 = __toESM(require("path"));
 
 // src/orchestrator/lead/delegationProtocol.ts
-var path5 = __toESM(require("path"));
+var path6 = __toESM(require("path"));
 var DelegationProtocol = class {
   /**
    * Matches a normalized relative file path against an allowed scope pattern.
@@ -720,7 +1026,7 @@ var DelegationProtocol = class {
       return normPath.endsWith(`.${ext}`);
     }
     if (!normPattern.includes("/")) {
-      const baseName = path5.basename(normPath);
+      const baseName = path6.basename(normPath);
       return baseName === normPattern;
     }
     return false;
@@ -735,8 +1041,8 @@ var DelegationProtocol = class {
     const violatedFiles = [];
     for (const file of modifiedFiles) {
       let relPath = file;
-      if (workspaceRoot && path5.isAbsolute(file)) {
-        relPath = path5.relative(workspaceRoot, file);
+      if (workspaceRoot && path6.isAbsolute(file)) {
+        relPath = path6.relative(workspaceRoot, file);
       }
       relPath = relPath.replace(/\\/g, "/");
       const matchesAny = allowedScope.some((pattern) => this.matchesScope(relPath, pattern));
@@ -857,11 +1163,11 @@ var EscalationHandler = class {
         message: data.message
       }
     });
-    const escDir = path6.join(this.workspaceRoot, ".agentic-kanban", "runtime", "escalations");
-    if (!fs5.existsSync(escDir)) {
-      fs5.mkdirSync(escDir, { recursive: true });
+    const escDir = path7.join(this.workspaceRoot, ".agentic-kanban", "runtime", "escalations");
+    if (!fs6.existsSync(escDir)) {
+      fs6.mkdirSync(escDir, { recursive: true });
     }
-    fs5.writeFileSync(path6.join(escDir, `${escalationId}.json`), JSON.stringify(record, null, 2), "utf8");
+    fs6.writeFileSync(path7.join(escDir, `${escalationId}.json`), JSON.stringify(record, null, 2), "utf8");
     return record;
   }
   /**
@@ -937,17 +1243,17 @@ var EscalationHandler = class {
     }
   }
   updateEscalationRecord(record) {
-    const escDir = path6.join(this.workspaceRoot, ".agentic-kanban", "runtime", "escalations");
-    const filePath = path6.join(escDir, `${record.escalationId}.json`);
-    if (fs5.existsSync(filePath)) {
-      fs5.writeFileSync(filePath, JSON.stringify(record, null, 2), "utf8");
+    const escDir = path7.join(this.workspaceRoot, ".agentic-kanban", "runtime", "escalations");
+    const filePath = path7.join(escDir, `${record.escalationId}.json`);
+    if (fs6.existsSync(filePath)) {
+      fs6.writeFileSync(filePath, JSON.stringify(record, null, 2), "utf8");
     }
   }
 };
 
 // src/orchestrator/review/reviewManager.ts
-var fs6 = __toESM(require("fs"));
-var path7 = __toESM(require("path"));
+var fs7 = __toESM(require("fs"));
+var path8 = __toESM(require("path"));
 var import_child_process = require("child_process");
 var import_util = require("util");
 var execAsync = (0, import_util.promisify)(import_child_process.exec);
@@ -1061,35 +1367,35 @@ var ReviewManager = class {
     return { allowed: true };
   }
   persistEvidence(evidence) {
-    const dir = path7.join(this.workspaceRoot, ".agentic-kanban", "runtime", "evidence");
-    if (!fs6.existsSync(dir)) {
-      fs6.mkdirSync(dir, { recursive: true });
+    const dir = path8.join(this.workspaceRoot, ".agentic-kanban", "runtime", "evidence");
+    if (!fs7.existsSync(dir)) {
+      fs7.mkdirSync(dir, { recursive: true });
     }
-    fs6.writeFileSync(path7.join(dir, `${evidence.attemptId}.json`), JSON.stringify(evidence, null, 2), "utf8");
+    fs7.writeFileSync(path8.join(dir, `${evidence.attemptId}.json`), JSON.stringify(evidence, null, 2), "utf8");
   }
   loadEvidence(attemptId) {
-    const file = path7.join(this.workspaceRoot, ".agentic-kanban", "runtime", "evidence", `${attemptId}.json`);
-    if (!fs6.existsSync(file))
+    const file = path8.join(this.workspaceRoot, ".agentic-kanban", "runtime", "evidence", `${attemptId}.json`);
+    if (!fs7.existsSync(file))
       return null;
     try {
-      return JSON.parse(fs6.readFileSync(file, "utf8"));
+      return JSON.parse(fs7.readFileSync(file, "utf8"));
     } catch {
       return null;
     }
   }
   persistReviewDecision(decision) {
-    const dir = path7.join(this.workspaceRoot, ".agentic-kanban", "runtime", "reviews");
-    if (!fs6.existsSync(dir)) {
-      fs6.mkdirSync(dir, { recursive: true });
+    const dir = path8.join(this.workspaceRoot, ".agentic-kanban", "runtime", "reviews");
+    if (!fs7.existsSync(dir)) {
+      fs7.mkdirSync(dir, { recursive: true });
     }
-    fs6.writeFileSync(path7.join(dir, `${decision.attemptId}.json`), JSON.stringify(decision, null, 2), "utf8");
+    fs7.writeFileSync(path8.join(dir, `${decision.attemptId}.json`), JSON.stringify(decision, null, 2), "utf8");
   }
   loadReviewDecision(attemptId) {
-    const file = path7.join(this.workspaceRoot, ".agentic-kanban", "runtime", "reviews", `${attemptId}.json`);
-    if (!fs6.existsSync(file))
+    const file = path8.join(this.workspaceRoot, ".agentic-kanban", "runtime", "reviews", `${attemptId}.json`);
+    if (!fs7.existsSync(file))
       return null;
     try {
-      return JSON.parse(fs6.readFileSync(file, "utf8"));
+      return JSON.parse(fs7.readFileSync(file, "utf8"));
     } catch {
       return null;
     }
@@ -1294,12 +1600,12 @@ var PolicyEngine = class {
 };
 
 // src/orchestrator/policy/budgetManager.ts
-var fs7 = __toESM(require("fs"));
-var path8 = __toESM(require("path"));
+var fs8 = __toESM(require("fs"));
+var path9 = __toESM(require("path"));
 var BudgetManager = class {
   constructor(workspaceRoot) {
     this.workspaceRoot = workspaceRoot;
-    this.storePath = path8.join(workspaceRoot, ".agentic-kanban", "runtime", "budgets.json");
+    this.storePath = path9.join(workspaceRoot, ".agentic-kanban", "runtime", "budgets.json");
     this.loadState();
   }
   storePath;
@@ -1426,9 +1732,9 @@ var BudgetManager = class {
     return true;
   }
   loadState() {
-    if (fs7.existsSync(this.storePath)) {
+    if (fs8.existsSync(this.storePath)) {
       try {
-        const raw = JSON.parse(fs7.readFileSync(this.storePath, "utf8"));
+        const raw = JSON.parse(fs8.readFileSync(this.storePath, "utf8"));
         if (raw.accounts) {
           for (const acc of raw.accounts) {
             this.accounts.set(acc.currency, acc);
@@ -1439,26 +1745,26 @@ var BudgetManager = class {
     }
   }
   saveState() {
-    const dir = path8.dirname(this.storePath);
-    if (!fs7.existsSync(dir)) {
-      fs7.mkdirSync(dir, { recursive: true });
+    const dir = path9.dirname(this.storePath);
+    if (!fs8.existsSync(dir)) {
+      fs8.mkdirSync(dir, { recursive: true });
     }
     const data = {
       accounts: Array.from(this.accounts.values()),
       reservations: Array.from(this.activeReservations.values()),
       updatedAt: Date.now()
     };
-    fs7.writeFileSync(this.storePath, JSON.stringify(data, null, 2), "utf8");
+    fs8.writeFileSync(this.storePath, JSON.stringify(data, null, 2), "utf8");
   }
 };
 
 // src/orchestrator/policy/egressController.ts
-var fs8 = __toESM(require("fs"));
-var path9 = __toESM(require("path"));
+var fs9 = __toESM(require("fs"));
+var path10 = __toESM(require("path"));
 var EgressController = class {
   constructor(workspaceRoot) {
     this.workspaceRoot = workspaceRoot;
-    this.auditLogPath = path9.join(workspaceRoot, ".agentic-kanban", "runtime", "audit.log");
+    this.auditLogPath = path10.join(workspaceRoot, ".agentic-kanban", "runtime", "audit.log");
   }
   auditLogPath;
   /**
@@ -1507,13 +1813,13 @@ var EgressController = class {
    */
   logAudit(entry) {
     try {
-      const dir = path9.dirname(this.auditLogPath);
-      if (!fs8.existsSync(dir)) {
-        fs8.mkdirSync(dir, { recursive: true });
+      const dir = path10.dirname(this.auditLogPath);
+      if (!fs9.existsSync(dir)) {
+        fs9.mkdirSync(dir, { recursive: true });
       }
       const line = `[${new Date(entry.timestamp).toISOString()}] [${entry.allowed ? "ALLOW" : "DENY"}] ticket=${entry.ticketId} attempt=${entry.attemptId} provider=${entry.providerId} host=${entry.targetEndpoint} action=${entry.action} rule="${entry.policyRule}"
 `;
-      fs8.appendFileSync(this.auditLogPath, line, "utf8");
+      fs9.appendFileSync(this.auditLogPath, line, "utf8");
     } catch {
     }
   }
@@ -1635,138 +1941,6 @@ var CancellationController = class _CancellationController {
         message: "Cancellation unconfirmed: Process may still be running; retained reservation."
       };
     }
-  }
-};
-
-// src/orchestrator/scheduler/subtaskRouter.ts
-var SubtaskRouter = class {
-  static DEFAULT_PROFILES = [
-    {
-      id: "fast-discovery",
-      name: "Gemma 4 E4B (Local / Fast)",
-      model: "gemma4:e4b",
-      provider: "ollama",
-      costTier: "free",
-      recommendedFor: ["discovery", "quick-fix"]
-    },
-    {
-      id: "deep-reasoner",
-      name: "Fable / Astra (Deep Reasoning)",
-      model: "astra-reasoning-v1",
-      provider: "openai-compatible",
-      costTier: "high",
-      recommendedFor: ["architecture", "escalation"]
-    },
-    {
-      id: "standard-coder",
-      name: "Claude 3.7 Sonnet / Copilot",
-      model: "claude-3-7-sonnet",
-      provider: "anthropic",
-      costTier: "medium",
-      recommendedFor: ["implementation", "verification", "refactor"]
-    }
-  ];
-  static DEFAULT_ROUTING = {
-    defaultTier: "standard-coder",
-    categoryRoutes: {
-      discovery: "fast-discovery",
-      "quick-fix": "fast-discovery",
-      architecture: "deep-reasoner",
-      escalation: "deep-reasoner",
-      implementation: "standard-coder",
-      verification: "standard-coder",
-      refactor: "standard-coder"
-    },
-    fallbackTier: "standard-coder"
-  };
-  /**
-   * Classifies a planned subtask, ticket, or task description into a TaskCategory.
-   */
-  static classify(task) {
-    const labels = (task.labels || []).map((l) => l.toLowerCase());
-    if (labels.some((l) => l.includes("discover") || l.includes("search") || l.includes("research") || l.includes("probe"))) {
-      return "discovery";
-    }
-    if (labels.some((l) => l.includes("architect") || l.includes("design") || l.includes("spec") || l.includes("plan"))) {
-      return "architecture";
-    }
-    if (labels.some((l) => l.includes("verify") || l.includes("test") || l.includes("qa") || l.includes("audit"))) {
-      return "verification";
-    }
-    if (labels.some((l) => l.includes("quick-fix") || l.includes("typo") || l.includes("lint") || l.includes("whitespace"))) {
-      return "quick-fix";
-    }
-    if (labels.some((l) => l.includes("refactor") || l.includes("cleanup"))) {
-      return "refactor";
-    }
-    if (labels.some((l) => l.includes("escalat"))) {
-      return "escalation";
-    }
-    const combinedText = [
-      task.title || "",
-      task.objective || "",
-      task.summary || ""
-    ].join(" ").toLowerCase();
-    if (/\b(discover|discovery|search|find|locate|inspect|explore|investigate|probe|survey|file listing)\b/i.test(combinedText)) {
-      return "discovery";
-    }
-    if (/\b(architect|architecture|decomposition|decompose|blueprint|high-level design|schema design|cycle resolution)\b/i.test(combinedText)) {
-      return "architecture";
-    }
-    if (/\b(verify|verification|assert|validate|validation|smoke test|unit test|integration test|regression|benchmark)\b/i.test(combinedText)) {
-      return "verification";
-    }
-    if (/\b(typo|lint|formatting|whitespace|rename symbol|docstring|comment fix)\b/i.test(combinedText)) {
-      return "quick-fix";
-    }
-    if (/\b(refactor|restructure|decouple|cleanup|clean up|migrate|migration)\b/i.test(combinedText)) {
-      return "refactor";
-    }
-    if (/\b(escalat|checkpoint takeover|lead resolution)\b/i.test(combinedText)) {
-      return "escalation";
-    }
-    return "implementation";
-  }
-  /**
-   * Resolves the optimal ModelTierProfile for a given TaskCategory, taking into account:
-   * - Configured subtask routing table
-   * - Registered model tier profiles
-   * - Policy constraints (local-only, EU-only)
-   * - Automatic fallback handling
-   */
-  static resolveModel(category, routingConfig, availableTiers, policies) {
-    const routing = routingConfig || this.DEFAULT_ROUTING;
-    const profiles = availableTiers && availableTiers.length > 0 ? availableTiers : this.DEFAULT_PROFILES;
-    const requestedTierId = routing.categoryRoutes?.[category] || routing.defaultTier || "standard-coder";
-    let profile = profiles.find((p) => p.id.toLowerCase() === requestedTierId.toLowerCase());
-    let isFallback = false;
-    let reason;
-    if (!profile) {
-      profile = profiles.find((p) => p.id.toLowerCase() === (routing.fallbackTier || routing.defaultTier).toLowerCase()) || profiles[0];
-      isFallback = true;
-      reason = `Preferred tier "${requestedTierId}" not found; fell back to "${profile.id}".`;
-    }
-    if (policies) {
-      if (policies.localOnly) {
-        const isLocal = profile.provider === "ollama" || profile.provider === "cli-bridge" || profile.costTier === "free";
-        if (!isLocal) {
-          const localProfile = profiles.find((p) => p.provider === "ollama" || p.provider === "cli-bridge" || p.costTier === "free");
-          if (localProfile && localProfile.id !== profile.id) {
-            reason = `Policy "localOnly" active; rerouted from cloud tier "${profile.id}" to local tier "${localProfile.id}".`;
-            profile = localProfile;
-            isFallback = true;
-          }
-        }
-      }
-    }
-    return {
-      profile,
-      category,
-      requestedTierId,
-      effectiveTierId: profile.id,
-      isFallback,
-      reason
-    };
   }
 };
 
@@ -2259,234 +2433,243 @@ var OrchestratorRuntime = class {
   }
 };
 
-// test/fixtures/fakeAdapter.ts
-var FakeDeterministicAdapter = class {
-  id = "fake-deterministic";
-  name = "Deterministic Fake Adapter";
-  tier = "managed";
-  activeExecutions = /* @__PURE__ */ new Map();
-  behavior = {
-    delayMs: 10,
-    exitCode: 0,
-    patchToGenerate: `--- a/README.md
-+++ b/README.md
-@@ -1,3 +1,4 @@
- # Title
-+Added line by Fake Deterministic Worker
-`,
-    reportedCost: { currency: "EUR", units: 0.05, isSubscriptionUnits: false }
-  };
-  async probe() {
-    return {
-      tier: "managed",
-      installed: true,
-      version: "1.0.0-fake",
-      detectedPath: "/fake/bin/runner",
-      supportsStructuredOutput: true,
-      supportsResumableSessions: true,
-      supportsTokenReporting: true,
-      supportsCostLimits: true,
-      supportsModelSelection: true,
-      supportsNetworkRestrictions: true,
-      supportsToolWhitelisting: true,
-      notes: "Fake deterministic test adapter for CI and failure simulation"
-    };
-  }
-  async start(context, onEvent) {
-    const executionId = `exec_${context.attemptId}_${Date.now()}`;
-    const pid = 999e3 + Math.floor(Math.random() * 1e3);
-    this.activeExecutions.set(executionId, { context, cancelled: false });
-    if (onEvent) {
-      onEvent({
-        type: "status_change",
-        timestamp: Date.now(),
-        message: `Starting fake execution for ticket ${context.ticketId}`
-      });
-      onEvent({
-        type: "stdout",
-        timestamp: Date.now(),
-        message: `Inspecting target files: ${JSON.stringify(context.targetFiles || [])}`
-      });
-    }
-    return { pid, executionId };
-  }
-  async collectResult(executionId) {
-    const exec3 = this.activeExecutions.get(executionId);
-    if (!exec3) {
-      throw new Error(`Execution not found: ${executionId}`);
-    }
-    if (this.behavior.delayMs && this.behavior.delayMs > 0) {
-      await new Promise((r) => setTimeout(r, this.behavior.delayMs));
-    }
-    if (exec3.cancelled) {
-      return {
-        success: false,
-        exitCode: 130,
-        errorMessage: "Execution was cancelled by user."
-      };
-    }
-    if (this.behavior.simulateRateLimit) {
-      return {
-        success: false,
-        exitCode: 429,
-        errorMessage: "Provider HTTP 429: Rate limit exceeded (sliding window throttled)."
-      };
-    }
-    if (this.behavior.simulateCrash) {
-      throw new Error("SIGKILL: Runner process terminated abruptly.");
-    }
-    if (this.behavior.simulateMalformedPatch) {
-      return {
-        success: true,
-        exitCode: 0,
-        patch: "MALFORMED PATCH CORRUPTED HEADER &&*&@#",
-        reportedUsage: this.behavior.reportedCost
-      };
-    }
-    const exitCode = this.behavior.exitCode !== void 0 ? this.behavior.exitCode : 0;
-    const isSuccess = exitCode === 0;
-    return {
-      success: isSuccess,
-      exitCode,
-      patch: isSuccess ? this.behavior.patchToGenerate : void 0,
-      evidence: [
-        { command: "npm test", exitCode: isSuccess ? 0 : 1, output: isSuccess ? "All checks passed." : "Assertion error in test suite." }
-      ],
-      reportedUsage: this.behavior.reportedCost,
-      unresolvedQuestions: this.behavior.unresolvedQuestions,
-      rawOutput: `Worker execution complete with exit code ${exitCode}.`
-    };
-  }
-  async cancel(executionId) {
-    const exec3 = this.activeExecutions.get(executionId);
-    if (!exec3) {
-      return { confirmed: true, reason: "Already terminated or unknown" };
-    }
-    if (this.behavior.simulateCancellationHang) {
-      return {
-        confirmed: false,
-        reason: "Process ignored SIGTERM and cancellation timed out."
-      };
-    }
-    exec3.cancelled = true;
-    return {
-      confirmed: true,
-      reason: "SIGTERM acknowledged and process terminated cleanly."
-    };
-  }
-};
-
-// test/m1Tests.ts
+// test/subtaskRouterTests.ts
 function assert(condition, message) {
   if (!condition) {
     throw new Error(`Assertion failed: ${message}`);
   }
 }
-async function runM1Tests() {
-  console.log("=== Running Milestone M1 Integration Tests ===");
-  const testRoot = path10.join(__dirname, "..", "scratch", "m1-test-workspace");
-  fs9.mkdirSync(testRoot, { recursive: true });
-  const sampleFile = path10.join(testRoot, "Feature.ts");
-  fs9.writeFileSync(sampleFile, 'export const version = "0.1.0";\n', "utf8");
-  console.log("\n--- Test 1: Full Supervised Ticket Execution Loop ---");
+var MockRunnerAdapter = class {
+  id = "mock-adapter";
+  tier = "T0_HEURISTIC";
+  async start(context) {
+    return { executionId: `exec-${context.attemptId}` };
+  }
+  async collectResult(executionId) {
+    return {
+      success: true,
+      exitCode: 0,
+      stdout: "Executed mock task successfully",
+      patch: ""
+    };
+  }
+  async cancel() {
+  }
+};
+async function runSubtaskRouterTests() {
+  console.log("=== Running Sub-Model Router & Dispatcher Tests ===");
+  console.log("\n--- Test 1: Task Category Classification Heuristics & Labels ---");
+  assert(
+    SubtaskRouter.classify({ labels: ["discovery", "probe"] }) === "discovery",
+    "Labels with discovery/probe should classify as discovery"
+  );
+  assert(
+    SubtaskRouter.classify({ labels: ["architecture", "design"] }) === "architecture",
+    "Labels with architecture/design should classify as architecture"
+  );
+  assert(
+    SubtaskRouter.classify({ labels: ["verify", "qa"] }) === "verification",
+    "Labels with verify/qa should classify as verification"
+  );
+  assert(
+    SubtaskRouter.classify({ labels: ["quick-fix", "typo"] }) === "quick-fix",
+    "Labels with quick-fix/typo should classify as quick-fix"
+  );
+  assert(
+    SubtaskRouter.classify({ labels: ["refactor", "cleanup"] }) === "refactor",
+    "Labels with refactor should classify as refactor"
+  );
+  assert(
+    SubtaskRouter.classify({
+      title: "Locate endpoints",
+      objective: "Search codebase for all REST API route declarations"
+    }) === "discovery",
+    "Search/locate keywords should classify as discovery"
+  );
+  assert(
+    SubtaskRouter.classify({
+      title: "State Machine Decomposition",
+      objective: "High-level design and schema blueprint for multi-tenant isolation"
+    }) === "architecture",
+    "Decomposition and blueprint keywords should classify as architecture"
+  );
+  assert(
+    SubtaskRouter.classify({
+      title: "Run Integration Tests",
+      objective: "Assert all regression suites and validate API contracts"
+    }) === "verification",
+    "Assert and validate test keywords should classify as verification"
+  );
+  assert(
+    SubtaskRouter.classify({
+      title: "Fix typo in docstring",
+      objective: "Correct typo and whitespace formatting in markdown header"
+    }) === "quick-fix",
+    "Typo and formatting keywords should classify as quick-fix"
+  );
+  assert(
+    SubtaskRouter.classify({
+      title: "Restructure helper files",
+      objective: "Decouple legacy utilities and clean up circular dependencies"
+    }) === "refactor",
+    "Decouple and restructure keywords should classify as refactor"
+  );
+  assert(
+    SubtaskRouter.classify({
+      title: "Add JWT Auth handler",
+      objective: "Implement OAuth2 token refresh logic and persist tokens"
+    }) === "implementation",
+    "Default standard tasks should classify as implementation"
+  );
+  console.log("\u2714 Classification tests passed");
+  console.log("\n--- Test 2: Model Resolution with Default & Custom Profiles ---");
+  const defaultDiscRes = SubtaskRouter.resolveModel("discovery");
+  assert(defaultDiscRes.effectiveTierId === "fast-discovery", "Default discovery should route to fast-discovery");
+  assert(defaultDiscRes.profile.costTier === "free", "fast-discovery should be free/cheap tier");
+  assert(!defaultDiscRes.isFallback, "Default discovery route should not be fallback");
+  const defaultArchRes = SubtaskRouter.resolveModel("architecture");
+  assert(defaultArchRes.effectiveTierId === "deep-reasoner", "Default architecture should route to deep-reasoner");
+  assert(defaultArchRes.profile.costTier === "high", "deep-reasoner should be high-reasoning tier");
+  const defaultImplRes = SubtaskRouter.resolveModel("implementation");
+  assert(defaultImplRes.effectiveTierId === "standard-coder", "Default implementation should route to standard-coder");
+  const customRouting = {
+    defaultTier: "custom-pro",
+    categoryRoutes: {
+      discovery: "local-mistral",
+      architecture: "custom-pro"
+    },
+    fallbackTier: "custom-pro"
+  };
+  const customProfiles = [
+    {
+      id: "local-mistral",
+      name: "Mistral 7B Local",
+      model: "mistral:7b",
+      provider: "ollama",
+      costTier: "free"
+    },
+    {
+      id: "custom-pro",
+      name: "Gemini 1.5 Pro",
+      model: "gemini-1.5-pro",
+      provider: "google-genai",
+      costTier: "high"
+    }
+  ];
+  const customDiscRes = SubtaskRouter.resolveModel("discovery", customRouting, customProfiles);
+  assert(customDiscRes.effectiveTierId === "local-mistral", "Custom routing should route discovery to local-mistral");
+  assert(customDiscRes.profile.model === "mistral:7b", "Custom profile model should match");
+  const missingTierRouting = {
+    defaultTier: "custom-pro",
+    categoryRoutes: {
+      discovery: "non-existent-tier"
+    },
+    fallbackTier: "custom-pro"
+  };
+  const fallbackRes = SubtaskRouter.resolveModel("discovery", missingTierRouting, customProfiles);
+  assert(fallbackRes.isFallback === true, "Missing tier must trigger fallback");
+  assert(fallbackRes.effectiveTierId === "custom-pro", "Should fall back to fallbackTier custom-pro");
+  assert(fallbackRes.reason?.includes("not found"), "Fallback reason should document missing tier");
+  console.log("\u2714 Model resolution and fallback tests passed");
+  console.log("\n--- Test 3: Local-Only Board Policy Gating ---");
+  const localOnlyRes = SubtaskRouter.resolveModel(
+    "architecture",
+    SubtaskRouter.DEFAULT_ROUTING,
+    SubtaskRouter.DEFAULT_PROFILES,
+    { localOnly: true }
+  );
+  assert(localOnlyRes.effectiveTierId === "fast-discovery", "localOnly policy must reroute to local/free tier");
+  assert(localOnlyRes.isFallback === true, "localOnly reroute must flag isFallback = true");
+  assert(localOnlyRes.reason?.includes("localOnly"), "Reason must explain localOnly policy enforcement");
+  console.log("\u2714 Policy gating tests passed");
+  console.log("\n--- Test 4: Lead Planning Session Auto-Tagging & Plan Export ---");
+  const rawSubtasks = [
+    {
+      id: "TASK-1",
+      title: "Locate Indexing Code",
+      priority: "P1 \u2014 Core",
+      allowedScope: ["src/**"],
+      objective: "Research and locate indexing options in codebase",
+      acceptanceCriteria: ["Files mapped"]
+    },
+    {
+      id: "TASK-2",
+      title: "Design Architecture",
+      priority: "P0 \u2014 Critical",
+      allowedScope: ["src/index/**"],
+      objective: "High-level design and blueprint for inverted index architecture",
+      acceptanceCriteria: ["Schema finalized"]
+    },
+    {
+      id: "TASK-3",
+      title: "Implement Core Indexer",
+      priority: "P1 \u2014 Core",
+      allowedScope: ["src/index/**"],
+      objective: "Implement core indexer and querying algorithms",
+      acceptanceCriteria: ["Passes unit tests"]
+    },
+    {
+      id: "TASK-4",
+      title: "Validate Benchmarks",
+      priority: "P2 \u2014 Important",
+      allowedScope: ["test/**"],
+      objective: "Write performance verification benchmark tests and validate contracts",
+      acceptanceCriteria: ["Benchmarks pass"]
+    },
+    {
+      id: "TASK-5",
+      title: "Fix Typo in Config",
+      priority: "P3 \u2014 Minor",
+      allowedScope: ["config/**"],
+      objective: "Fix typo and whitespace formatting in markdown comments",
+      acceptanceCriteria: ["Lint clean"]
+    }
+  ];
+  const plan = LeadPlanningEngine.planGoal("Build High Performance Search Feature", rawSubtasks);
+  assert(plan.subtasks.length === 5, "Plan should contain 5 subtasks");
+  assert(plan.subtasks[0].category === "discovery", "Subtask 0 should be categorized as discovery");
+  assert(plan.subtasks[0].modelTier === "fast-discovery", "Subtask 0 should be assigned fast-discovery tier");
+  assert(plan.subtasks[1].category === "architecture", "Subtask 1 should be categorized as architecture");
+  assert(plan.subtasks[1].modelTier === "deep-reasoner", "Subtask 1 should be assigned deep-reasoner tier");
+  assert(plan.subtasks[2].category === "implementation", "Subtask 2 should be categorized as implementation");
+  assert(plan.subtasks[2].modelTier === "standard-coder", "Subtask 2 should be assigned standard-coder tier");
+  assert(plan.subtasks[3].category === "verification", "Subtask 3 should be categorized as verification");
+  assert(plan.subtasks[3].modelTier === "standard-coder", "Subtask 3 should be assigned standard-coder tier");
+  assert(plan.subtasks[4].category === "quick-fix", "Subtask 4 should be categorized as quick-fix");
+  assert(plan.subtasks[4].modelTier === "fast-discovery", "Subtask 4 should be assigned fast-discovery tier");
+  const markdownTicket0 = LeadPlanningEngine.formatTicketMarkdown(plan.subtasks[0], plan.epicOrGoal);
+  assert(markdownTicket0.includes("| **Category** | `discovery` |"), "Markdown table must include Category");
+  assert(markdownTicket0.includes("| **Model Tier** | `fast-discovery` |"), "Markdown table must list fast-discovery tier");
+  const markdownTicket1 = LeadPlanningEngine.formatTicketMarkdown(plan.subtasks[1], plan.epicOrGoal);
+  assert(markdownTicket1.includes("| **Category** | `architecture` |"), "Markdown table must include Category");
+  assert(markdownTicket1.includes("| **Model Tier** | `deep-reasoner` |"), "Markdown table must list deep-reasoner tier");
+  console.log("\u2714 Lead planning auto-tagging and markdown export tests passed");
+  console.log("\n--- Test 5: Orchestrator Runtime Dispatch Integration ---");
+  const testRoot = path11.join(__dirname, "..", "scratch", "subtask-router-test-ws");
+  if (fs10.existsSync(testRoot)) {
+    fs10.rmSync(testRoot, { recursive: true, force: true });
+  }
+  fs10.mkdirSync(testRoot, { recursive: true });
   const runtime = new OrchestratorRuntime(testRoot);
   await runtime.initialize();
-  const fakeAdapter = new FakeDeterministicAdapter();
-  fakeAdapter.behavior.patchToGenerate = `--- a/Feature.ts
-+++ b/Feature.ts
-@@ -1 +1 @@
--export const version = "0.1.0";
-+export const version = "0.2.0";
-`;
-  let eventCount = 0;
-  const output = await runtime.runAttempt(
-    fakeAdapter,
-    {
-      ticketId: "ORCH-TEST-01",
-      agentId: "fake-deterministic",
-      objective: "Bump version to 0.2.0",
-      targetFiles: [sampleFile],
-      verificationCommand: 'node -e "process.exit(0)"'
-      // verification command
-    },
-    (event) => {
-      eventCount++;
-    }
-  );
-  assert(output.success === true, "Attempt should succeed");
-  assert(output.attempt.status === "Review", `Expected status Review, got ${output.attempt.status}`);
-  assert(output.diff !== void 0 && output.diff.includes("0.2.0"), "Diff should contain modified version");
-  assert(output.verificationPassed === true, "Verification should pass");
-  assert(eventCount > 0, "Execution events should be streamed");
-  console.log("\u2713 One supervised ticket run produced verified patch in Review state.");
-  const manifest = output.attempt.manifest;
-  const allocation = {
-    attemptId: output.attempt.attemptId,
-    workspacePath: path10.join(testRoot, ".agentic-kanban", "worktrees", output.attempt.attemptId),
-    strategy: "snapshot",
-    manifest
-  };
-  const allocatedFile = path10.join(allocation.workspacePath, "Feature.ts");
-  fs9.writeFileSync(allocatedFile, 'export const version = "0.2.0";\n', "utf8");
-  const integResult = await runtime.workspaceManager.integrate(allocation);
-  assert(integResult.success === true, "Integration should succeed");
-  const integratedContent = fs9.readFileSync(sampleFile, "utf8");
-  assert(integratedContent.includes("0.2.0"), "Target file should be updated to 0.2.0");
-  console.log("\u2713 Guarded patch integration applied cleanly to target.");
-  console.log("\n--- Test 2: Crash Survival & Recovery Without Duplicate Execution ---");
-  const crashAttempt = TicketAttemptManager.createAttempt(
-    "ORCH-CRASH-01",
-    1,
-    "fake-deterministic",
-    "managed",
-    manifest,
-    { currency: "EUR", unitsReserved: 1, unitsSpentReported: 0, unitsSpentEstimated: 0, isSubscriptionQuota: false }
-  );
-  crashAttempt.status = "Running";
-  TicketAttemptManager.saveAttempt(testRoot, crashAttempt);
-  const recoveryRuntime = new OrchestratorRuntime(testRoot);
-  const recoveryResult = await recoveryRuntime.initialize();
-  assert(recoveryResult.recoveredCount >= 1, "Should detect at least 1 interrupted attempt");
-  const reloaded = TicketAttemptManager.loadAttempt(testRoot, crashAttempt.attemptId);
-  assert(reloaded?.status === "Interrupted", `Crashed attempt should be transitioned to Interrupted, got ${reloaded?.status}`);
-  assert(reloaded?.failureReason?.includes("Interrupted") === true, "Failure reason should document restart");
-  console.log("\u2713 Crash recovery marked in-flight attempt Interrupted without duplicate execution.");
-  console.log("\n--- Test 3: Lease Expiry and Stale Generation Protection ---");
-  const leaseManager = recoveryRuntime.leaseManager;
-  const expiredLease = leaseManager.acquireLease("ORCH-LEASE-01", 10);
-  await new Promise((r) => setTimeout(r, 25));
-  const validation = leaseManager.validateLease(expiredLease.token, "ORCH-LEASE-01");
-  assert(validation.valid === false, "Expired lease should be rejected");
-  assert(validation.reason?.includes("expired") === true, "Reason should mention expiration");
-  const staleLease = leaseManager.acquireLease("ORCH-STALE-01", 6e4);
-  const newerLease = leaseManager.acquireLease("ORCH-STALE-01", 6e4);
-  const staleValidation = leaseManager.validateLease(staleLease.token, "ORCH-STALE-01");
-  assert(staleValidation.valid === false, "Stale generation lease should be rejected");
-  assert(staleValidation.reason?.includes("Stale generation") === true, "Reason should mention stale generation");
-  console.log("\u2713 Stale workers and expired leases reliably rejected.");
-  console.log("\n--- Test 4: Guarded Patch Conflict on Baseline Divergence ---");
-  const conflictFile = path10.join(testRoot, "Conflict.ts");
-  fs9.writeFileSync(conflictFile, "const x = 1;\n", "utf8");
-  const conflictManifest = await recoveryRuntime.workspaceManager.captureBaseline([conflictFile]);
-  const conflictAlloc = await recoveryRuntime.workspaceManager.allocate("attempt-conflict-1", conflictManifest);
-  const workerFile = path10.join(conflictAlloc.workspacePath, "Conflict.ts");
-  fs9.writeFileSync(workerFile, "const x = 2;\n", "utf8");
-  fs9.writeFileSync(conflictFile, "const x = 999; // User edit during run!\n", "utf8");
-  const conflictResult = await recoveryRuntime.workspaceManager.integrate(conflictAlloc);
-  assert(conflictResult.success === false, "Integration should fail on divergence");
-  assert(conflictResult.conflictFiles?.includes("Conflict.ts") === true, "Conflict should list Conflict.ts");
-  const preservedUserContent = fs9.readFileSync(conflictFile, "utf8");
-  assert(preservedUserContent.includes("999"), "User edit must be preserved without overwrite");
-  console.log("\u2713 Guarded patch prevented overwriting user WIP on baseline divergence.");
-  recoveryRuntime.dispose();
-  try {
-    fs9.rmSync(testRoot, { recursive: true, force: true });
-  } catch {
-  }
-  console.log("\n=== ALL M1 TESTS PASSED SUCCESSFULLY! ===\n");
+  const mockAdapter = new MockRunnerAdapter();
+  const dispatchResult = await runtime.runAttempt(mockAdapter, {
+    ticketId: "ticket-discovery-probe",
+    agentId: "worker-1",
+    objective: "Search files and locate schema references",
+    labels: ["discovery"]
+  });
+  assert(dispatchResult.success === true, "Attempt should execute successfully");
+  assert(dispatchResult.modelResolution !== void 0, "modelResolution must be returned");
+  assert(dispatchResult.modelResolution?.category === "discovery", "Task category should be discovery");
+  assert(dispatchResult.modelResolution?.effectiveTierId === "fast-discovery", "Effective tier should be fast-discovery");
+  assert(dispatchResult.attempt.taskCategory === "discovery", "AttemptRecord must persist taskCategory");
+  assert(dispatchResult.attempt.modelTier === "fast-discovery", "AttemptRecord must persist modelTier");
+  console.log("\u2714 Orchestrator runtime dispatch integration tests passed");
+  console.log("\n=== All Sub-Model Router & Dispatcher Tests Passed! ===\n");
 }
-runM1Tests().catch((err) => {
-  console.error("M1 Test Failure:", err);
+runSubtaskRouterTests().catch((err) => {
+  console.error("Test suite failed:", err);
   process.exit(1);
 });
-//# sourceMappingURL=m1Tests.js.map
+//# sourceMappingURL=subtaskRouterTests.js.map

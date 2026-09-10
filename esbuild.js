@@ -161,6 +161,19 @@ async function run() {
     });
   }
 
+  if (fs.existsSync(path.join(__dirname, 'test', 'subtaskRouterTests.ts'))) {
+    await esbuild.build({
+      entryPoints: ['./test/subtaskRouterTests.ts'],
+      bundle: true,
+      outfile: './dist/subtaskRouterTests.js',
+      external: ['vscode'],
+      format: 'cjs',
+      platform: 'node',
+      sourcemap: true,
+      minify: false
+    });
+  }
+
   if (fs.existsSync(path.join(__dirname, 'test', 'benchmarks', 'runBenchmarks.ts'))) {
     await esbuild.build({
       entryPoints: ['./test/benchmarks/runBenchmarks.ts'],
