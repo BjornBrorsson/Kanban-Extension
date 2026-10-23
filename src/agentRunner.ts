@@ -3,6 +3,31 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { Ticket, Assignee, BoardConfig } from './types';
 import { ConfigParser } from './configParser';
+import { ShellKind, detectShellKind, escapeForDoubleQuotes } from './shellEscape';
+
+export interface LaunchRequest {
+  kind: 'cli' | 'vscode-command';
+  ticket: Ticket;
+  assignee: Assignee;
+  command: string;
+  cwd: string;
+  prompt?: string;
+  model?: string;
+}
+
+export const DEFAULT_TASK = 'Review requirements and implement ticket {ticket_path}: {ticket_title}';
+
+export interface FormatOptions {
+  /** Instruction text substituted for {task} (defaults to implementing the ticket). */
+  task?: string;
+  model?: string;
+  /** e.g. `--model`; used for {model_args} and appended when the template has no model placeholder. */
+  modelFlag?: string;
+  shell?: ShellKind;
+}
+
+/** Model ids reach a shell unquoted, so only a conservative character set is accepted. */
+export const MODEL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:\/@+-]*$/;
 
 function getVsCode(): typeof vscodeTypes | undefined {
   try {
@@ -13,8 +38,6 @@ function getVsCode(): typeof vscodeTypes | undefined {
 }
 
 export class AgentRunner {
-  private static terminals: Map<string, any> = new Map();
-
   /**
    * Resolves the executable path for the Antigravity CLI (agy).
    * Resolution priority:
@@ -93,12 +116,15 @@ export class AgentRunner {
     assignee: Assignee,
     boardRoot: string,
     boardConfig?: BoardConfig,
-    rawTicketContent?: string
+    rawTicketContent?: string,
+    options: FormatOptions = {}
   ): string {
     const config = assignee.agentConfig;
     if (!config) return '';
 
     const vscode = getVsCode();
+    const shell: ShellKind = options.shell || detectShellKind(vscode?.env?.shell);
+    const esc = (v: string) => escapeForDoubleQuotes(v, shell);
     const workspaceFolder = vscode?.workspace?.workspaceFolders?.[0]?.uri.fsPath || path.dirname(boardRoot);
     const content = rawTicketContent ?? ticket.summary ?? ticket.title;
 
@@ -116,17 +142,32 @@ export class AgentRunner {
 
     const agyPath = this.resolveAntigravityPath(config.path || config.executable, effectiveBoardConfig);
 
+    // Ticket-derived text is untrusted (any agent or contributor can write a ticket): escape it for the
+    // target shell so a title like  x"; rm -rf ~; "  or  $(cmd)  stays inert inside the quoted prompt.
+    const model = options.model && MODEL_ID_PATTERN.test(options.model) ? options.model : '';
+    const modelArgs = model && options.modelFlag ? `${options.modelFlag} ${model}` : '';
+
+    // {task} is the instruction text (implement / review / plan). Its own placeholders are expanded with raw
+    // values first, then the whole sentence is escaped once.
+    const rawTask = (options.task || DEFAULT_TASK)
+      .replace(/\{ticket_path\}/g, () => ticket.path)
+      .replace(/\{ticket_title\}/g, () => ticket.title)
+      .replace(/\{ticket_id\}/g, () => ticket.id);
+
     const replacements: Record<string, string> = {
-      '{ticket_path}': ticket.path,
-      '{ticket_rel_path}': ticket.relativePath,
-      '{ticket_name}': ticket.filename,
-      '{ticket_id}': ticket.id,
-      '{ticket_title}': ticket.title,
-      '{ticket_summary}': ticket.summary,
-      '{ticket_content}': content.replace(/"/g, '\\"').slice(0, 1500),
-      '{workspace_root}': workspaceFolder,
-      '{board_root}': boardRoot,
-      '{column}': ticket.column,
+      '{task}': esc(rawTask),
+      '{ticket_path}': esc(ticket.path),
+      '{ticket_rel_path}': esc(ticket.relativePath),
+      '{ticket_name}': esc(ticket.filename),
+      '{ticket_id}': esc(ticket.id),
+      '{ticket_title}': esc(ticket.title),
+      '{ticket_summary}': esc(ticket.summary),
+      '{ticket_content}': esc(content.slice(0, 1500)),
+      '{workspace_root}': esc(workspaceFolder),
+      '{board_root}': esc(boardRoot),
+      '{column}': esc(ticket.column),
+      '{model}': model,
+      '{model_args}': modelArgs,
       '{agy_path}': agyPath,
       '{antigravity_path}': agyPath,
       '{executable}': config.path || config.executable || agyPath,
@@ -153,12 +194,14 @@ export class AgentRunner {
       }
     }
 
-    for (const [placeholder, value] of Object.entries(replacements)) {
-      const safeValue = (placeholder === '{ticket_title}' || placeholder === '{ticket_summary}' || placeholder === '{ticket_name}')
-        ? value.replace(/"/g, '\\"')
-        : value;
-      command = command.split(placeholder).join(safeValue);
+    // A model was chosen but the template has no placeholder for it: append the provider's model flag.
+    if (modelArgs && !command.includes('{model_args}') && !command.includes('{model}')) {
+      command = `${command.trimEnd()} ${modelArgs}`;
     }
+
+    // Single pass: a substituted value is never re-scanned, so ticket text containing "{model}" etc. stays literal.
+    command = command.replace(/\{[a-z_]+\}/g, m => (m in replacements ? replacements[m] : m));
+    command = command.replace(/ {2,}/g, ' ').trim();
 
     // On Windows PowerShell, ensure quoted executable path starts with the call operator '&'
     if (process.platform === 'win32') {
@@ -171,22 +214,23 @@ export class AgentRunner {
     return command;
   }
 
-  public static async dispatch(
+  /** Resolves everything needed to start an agent for a ticket (command text, cwd, prompt) without starting it. */
+  public static async prepareLaunch(
     ticket: Ticket,
     assignee: Assignee,
     boardRoot: string,
-    boardConfig?: BoardConfig
-  ): Promise<boolean> {
+    boardConfig?: BoardConfig,
+    options: FormatOptions = {}
+  ): Promise<LaunchRequest | null> {
     const vscode = getVsCode();
     if (assignee.type !== 'agent' || !assignee.agentConfig) {
       vscode?.window.showWarningMessage(`Assignee "${assignee.name}" is not configured as an executable agent.`);
-      return false;
+      return null;
     }
 
     const config = assignee.agentConfig;
     const workspaceFolder = vscode?.workspace?.workspaceFolders?.[0]?.uri.fsPath || path.dirname(boardRoot);
 
-    // Read full ticket content if needed for substitution
     let ticketContent = '';
     try {
       ticketContent = await fs.promises.readFile(ticket.path, 'utf8');
@@ -195,35 +239,13 @@ export class AgentRunner {
     }
 
     if (config.type === 'cli') {
-      const command = this.formatCliCommand(ticket, assignee, boardRoot, boardConfig, ticketContent);
+      const command = this.formatCliCommand(ticket, assignee, boardRoot, boardConfig, ticketContent, options);
       const cwd = config.workingDir ? config.workingDir.replace('{workspace_root}', workspaceFolder).replace('{board_root}', boardRoot) : workspaceFolder;
+      return { kind: 'cli', ticket, assignee, command, cwd, model: options.model };
+    }
 
-      const terminalName = `Agent: ${assignee.name}`;
-      let terminal = this.terminals.get(terminalName);
-
-      // Check if terminal still exists in active terminals
-      const existing = vscode?.window.terminals?.find(t => t.name === terminalName);
-      if (!existing) {
-        terminal = vscode?.window.createTerminal({
-          name: terminalName,
-          cwd
-        });
-        if (terminal) {
-          this.terminals.set(terminalName, terminal);
-        }
-      } else {
-        terminal = existing;
-      }
-
-      terminal?.show(false);
-      if (!existing) {
-        await new Promise(r => setTimeout(r, 600));
-      }
-      terminal?.sendText(command);
-
-      vscode?.window.showInformationMessage(`Dispatched ticket "${ticket.title}" to ${assignee.name}.`);
-      return true;
-    } else if (config.type === 'vscode-command') {
+    if (config.type === 'vscode-command') {
+      // The prompt goes to the clipboard / chat box, not a shell, so no shell escaping applies.
       const replacements: Record<string, string> = {
         '{ticket_path}': ticket.path,
         '{ticket_rel_path}': ticket.relativePath,
@@ -231,32 +253,63 @@ export class AgentRunner {
         '{ticket_id}': ticket.id,
         '{ticket_title}': ticket.title,
         '{ticket_summary}': ticket.summary,
-        '{ticket_content}': ticketContent.replace(/"/g, '\\"').slice(0, 1500),
+        '{ticket_content}': ticketContent.slice(0, 1500),
         '{workspace_root}': workspaceFolder,
         '{board_root}': boardRoot,
-        '{column}': ticket.column
+        '{column}': ticket.column,
+        '{model}': options.model || ''
       };
+      let prompt = config.prompt || `Please review and work on ticket "${ticket.title}" at: ${ticket.path}
 
-      let prompt = config.prompt || `Please review and work on ticket "${ticket.title}" at: ${ticket.path}\n\nSummary:\n${ticket.summary}`;
+Summary:
+${ticket.summary}`;
       for (const [placeholder, value] of Object.entries(replacements)) {
         prompt = prompt.split(placeholder).join(value);
       }
-
-      // Copy prompt to clipboard
-      await vscode?.env.clipboard.writeText(prompt);
-
-      vscode?.window.showInformationMessage(
-        `Copied ticket context to clipboard! Triggering ${assignee.name} (${config.command})...`
-      );
-
-      try {
-        await vscode?.commands.executeCommand(config.command);
-      } catch (err: any) {
-        vscode?.window.showErrorMessage(`Failed to execute command "${config.command}": ${err?.message || err}`);
-      }
-      return true;
+      return { kind: 'vscode-command', ticket, assignee, command: config.command, cwd: workspaceFolder, prompt, model: options.model };
     }
 
-    return false;
+    return null;
+  }
+
+  /** Optional hook (set by the fleet controller) that tracks each launch as a session. */
+  public static launcher?: (req: LaunchRequest) => Promise<boolean>;
+
+  public static async dispatch(
+    ticket: Ticket,
+    assignee: Assignee,
+    boardRoot: string,
+    boardConfig?: BoardConfig,
+    options: FormatOptions = {}
+  ): Promise<boolean> {
+    const req = await this.prepareLaunch(ticket, assignee, boardRoot, boardConfig, options);
+    if (!req) return false;
+    return this.launcher ? this.launcher(req) : this.launchDefault(req);
+  }
+
+  /** Fallback launcher: a fresh terminal per dispatch (never type a new command into a still-running agent). */
+  public static async launchDefault(req: LaunchRequest): Promise<boolean> {
+    const vscode = getVsCode();
+    if (req.kind === 'cli') {
+      const base = `Agent: ${req.assignee.name} · ${req.ticket.id || req.ticket.filename}`;
+      let name = base;
+      let n = 2;
+      while (vscode?.window.terminals?.some(t => t.name === name)) name = `${base} #${n++}`;
+      const terminal = vscode?.window.createTerminal({ name, cwd: req.cwd });
+      if (!terminal) return false;
+      terminal.show(false);
+      await new Promise(r => setTimeout(r, 600));
+      terminal.sendText(req.command);
+      vscode?.window.showInformationMessage(`Dispatched ticket "${req.ticket.title}" to ${req.assignee.name}.`);
+      return true;
+    }
+    await vscode?.env.clipboard.writeText(req.prompt || '');
+    vscode?.window.showInformationMessage(`Copied ticket context to clipboard! Triggering ${req.assignee.name} (${req.command})...`);
+    try {
+      await vscode?.commands.executeCommand(req.command);
+    } catch (err: any) {
+      vscode?.window.showErrorMessage(`Failed to execute command "${req.command}": ${err?.message || err}`);
+    }
+    return true;
   }
 }

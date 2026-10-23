@@ -324,14 +324,14 @@ export class TicketParser {
     // Update markdown table row: e.g. `| **Status** | Backlog |` or `| Status | Backlog |`
     const tableRegex = /^(\|\s*\*{0,2}Status\*{0,2}\s*\|\s*)([^|\r\n]+?)(\s*\|.*)$/im;
     if (tableRegex.test(updated)) {
-      updated = updated.replace(tableRegex, `$1${newStatus} |`);
+      updated = updated.replace(tableRegex, (_m, pre: string, _old: string, rest: string) => `${pre}${newStatus} ${rest.trimStart()}`);
       return updated;
     }
 
     // Update YAML frontmatter: `status: Backlog`
     const frontmatterRegex = /^(status\s*:\s*)([^\r\n]+)$/im;
     if (frontmatterRegex.test(updated)) {
-      updated = updated.replace(frontmatterRegex, `$1${newStatus}`);
+      updated = updated.replace(frontmatterRegex, (_m, pre: string) => `${pre}${newStatus}`);
       return updated;
     }
 
@@ -346,34 +346,34 @@ export class TicketParser {
     // 1. Update existing markdown table row: e.g. `| **Assignee** | Björn |` or `| Assignee | ... |`
     const tableAssigneeRegex = /^(\|\s*\*{0,2}Assignee\*{0,2}\s*\|\s*)([^|\r\n]+?)(\s*\|.*)$/im;
     if (tableAssigneeRegex.test(updated)) {
-      updated = updated.replace(tableAssigneeRegex, `$1${val} |`);
+      updated = updated.replace(tableAssigneeRegex, (_m, pre: string, _old: string, rest: string) => `${pre}${val} ${rest.trimStart()}`);
       return updated;
     }
 
     // 2. If table exists with Status row, insert Assignee row after Status
     const statusRowRegex = /^(\|\s*\*{0,2}Status\*{0,2}\s*\|.*)$/im;
     if (statusRowRegex.test(updated)) {
-      updated = updated.replace(statusRowRegex, `$1${eol}| **Assignee** | ${val} |`);
+      updated = updated.replace(statusRowRegex, (_m, row: string) => `${row}${eol}| **Assignee** | ${val} |`);
       return updated;
     }
 
     // 3. If table has other rows (Priority, Type, Epic, Field/Value divider), insert after the divider or row
     const dividerRegex = /^(\|[-:\s|]+[-:]+\|)$/im;
     if (dividerRegex.test(updated)) {
-      updated = updated.replace(dividerRegex, `$1${eol}| **Assignee** | ${val} |`);
+      updated = updated.replace(dividerRegex, (_m, row: string) => `${row}${eol}| **Assignee** | ${val} |`);
       return updated;
     }
 
     const anyTableRowRegex = /^(\|\s*\*{0,2}(?:Priority|Type|Epic|Estimate|Milestone)\*{0,2}\s*\|.*)$/im;
     if (anyTableRowRegex.test(updated)) {
-      updated = updated.replace(anyTableRowRegex, `$1${eol}| **Assignee** | ${val} |`);
+      updated = updated.replace(anyTableRowRegex, (_m, row: string) => `${row}${eol}| **Assignee** | ${val} |`);
       return updated;
     }
 
     // 4. Update or insert into YAML frontmatter
     const frontmatterAssigneeRegex = /^(assignee\s*:\s*)([^\r\n]+)$/im;
     if (frontmatterAssigneeRegex.test(updated)) {
-      updated = updated.replace(frontmatterAssigneeRegex, `$1${val === '—' ? '' : val}`);
+      updated = updated.replace(frontmatterAssigneeRegex, (_m, pre: string) => `${pre}${val === '—' ? '' : val}`);
       return updated;
     }
 
@@ -383,7 +383,7 @@ export class TicketParser {
     if (fmMatch) {
       const fmContent = fmMatch[1];
       const newFm = `---${eol}${fmContent}${eol}assignee: ${val === '—' ? '' : val}${eol}---`;
-      return updated.replace(frontmatterBlockRegex, newFm);
+      return updated.replace(frontmatterBlockRegex, () => newFm);
     }
 
     // 5. Freeform markdown: insert metadata table
@@ -392,7 +392,7 @@ export class TicketParser {
     const headingMatch = updated.match(headingRegex);
     const tableBlock = `| Field | Value |${eol}|-------|-------|${eol}| **Assignee** | ${val} |${eol}${eol}`;
     if (headingMatch) {
-      return updated.replace(headingRegex, `${headingMatch[1]}${tableBlock}`);
+      return updated.replace(headingRegex, () => `${headingMatch[1]}${tableBlock}`);
     }
 
     // Otherwise prepend at top of document

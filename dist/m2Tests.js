@@ -2782,12 +2782,12 @@ var TicketParser = class {
     let updated = content;
     const tableRegex = /^(\|\s*\*{0,2}Status\*{0,2}\s*\|\s*)([^|\r\n]+?)(\s*\|.*)$/im;
     if (tableRegex.test(updated)) {
-      updated = updated.replace(tableRegex, `$1${newStatus} |`);
+      updated = updated.replace(tableRegex, (_m, pre, _old, rest) => `${pre}${newStatus} ${rest.trimStart()}`);
       return updated;
     }
     const frontmatterRegex = /^(status\s*:\s*)([^\r\n]+)$/im;
     if (frontmatterRegex.test(updated)) {
-      updated = updated.replace(frontmatterRegex, `$1${newStatus}`);
+      updated = updated.replace(frontmatterRegex, (_m, pre) => `${pre}${newStatus}`);
       return updated;
     }
     return updated;
@@ -2798,27 +2798,27 @@ var TicketParser = class {
     const val = newAssignee && newAssignee.trim() ? newAssignee.trim() : "\u2014";
     const tableAssigneeRegex = /^(\|\s*\*{0,2}Assignee\*{0,2}\s*\|\s*)([^|\r\n]+?)(\s*\|.*)$/im;
     if (tableAssigneeRegex.test(updated)) {
-      updated = updated.replace(tableAssigneeRegex, `$1${val} |`);
+      updated = updated.replace(tableAssigneeRegex, (_m, pre, _old, rest) => `${pre}${val} ${rest.trimStart()}`);
       return updated;
     }
     const statusRowRegex = /^(\|\s*\*{0,2}Status\*{0,2}\s*\|.*)$/im;
     if (statusRowRegex.test(updated)) {
-      updated = updated.replace(statusRowRegex, `$1${eol}| **Assignee** | ${val} |`);
+      updated = updated.replace(statusRowRegex, (_m, row) => `${row}${eol}| **Assignee** | ${val} |`);
       return updated;
     }
     const dividerRegex = /^(\|[-:\s|]+[-:]+\|)$/im;
     if (dividerRegex.test(updated)) {
-      updated = updated.replace(dividerRegex, `$1${eol}| **Assignee** | ${val} |`);
+      updated = updated.replace(dividerRegex, (_m, row) => `${row}${eol}| **Assignee** | ${val} |`);
       return updated;
     }
     const anyTableRowRegex = /^(\|\s*\*{0,2}(?:Priority|Type|Epic|Estimate|Milestone)\*{0,2}\s*\|.*)$/im;
     if (anyTableRowRegex.test(updated)) {
-      updated = updated.replace(anyTableRowRegex, `$1${eol}| **Assignee** | ${val} |`);
+      updated = updated.replace(anyTableRowRegex, (_m, row) => `${row}${eol}| **Assignee** | ${val} |`);
       return updated;
     }
     const frontmatterAssigneeRegex = /^(assignee\s*:\s*)([^\r\n]+)$/im;
     if (frontmatterAssigneeRegex.test(updated)) {
-      updated = updated.replace(frontmatterAssigneeRegex, `$1${val === "\u2014" ? "" : val}`);
+      updated = updated.replace(frontmatterAssigneeRegex, (_m, pre) => `${pre}${val === "\u2014" ? "" : val}`);
       return updated;
     }
     const frontmatterBlockRegex = /^---\r?\n([\s\S]*?)\r?\n---/;
@@ -2826,13 +2826,13 @@ var TicketParser = class {
     if (fmMatch) {
       const fmContent = fmMatch[1];
       const newFm = `---${eol}${fmContent}${eol}assignee: ${val === "\u2014" ? "" : val}${eol}---`;
-      return updated.replace(frontmatterBlockRegex, newFm);
+      return updated.replace(frontmatterBlockRegex, () => newFm);
     }
     const headingRegex = /^(#\s+[^\r\n]+(?:\r?\n)+)/;
     const headingMatch = updated.match(headingRegex);
     const tableBlock = `| Field | Value |${eol}|-------|-------|${eol}| **Assignee** | ${val} |${eol}${eol}`;
     if (headingMatch) {
-      return updated.replace(headingRegex, `${headingMatch[1]}${tableBlock}`);
+      return updated.replace(headingRegex, () => `${headingMatch[1]}${tableBlock}`);
     }
     return `${tableBlock}${updated}`;
   }

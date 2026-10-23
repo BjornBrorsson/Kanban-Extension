@@ -4,6 +4,7 @@ import * as fs from 'fs';
 import { Board, Ticket, MultiBoardOverview, WorkLogEntry } from './types';
 import { BoardDiscovery } from './boardDiscovery';
 import { TicketParser } from './ticketParser';
+import { isInside, safeJoin, slugify } from './pathUtils';
 
 export class BoardManager {
   private static instance: BoardManager;
@@ -13,6 +14,8 @@ export class BoardManager {
   public readonly onDidChangeBoard = this.changeEmitter.event;
 
   private debounceTimer: NodeJS.Timeout | null = null;
+  private pendingFiles: Set<string> = new Set();
+  private workLogCache: Map<string, { mtime: number; logs: WorkLogEntry[] }> = new Map();
 
   public static getInstance(): BoardManager {
     if (!this.instance) {
@@ -102,12 +105,18 @@ export class BoardManager {
             blockedByDependencyCount++;
           }
 
-          if (t.hasWorkLog && fs.existsSync(t.path)) {
-            try {
-              const fileContent = fs.readFileSync(t.path, 'utf8');
-              const logs = TicketParser.extractWorkLogEntries(fileContent, t.id, t.title, t.path, b.id, b.name);
-              recentWorkLogs.push(...logs);
-            } catch {}
+          if (t.hasWorkLog) {
+            const cached = this.workLogCache.get(t.path);
+            if (cached && cached.mtime === t.mtime) {
+              recentWorkLogs.push(...cached.logs);
+            } else {
+              try {
+                const fileContent = fs.readFileSync(t.path, 'utf8');
+                const logs = TicketParser.extractWorkLogEntries(fileContent, t.id, t.title, t.path, b.id, b.name);
+                this.workLogCache.set(t.path, { mtime: t.mtime, logs });
+                recentWorkLogs.push(...logs);
+              } catch {}
+            }
           }
         }
       }
@@ -143,10 +152,8 @@ export class BoardManager {
 
   public findBoardForTicketPath(ticketPath: string): Board | undefined {
     if (!ticketPath) return undefined;
-    const resolved = path.resolve(ticketPath).toLowerCase();
     for (const board of this.boards.values()) {
-      const boardRoot = path.resolve(board.rootPath).toLowerCase();
-      if (resolved.startsWith(boardRoot)) {
+      if (isInside(board.rootPath, ticketPath)) {
         return board;
       }
     }
@@ -200,7 +207,7 @@ export class BoardManager {
     targetSubfolder: string | null
   ): Promise<boolean> {
     let board = this.getBoard(boardId);
-    if (!board || (ticketPath && !path.resolve(ticketPath).toLowerCase().startsWith(path.resolve(board.rootPath).toLowerCase()))) {
+    if (!board || (ticketPath && !isInside(board.rootPath, ticketPath))) {
       const candidate = this.findBoardForTicketPath(ticketPath);
       if (candidate) {
         board = candidate;
@@ -218,9 +225,11 @@ export class BoardManager {
     }
 
     const filename = path.basename(sourcePath);
-    let targetDir = path.join(board.rootPath, targetColumn);
-    if (targetSubfolder) {
-      targetDir = path.join(targetDir, targetSubfolder);
+    // Column/subfolder names come from the webview: never let them escape the board root.
+    const targetDir = safeJoin(board.rootPath, targetColumn, targetSubfolder);
+    if (!targetDir || path.resolve(targetDir) === path.resolve(board.rootPath)) {
+      vscode.window.showErrorMessage(`Invalid target column: ${targetColumn}`);
+      return false;
     }
 
     if (!fs.existsSync(targetDir)) {
@@ -231,11 +240,15 @@ export class BoardManager {
     if (path.resolve(targetPath).toLowerCase() === path.resolve(sourcePath).toLowerCase()) {
       return true; // Already in destination
     }
+    if (fs.existsSync(targetPath)) {
+      vscode.window.showErrorMessage(`Cannot move "${filename}": a ticket with that name already exists in ${targetColumn}${targetSubfolder ? '/' + targetSubfolder : ''}.`);
+      return false;
+    }
 
     try {
-      // 1. Move file with fallback
+      // 1. Move file with fallback (never overwrite an existing ticket)
       try {
-        await vscode.workspace.fs.rename(vscode.Uri.file(sourcePath), vscode.Uri.file(targetPath), { overwrite: true });
+        await vscode.workspace.fs.rename(vscode.Uri.file(sourcePath), vscode.Uri.file(targetPath), { overwrite: false });
       } catch (fsErr) {
         await fs.promises.rename(sourcePath, targetPath);
       }
@@ -270,7 +283,7 @@ export class BoardManager {
     assigneeName: string
   ): Promise<boolean> {
     let board = this.getBoard(boardId);
-    if (!board || (ticketPath && !path.resolve(ticketPath).toLowerCase().startsWith(path.resolve(board.rootPath).toLowerCase()))) {
+    if (!board || (ticketPath && !isInside(board.rootPath, ticketPath))) {
       const candidate = this.findBoardForTicketPath(ticketPath);
       if (candidate) {
         board = candidate;
@@ -343,36 +356,35 @@ export class BoardManager {
     const board = this.getBoard(boardId);
     if (!board) return null;
 
-    let targetDir = path.join(board.rootPath, targetColumn);
-    if (targetSubfolder) {
-      targetDir = path.join(targetDir, targetSubfolder);
+    const targetDir = safeJoin(board.rootPath, targetColumn, targetSubfolder);
+    if (!targetDir || path.resolve(targetDir) === path.resolve(board.rootPath)) {
+      vscode.window.showErrorMessage(`Invalid target column: ${targetColumn}`);
+      return null;
     }
 
     if (!fs.existsSync(targetDir)) {
       await fs.promises.mkdir(targetDir, { recursive: true });
     }
 
-    // Generate clean filename
-    const slug = title
-      .toLowerCase()
-      .replace(/[^a-z0-9_-]/g, '-')
-      .replace(/-+/g, '-')
-      .slice(0, 40);
+    // Generate clean filename (accent-folded so non-English titles stay readable)
+    const slug = slugify(title);
     const dateStr = new Date().toISOString().slice(0, 10);
     let filename = `ticket-${dateStr}-${slug}.md`;
     let fullPath = path.join(targetDir, filename);
 
     // Deduplicate filename if exists
     let counter = 1;
+    let idSuffix = '';
     while (fs.existsSync(fullPath)) {
       filename = `ticket-${dateStr}-${slug}-${counter}.md`;
+      idSuffix = `-${counter}`;
       fullPath = path.join(targetDir, filename);
       counter++;
     }
 
     let defaultContent = initialContent;
     if (defaultContent) {
-      const generatedId = `T-${slug.toUpperCase()}`;
+      const generatedId = `T-${slug.toUpperCase()}${idSuffix}`;
       defaultContent = defaultContent
         .split('{id}').join(generatedId)
         .split('{title}').join(title)
@@ -466,7 +478,7 @@ ${colsList}
    - Clearly document the blocking factor in \`## Work Log\`.
 `;
 
-    return { targetPath, created: true, content };
+    return { targetPath, created: !fs.existsSync(targetPath), content };
   }
 
   public async initTemplates(boardId?: string): Promise<string[] | null> {
@@ -586,21 +598,30 @@ Brief description of the bug and its impact.
     const watcher = vscode.workspace.createFileSystemWatcher('**/*.md');
 
     const handleFileChange = (uri: vscode.Uri) => {
+      if (/[\\/](node_modules|\.git)[\\/]/.test(uri.fsPath)) return;
+      // Collect every changed file in the debounce window: a single shared timer must not drop other boards' events.
+      this.pendingFiles.add(uri.fsPath);
       if (this.debounceTimer) {
         clearTimeout(this.debounceTimer);
       }
       this.debounceTimer = setTimeout(async () => {
-        // Find which board this file belongs to
-        const filePath = uri.fsPath;
-        for (const board of this.boards.values()) {
-          if (filePath.startsWith(board.rootPath)) {
-            await this.reloadSingleBoard(board.rootPath);
-            return;
-          }
+        const files = Array.from(this.pendingFiles);
+        this.pendingFiles.clear();
+        const boardRoots = new Set<string>();
+        let unknown = false;
+        for (const filePath of files) {
+          const owner = Array.from(this.boards.values()).find(b => isInside(b.rootPath, filePath));
+          if (owner) boardRoots.add(owner.rootPath);
+          else unknown = true;
         }
-        // If not in known boards, maybe a new board or file was added, reload all
-        await this.reloadBoards();
-        this.changeEmitter.fire(null);
+        for (const root of boardRoots) {
+          await this.reloadSingleBoard(root);
+        }
+        if (unknown) {
+          // A new board or a file outside known boards: rediscover everything
+          await this.reloadBoards();
+          this.changeEmitter.fire(null);
+        }
       }, 300);
     };
 

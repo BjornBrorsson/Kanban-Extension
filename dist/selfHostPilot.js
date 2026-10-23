@@ -2648,7 +2648,7 @@ async function runSelfHostPilot() {
   assert(recoveryInfo.recoveredCount >= 1, "Restart recovered in-flight interrupted attempts");
   assert(fs10.existsSync(targetFile), "Target file remains 100% intact");
   steps.push("3. Simulated mid-run editor restart: Zero lost state, clean recovery without double-dispatch");
-  console.log("\u2713 Pilot 1 (Self-Hosting) completed successfully with verified patch, passing tests, and crash survival.\n");
+  console.log("\u2713 [simulated] Pilot 1 (Self-Hosting) completed successfully with verified patch, passing tests, and crash survival.\n");
   return { success: true, steps };
 }
 if (require.main === module) {

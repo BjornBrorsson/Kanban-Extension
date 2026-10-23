@@ -1375,3 +1375,14 @@ body.is-dragging-card .kanban-column {
   line-height: 1.4;
 }
 
+
+.assign-model {
+  margin-left: auto;
+  max-width: 130px;
+  font-size: 11px;
+  background: var(--vscode-input-background, #1e1e1e);
+  color: var(--vscode-input-foreground, #ddd);
+  border: 1px solid var(--vscode-widget-border, #555);
+  border-radius: 4px;
+  padding: 2px 4px;
+}

@@ -6,6 +6,7 @@ import { AgentRunner } from './agentRunner';
 import { Board, Ticket, Assignee } from './types';
 import { PromptFormatter } from './promptFormatter';
 import { TicketParser } from './ticketParser';
+import { FleetController } from './fleet/fleetController';
 
 export class KanbanWebviewManager {
   public static currentPanel: KanbanWebviewManager | undefined;
@@ -307,11 +308,13 @@ export class KanbanWebviewManager {
 
           // 4. If agent was selected, dispatch CLI or chat
           if (message.runCli && targetName) {
+            const fleetCtl = FleetController.get();
+            const provider = fleetCtl ? (fleetCtl.registry.get(message.providerId || assigneeId) || fleetCtl.registry.get(targetName)) : undefined;
             const assignee = targetBoard.config.assignees.find(
               a => (assigneeId && a.id === assigneeId) || a.name.toLowerCase() === targetName.toLowerCase()
             );
 
-            if (assignee && assignee.type === 'agent') {
+            if (provider || (assignee && assignee.type === 'agent')) {
               // Locate ticket object from reloaded board or parse from disk
               const reloadedBoard = boardManager.getBoard(targetBoard.id) || targetBoard;
               let ticketObj: Ticket | null = null;
@@ -332,11 +335,15 @@ export class KanbanWebviewManager {
                 const fileContent = await fs.promises.readFile(sourcePath, 'utf8');
                 ticketObj = TicketParser.parse(sourcePath, fileContent, targetBoard.rootPath, '', null);
                 if (ticketObj) {
-                  ticketObj.assignee = assignee.name;
+                  ticketObj.assignee = targetName;
                 }
               }
 
-              if (ticketObj) {
+              if (!ticketObj) {
+                vscode.window.showErrorMessage(`Assigned, but could not locate the ticket to start the agent: ${message.ticketPath}`);
+              } else if (provider && fleetCtl) {
+                await fleetCtl.dispatchTicket(targetBoard.id, ticketObj, provider.id, message.model);
+              } else if (assignee) {
                 await AgentRunner.dispatch(ticketObj, assignee, targetBoard.rootPath, targetBoard.config);
               }
             } else {
@@ -350,6 +357,14 @@ export class KanbanWebviewManager {
         } catch (err: any) {
           vscode.window.showErrorMessage(`Failed to assign ticket: ${err?.message || err}`);
         }
+        break;
+
+      case 'openProviders':
+        await vscode.commands.executeCommand('agenticKanban.openProviders');
+        break;
+
+      case 'openOrchestrator':
+        await vscode.commands.executeCommand('agenticKanban.openOrchestrator');
         break;
 
       case 'log':
@@ -376,7 +391,8 @@ export class KanbanWebviewManager {
         isOverview: false,
         boards: [],
         currentBoard: null,
-        overview: null
+        overview: null,
+        providers: this.providerSummaries()
       });
       return;
     }
@@ -389,7 +405,8 @@ export class KanbanWebviewManager {
         isOverview: true,
         boards: boards.map(b => ({ id: b.id, name: b.name, rootPath: b.rootPath })),
         currentBoard: null,
-        overview
+        overview,
+        providers: this.providerSummaries()
       });
       return;
     }
@@ -407,7 +424,21 @@ export class KanbanWebviewManager {
       isOverview: false,
       boards: boards.map(b => ({ id: b.id, name: b.name, rootPath: b.rootPath })),
       currentBoard,
-      overview: null
+      overview: null,
+      providers: this.providerSummaries()
+    });
+  }
+
+  /** Enabled agent providers for the assign menu (id/name never change together: rename-safe). */
+  private providerSummaries(): any[] {
+    const fleet = FleetController.get();
+    if (!fleet) return [];
+    return fleet.registry.list().filter(p => p.enabled).map(p => {
+      const u = fleet.sessions.usage(p);
+      return {
+        id: p.id, name: p.name, account: p.account || '', kind: p.kind, models: p.models, defaultModel: p.defaultModel,
+        type: p.type, state: u.state, running: u.running, maxParallel: u.maxParallel
+      };
     });
   }
 
@@ -507,6 +538,8 @@ export class KanbanWebviewManager {
           <span>New Ticket</span>
         </button>
 
+        <button id="btnOrchestrator" class="nav-action-btn secondary" title="Orchestrator: usage, plan and running sub-agents"><span>Orchestrator</span></button>
+        <button id="btnProviders" class="nav-action-btn secondary" title="Configure agent providers, models and limits"><span>Agents</span></button>
         <button id="btnConfig" class="icon-btn" title="Open Board Configuration">
           <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
             <circle cx="12" cy="12" r="3"/>

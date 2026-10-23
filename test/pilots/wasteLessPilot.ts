@@ -123,8 +123,8 @@ export async function runWasteLessPilot(): Promise<WasteLessPilotReport> {
   fs.writeFileSync(reportOutPath, outcomeMarkdown, 'utf8');
 
   console.log('✓ WasteLess overnight pilot executed under bounded-autonomous €10.00 ceiling.');
-  console.log(`✓ Full Flutter verification stack passed: static analysis, unit tests, APK assembly.`);
-  console.log(`✓ Output APK tagged with exact tested Git revision SHA: ${testedCommitSha}.`);
+  console.log(`✓ [simulated: fake adapter, no Flutter run] Full Flutter verification stack passed: static analysis, unit tests, APK assembly.`);
+  console.log(`✓ [simulated] Output APK tagged with exact tested Git revision SHA: ${testedCommitSha}.`);
   console.log(`✓ Transparent reporting: Cash €${cashSpent.toFixed(2)} / ${subscriptionUnits} sub units.\n`);
 
   return {

@@ -103,6 +103,7 @@
       state.currentBoard = message.currentBoard || null;
       state.overview = message.overview || null;
       state.isOverview = !!message.isOverview;
+      state.providers = message.providers || [];
 
       updateNavigation();
       if (state.isOverview) {
@@ -127,6 +128,11 @@
       vscode.postMessage({ type: 'switchBoard', boardId: targetId });
     }
   });
+
+  const btnOrchestrator = document.getElementById('btnOrchestrator');
+  const btnProviders = document.getElementById('btnProviders');
+  if (btnOrchestrator) btnOrchestrator.addEventListener('click', () => vscode.postMessage({ type: 'openOrchestrator' }));
+  if (btnProviders) btnProviders.addEventListener('click', () => vscode.postMessage({ type: 'openProviders' }));
 
   btnOverviewView.addEventListener('click', () => {
     vscode.postMessage({ type: 'showOverview' });
@@ -388,6 +394,17 @@
         opt.textContent = ass;
         if (opt.value === currentAssignee) opt.selected = true;
         assigneeFilter.appendChild(opt);
+      });
+
+      // Add agent providers (renamable accounts) so their tickets can be filtered
+      (state.providers || []).forEach(p => {
+        if (!assignees.has(p.name)) {
+          const opt = document.createElement('option');
+          opt.value = p.name;
+          opt.textContent = p.name + ' 🤖';
+          assigneeFilter.appendChild(opt);
+          assignees.add(p.name);
+        }
       });
 
       // Add assignees from config
@@ -759,17 +776,41 @@
     popover.className = 'assign-popover';
 
     const assignees = board.config.assignees || [];
-    const agents = assignees.filter(a => a.type === 'agent');
+    const providers = state.providers || [];
+    // Providers (Agent Providers screen) are the source of truth; config.md agents only show when none exist.
+    const agents = providers.length ? [] : assignees.filter(a => a.type === 'agent');
     const humans = assignees.filter(a => a.type !== 'agent');
 
     let html = `
       <div class="assign-popover-header">
         <div class="assign-popover-title">Assign Ticket</div>
-        <div class="assign-popover-subtitle">${ticket.title}</div>
+        <div class="assign-popover-subtitle">${esc(ticket.title)}</div>
       </div>
     `;
 
-    // Agents section (Runs CLI in terminal)
+    if (providers.length > 0) {
+      html += `<div class="assign-section-title"><span>AI Agents</span> <span style="font-size:9.5px;color:#38bdf8;">(pick a model, click to start)</span></div>`;
+      providers.forEach(p => {
+        const key = (ticket.assignee || '').toLowerCase();
+        const isCurrent = key && (key === p.name.toLowerCase() || key === p.id.toLowerCase());
+        const modelSel = p.models && p.models.length
+          ? `<select class="assign-model" title="Model">${p.models.map(m => `<option value="${esc(m)}" ${m === p.defaultModel ? 'selected' : ''}>${esc(m)}</option>`).join('')}</select>`
+          : '';
+        const stateLabel = p.state && p.state !== 'ready' ? ` · ${esc(p.state)}` : '';
+        html += `
+          <div class="assign-item ${isCurrent ? 'selected' : ''}" data-assign-type="agent" data-provider="1" data-id="${esc(p.id)}" data-name="${esc(p.name)}">
+            <div class="assign-item-icon">🤖</div>
+            <div class="assign-item-info">
+              <div class="assign-item-name">${esc(p.name)}</div>
+              <div class="assign-item-detail">${esc(p.account ? p.account + ' · ' : '')}${p.running}/${p.maxParallel} running${stateLabel}</div>
+            </div>
+            ${modelSel}
+          </div>
+        `;
+      });
+    }
+
+    // Legacy config.md agents (only when no providers are configured)
     if (agents.length > 0) {
       html += `<div class="assign-section-title"><span>AI Agents</span> <span style="font-size:9.5px;color:#38bdf8;">(CLI in Terminal)</span></div>`;
       agents.forEach(agent => {
@@ -782,16 +823,22 @@
             ? agent.agentConfig.command.split(' ')[0]
             : 'CLI Agent';
         html += `
-          <div class="assign-item ${isCurrent ? 'selected' : ''}" data-assign-type="agent" data-id="${agent.id}" data-name="${agent.name}">
+          <div class="assign-item ${isCurrent ? 'selected' : ''}" data-assign-type="agent" data-id="${esc(agent.id)}" data-name="${esc(agent.name)}">
             <div class="assign-item-icon">🤖</div>
             <div class="assign-item-info">
-              <div class="assign-item-name">${agent.name}</div>
-              <div class="assign-item-detail">${agent.description || cmdSummary}</div>
+              <div class="assign-item-name">${esc(agent.name)}</div>
+              <div class="assign-item-detail">${esc(agent.description || cmdSummary)}</div>
             </div>
             <span class="assign-item-badge">CLI</span>
           </div>
         `;
       });
+    }
+
+    if (providers.length === 0 && agents.length === 0) {
+      html += `<div class="assign-section-title"><span>AI Agents</span></div>
+        <div class="assign-item" data-assign-type="configure"><div class="assign-item-icon">⚙</div>
+        <div class="assign-item-info"><div class="assign-item-name">Set up agent providers…</div></div></div>`;
     }
 
     // Humans section
@@ -803,11 +850,11 @@
           (ticket.assignee.toLowerCase() === human.name.toLowerCase() ||
             ticket.assignee.toLowerCase() === human.id.toLowerCase());
         html += `
-          <div class="assign-item ${isCurrent ? 'selected' : ''}" data-assign-type="human" data-id="${human.id}" data-name="${human.name}">
+          <div class="assign-item ${isCurrent ? 'selected' : ''}" data-assign-type="human" data-id="${esc(human.id)}" data-name="${esc(human.name)}">
             <div class="assign-item-icon">👤</div>
             <div class="assign-item-info">
-              <div class="assign-item-name">${human.name}</div>
-              <div class="assign-item-detail">${human.role || 'Human Developer'}</div>
+              <div class="assign-item-name">${esc(human.name)}</div>
+              <div class="assign-item-detail">${esc(human.role || 'Human Developer')}</div>
             </div>
           </div>
         `;
@@ -859,11 +906,20 @@
     popover.querySelectorAll('.assign-item').forEach(item => {
       item.addEventListener('click', e => {
         e.stopPropagation();
+        // Changing the model must not trigger the assignment itself.
+        if (e.target.closest('.assign-model')) return;
         const type = item.dataset.assignType;
         const id = item.dataset.id;
         const name = item.dataset.name;
+        const modelSelect = item.querySelector('.assign-model');
+        const model = modelSelect ? modelSelect.value : '';
 
         closeAssignMenu();
+
+        if (type === 'configure') {
+          vscode.postMessage({ type: 'openProviders' });
+          return;
+        }
 
         try {
           const boardId = board.id || (state.currentBoard ? state.currentBoard.id : '');
@@ -889,6 +945,8 @@
               ticketTitle: ticket.title,
               assigneeId: id || '',
               assigneeName: name || '',
+              providerId: item.dataset.provider ? id : '',
+              model,
               runCli: true
             });
           } else {
@@ -1642,10 +1700,14 @@
         }
       }
     }
-    const a = assignees.find(
-      x => x.name.toLowerCase() === assigneeName.toLowerCase() || x.id.toLowerCase() === assigneeName.toLowerCase()
-    );
+    const key = assigneeName.toLowerCase();
+    if ((state.providers || []).some(p => p.name.toLowerCase() === key || p.id.toLowerCase() === key)) return true;
+    const a = assignees.find(x => x.name.toLowerCase() === key || x.id.toLowerCase() === key);
     return a ? a.type === 'agent' : false;
+  }
+
+  function esc(v) {
+    return String(v == null ? '' : v).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   }
 
   function findAgentForTicket(ticket) {

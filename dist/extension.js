@@ -34,13 +34,13 @@ __export(extension_exports, {
   deactivate: () => deactivate
 });
 module.exports = __toCommonJS(extension_exports);
-var vscode5 = __toESM(require("vscode"));
-var path7 = __toESM(require("path"));
-var fs5 = __toESM(require("fs"));
+var vscode7 = __toESM(require("vscode"));
+var path11 = __toESM(require("path"));
+var fs9 = __toESM(require("fs"));
 
 // src/boardManager.ts
 var vscode2 = __toESM(require("vscode"));
-var path3 = __toESM(require("path"));
+var path4 = __toESM(require("path"));
 var fs2 = __toESM(require("fs"));
 
 // src/boardDiscovery.ts
@@ -280,12 +280,12 @@ var TicketParser = class {
     let updated = content;
     const tableRegex = /^(\|\s*\*{0,2}Status\*{0,2}\s*\|\s*)([^|\r\n]+?)(\s*\|.*)$/im;
     if (tableRegex.test(updated)) {
-      updated = updated.replace(tableRegex, `$1${newStatus} |`);
+      updated = updated.replace(tableRegex, (_m, pre, _old, rest) => `${pre}${newStatus} ${rest.trimStart()}`);
       return updated;
     }
     const frontmatterRegex = /^(status\s*:\s*)([^\r\n]+)$/im;
     if (frontmatterRegex.test(updated)) {
-      updated = updated.replace(frontmatterRegex, `$1${newStatus}`);
+      updated = updated.replace(frontmatterRegex, (_m, pre) => `${pre}${newStatus}`);
       return updated;
     }
     return updated;
@@ -296,27 +296,27 @@ var TicketParser = class {
     const val = newAssignee && newAssignee.trim() ? newAssignee.trim() : "\u2014";
     const tableAssigneeRegex = /^(\|\s*\*{0,2}Assignee\*{0,2}\s*\|\s*)([^|\r\n]+?)(\s*\|.*)$/im;
     if (tableAssigneeRegex.test(updated)) {
-      updated = updated.replace(tableAssigneeRegex, `$1${val} |`);
+      updated = updated.replace(tableAssigneeRegex, (_m, pre, _old, rest) => `${pre}${val} ${rest.trimStart()}`);
       return updated;
     }
     const statusRowRegex = /^(\|\s*\*{0,2}Status\*{0,2}\s*\|.*)$/im;
     if (statusRowRegex.test(updated)) {
-      updated = updated.replace(statusRowRegex, `$1${eol}| **Assignee** | ${val} |`);
+      updated = updated.replace(statusRowRegex, (_m, row) => `${row}${eol}| **Assignee** | ${val} |`);
       return updated;
     }
     const dividerRegex = /^(\|[-:\s|]+[-:]+\|)$/im;
     if (dividerRegex.test(updated)) {
-      updated = updated.replace(dividerRegex, `$1${eol}| **Assignee** | ${val} |`);
+      updated = updated.replace(dividerRegex, (_m, row) => `${row}${eol}| **Assignee** | ${val} |`);
       return updated;
     }
     const anyTableRowRegex = /^(\|\s*\*{0,2}(?:Priority|Type|Epic|Estimate|Milestone)\*{0,2}\s*\|.*)$/im;
     if (anyTableRowRegex.test(updated)) {
-      updated = updated.replace(anyTableRowRegex, `$1${eol}| **Assignee** | ${val} |`);
+      updated = updated.replace(anyTableRowRegex, (_m, row) => `${row}${eol}| **Assignee** | ${val} |`);
       return updated;
     }
     const frontmatterAssigneeRegex = /^(assignee\s*:\s*)([^\r\n]+)$/im;
     if (frontmatterAssigneeRegex.test(updated)) {
-      updated = updated.replace(frontmatterAssigneeRegex, `$1${val === "\u2014" ? "" : val}`);
+      updated = updated.replace(frontmatterAssigneeRegex, (_m, pre) => `${pre}${val === "\u2014" ? "" : val}`);
       return updated;
     }
     const frontmatterBlockRegex = /^---\r?\n([\s\S]*?)\r?\n---/;
@@ -324,13 +324,13 @@ var TicketParser = class {
     if (fmMatch) {
       const fmContent = fmMatch[1];
       const newFm = `---${eol}${fmContent}${eol}assignee: ${val === "\u2014" ? "" : val}${eol}---`;
-      return updated.replace(frontmatterBlockRegex, newFm);
+      return updated.replace(frontmatterBlockRegex, () => newFm);
     }
     const headingRegex = /^(#\s+[^\r\n]+(?:\r?\n)+)/;
     const headingMatch = updated.match(headingRegex);
     const tableBlock = `| Field | Value |${eol}|-------|-------|${eol}| **Assignee** | ${val} |${eol}${eol}`;
     if (headingMatch) {
-      return updated.replace(headingRegex, `${headingMatch[1]}${tableBlock}`);
+      return updated.replace(headingRegex, () => `${headingMatch[1]}${tableBlock}`);
     }
     return `${tableBlock}${updated}`;
   }
@@ -1094,6 +1094,39 @@ var BoardDiscovery = class {
   }
 };
 
+// src/pathUtils.ts
+var path3 = __toESM(require("path"));
+var CASE_INSENSITIVE = process.platform === "win32" || process.platform === "darwin";
+function norm(p) {
+  const resolved = path3.resolve(p);
+  return CASE_INSENSITIVE ? resolved.toLowerCase() : resolved;
+}
+function isInside(root, candidate) {
+  if (!root || !candidate)
+    return false;
+  const r = norm(root);
+  const c = norm(candidate);
+  if (c === r)
+    return true;
+  const prefix = r.endsWith(path3.sep) ? r : r + path3.sep;
+  return c.startsWith(prefix);
+}
+function safeJoin(root, ...segments) {
+  let current = path3.resolve(root);
+  for (const seg of segments) {
+    if (seg === null || seg === void 0 || seg === "")
+      continue;
+    if (path3.isAbsolute(seg) || /^[a-zA-Z]:/.test(seg))
+      return null;
+    current = path3.resolve(current, seg);
+  }
+  return isInside(root, current) ? current : null;
+}
+function slugify(title, maxLen = 40) {
+  const slug = title.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9_-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "").slice(0, maxLen).replace(/-$/, "");
+  return slug || "untitled";
+}
+
 // src/boardManager.ts
 var BoardManager = class _BoardManager {
   static instance;
@@ -1102,6 +1135,8 @@ var BoardManager = class _BoardManager {
   changeEmitter = new vscode2.EventEmitter();
   onDidChangeBoard = this.changeEmitter.event;
   debounceTimer = null;
+  pendingFiles = /* @__PURE__ */ new Set();
+  workLogCache = /* @__PURE__ */ new Map();
   static getInstance() {
     if (!this.instance) {
       this.instance = new _BoardManager();
@@ -1131,14 +1166,14 @@ var BoardManager = class _BoardManager {
       return this.boards.get(idOrRoot);
     }
     try {
-      const normalizedKey = Buffer.from(path3.resolve(idOrRoot).toLowerCase()).toString("base64url");
+      const normalizedKey = Buffer.from(path4.resolve(idOrRoot).toLowerCase()).toString("base64url");
       if (this.boards.has(normalizedKey)) {
         return this.boards.get(normalizedKey);
       }
     } catch {
     }
     for (const b of this.boards.values()) {
-      if (b.id === idOrRoot || b.rootPath.toLowerCase() === idOrRoot.toLowerCase() || path3.resolve(b.rootPath).toLowerCase() === path3.resolve(idOrRoot).toLowerCase()) {
+      if (b.id === idOrRoot || b.rootPath.toLowerCase() === idOrRoot.toLowerCase() || path4.resolve(b.rootPath).toLowerCase() === path4.resolve(idOrRoot).toLowerCase()) {
         return b;
       }
     }
@@ -1175,12 +1210,18 @@ var BoardManager = class _BoardManager {
           if (t.unresolvedDependencies && t.unresolvedDependencies.length > 0) {
             blockedByDependencyCount++;
           }
-          if (t.hasWorkLog && fs2.existsSync(t.path)) {
-            try {
-              const fileContent = fs2.readFileSync(t.path, "utf8");
-              const logs = TicketParser.extractWorkLogEntries(fileContent, t.id, t.title, t.path, b.id, b.name);
-              recentWorkLogs.push(...logs);
-            } catch {
+          if (t.hasWorkLog) {
+            const cached = this.workLogCache.get(t.path);
+            if (cached && cached.mtime === t.mtime) {
+              recentWorkLogs.push(...cached.logs);
+            } else {
+              try {
+                const fileContent = fs2.readFileSync(t.path, "utf8");
+                const logs = TicketParser.extractWorkLogEntries(fileContent, t.id, t.title, t.path, b.id, b.name);
+                this.workLogCache.set(t.path, { mtime: t.mtime, logs });
+                recentWorkLogs.push(...logs);
+              } catch {
+              }
             }
           }
         }
@@ -1213,10 +1254,8 @@ var BoardManager = class _BoardManager {
   findBoardForTicketPath(ticketPath) {
     if (!ticketPath)
       return void 0;
-    const resolved = path3.resolve(ticketPath).toLowerCase();
     for (const board of this.boards.values()) {
-      const boardRoot = path3.resolve(board.rootPath).toLowerCase();
-      if (resolved.startsWith(boardRoot)) {
+      if (isInside(board.rootPath, ticketPath)) {
         return board;
       }
     }
@@ -1231,20 +1270,20 @@ var BoardManager = class _BoardManager {
   resolveTicketPathOnDisk(board, ticketPath) {
     if (!ticketPath)
       return null;
-    const resolved = path3.resolve(ticketPath);
+    const resolved = path4.resolve(ticketPath);
     if (fs2.existsSync(resolved)) {
       return resolved;
     }
-    const relToBoard = path3.resolve(board.rootPath, ticketPath);
+    const relToBoard = path4.resolve(board.rootPath, ticketPath);
     if (fs2.existsSync(relToBoard)) {
       return relToBoard;
     }
-    const targetFilename = path3.basename(ticketPath).toLowerCase();
+    const targetFilename = path4.basename(ticketPath).toLowerCase();
     const searchInDir = (dir) => {
       try {
         const entries = fs2.readdirSync(dir, { withFileTypes: true });
         for (const entry of entries) {
-          const full = path3.join(dir, entry.name);
+          const full = path4.join(dir, entry.name);
           if (entry.isDirectory()) {
             if (!entry.name.startsWith(".") && entry.name !== "node_modules") {
               const res = searchInDir(full);
@@ -1263,7 +1302,7 @@ var BoardManager = class _BoardManager {
   }
   async moveTicket(boardId, ticketPath, targetColumn, targetSubfolder) {
     let board = this.getBoard(boardId);
-    if (!board || ticketPath && !path3.resolve(ticketPath).toLowerCase().startsWith(path3.resolve(board.rootPath).toLowerCase())) {
+    if (!board || ticketPath && !isInside(board.rootPath, ticketPath)) {
       const candidate = this.findBoardForTicketPath(ticketPath);
       if (candidate) {
         board = candidate;
@@ -1278,21 +1317,26 @@ var BoardManager = class _BoardManager {
       vscode2.window.showErrorMessage(`Ticket file not found on disk: ${ticketPath}`);
       return false;
     }
-    const filename = path3.basename(sourcePath);
-    let targetDir = path3.join(board.rootPath, targetColumn);
-    if (targetSubfolder) {
-      targetDir = path3.join(targetDir, targetSubfolder);
+    const filename = path4.basename(sourcePath);
+    const targetDir = safeJoin(board.rootPath, targetColumn, targetSubfolder);
+    if (!targetDir || path4.resolve(targetDir) === path4.resolve(board.rootPath)) {
+      vscode2.window.showErrorMessage(`Invalid target column: ${targetColumn}`);
+      return false;
     }
     if (!fs2.existsSync(targetDir)) {
       await fs2.promises.mkdir(targetDir, { recursive: true });
     }
-    const targetPath = path3.join(targetDir, filename);
-    if (path3.resolve(targetPath).toLowerCase() === path3.resolve(sourcePath).toLowerCase()) {
+    const targetPath = path4.join(targetDir, filename);
+    if (path4.resolve(targetPath).toLowerCase() === path4.resolve(sourcePath).toLowerCase()) {
       return true;
+    }
+    if (fs2.existsSync(targetPath)) {
+      vscode2.window.showErrorMessage(`Cannot move "${filename}": a ticket with that name already exists in ${targetColumn}${targetSubfolder ? "/" + targetSubfolder : ""}.`);
+      return false;
     }
     try {
       try {
-        await vscode2.workspace.fs.rename(vscode2.Uri.file(sourcePath), vscode2.Uri.file(targetPath), { overwrite: true });
+        await vscode2.workspace.fs.rename(vscode2.Uri.file(sourcePath), vscode2.Uri.file(targetPath), { overwrite: false });
       } catch (fsErr) {
         await fs2.promises.rename(sourcePath, targetPath);
       }
@@ -1318,7 +1362,7 @@ var BoardManager = class _BoardManager {
   }
   async assignTicket(boardId, ticketPath, assigneeName) {
     let board = this.getBoard(boardId);
-    if (!board || ticketPath && !path3.resolve(ticketPath).toLowerCase().startsWith(path3.resolve(board.rootPath).toLowerCase())) {
+    if (!board || ticketPath && !isInside(board.rootPath, ticketPath)) {
       const candidate = this.findBoardForTicketPath(ticketPath);
       if (candidate) {
         board = candidate;
@@ -1373,26 +1417,29 @@ var BoardManager = class _BoardManager {
     const board = this.getBoard(boardId);
     if (!board)
       return null;
-    let targetDir = path3.join(board.rootPath, targetColumn);
-    if (targetSubfolder) {
-      targetDir = path3.join(targetDir, targetSubfolder);
+    const targetDir = safeJoin(board.rootPath, targetColumn, targetSubfolder);
+    if (!targetDir || path4.resolve(targetDir) === path4.resolve(board.rootPath)) {
+      vscode2.window.showErrorMessage(`Invalid target column: ${targetColumn}`);
+      return null;
     }
     if (!fs2.existsSync(targetDir)) {
       await fs2.promises.mkdir(targetDir, { recursive: true });
     }
-    const slug = title.toLowerCase().replace(/[^a-z0-9_-]/g, "-").replace(/-+/g, "-").slice(0, 40);
+    const slug = slugify(title);
     const dateStr = (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
     let filename = `ticket-${dateStr}-${slug}.md`;
-    let fullPath = path3.join(targetDir, filename);
+    let fullPath = path4.join(targetDir, filename);
     let counter = 1;
+    let idSuffix = "";
     while (fs2.existsSync(fullPath)) {
       filename = `ticket-${dateStr}-${slug}-${counter}.md`;
-      fullPath = path3.join(targetDir, filename);
+      idSuffix = `-${counter}`;
+      fullPath = path4.join(targetDir, filename);
       counter++;
     }
     let defaultContent = initialContent;
     if (defaultContent) {
-      const generatedId = `T-${slug.toUpperCase()}`;
+      const generatedId = `T-${slug.toUpperCase()}${idSuffix}`;
       defaultContent = defaultContent.split("{id}").join(generatedId).split("{title}").join(title).split("{column}").join(targetColumn).split("{date}").join(dateStr).split("{user}").join("Unassigned").split("{assignee}").join("Unassigned");
     } else {
       defaultContent = `# ${title}
@@ -1427,19 +1474,19 @@ Describe what this ticket is about.
       vscode2.window.showWarningMessage("No active Kanban board found to generate agent rules.");
       return null;
     }
-    const wsFolder = vscode2.workspace.workspaceFolders?.[0]?.uri.fsPath || path3.dirname(board.rootPath);
-    const agentsDir = path3.join(wsFolder, ".agents");
-    let targetPath = path3.join(wsFolder, "AGENTS.md");
+    const wsFolder = vscode2.workspace.workspaceFolders?.[0]?.uri.fsPath || path4.dirname(board.rootPath);
+    const agentsDir = path4.join(wsFolder, ".agents");
+    let targetPath = path4.join(wsFolder, "AGENTS.md");
     if (fs2.existsSync(agentsDir)) {
-      const rulesDir = path3.join(agentsDir, "rules");
+      const rulesDir = path4.join(agentsDir, "rules");
       if (!fs2.existsSync(rulesDir)) {
         await fs2.promises.mkdir(rulesDir, { recursive: true });
       }
-      targetPath = path3.join(rulesDir, "kanban.md");
-    } else if (fs2.existsSync(path3.join(wsFolder, "AGENT.md")) && !fs2.existsSync(path3.join(wsFolder, "AGENTS.md"))) {
-      targetPath = path3.join(wsFolder, "AGENT.md");
+      targetPath = path4.join(rulesDir, "kanban.md");
+    } else if (fs2.existsSync(path4.join(wsFolder, "AGENT.md")) && !fs2.existsSync(path4.join(wsFolder, "AGENTS.md"))) {
+      targetPath = path4.join(wsFolder, "AGENT.md");
     }
-    const relBoardPath = path3.relative(wsFolder, board.rootPath).replace(/\\/g, "/") || "Tickets";
+    const relBoardPath = path4.relative(wsFolder, board.rootPath).replace(/\\/g, "/") || "Tickets";
     const colsList = board.columns.map((c) => `- \`${relBoardPath}/${c.name}/\``).join("\n");
     const content = `# Project Operating Rules: Agentic Kanban
 
@@ -1476,7 +1523,7 @@ ${colsList}
    - If blocked by dependencies or external factors, move ticket to \`${relBoardPath}/Blocked/\`.
    - Clearly document the blocking factor in \`## Work Log\`.
 `;
-    return { targetPath, created: true, content };
+    return { targetPath, created: !fs2.existsSync(targetPath), content };
   }
   async initTemplates(boardId) {
     let board = boardId ? this.getBoard(boardId) : void 0;
@@ -1489,12 +1536,12 @@ ${colsList}
       vscode2.window.showWarningMessage("No Kanban board found to initialize templates.");
       return null;
     }
-    const templatesDir = path3.join(board.rootPath, ".templates");
+    const templatesDir = path4.join(board.rootPath, ".templates");
     if (!fs2.existsSync(templatesDir)) {
       await fs2.promises.mkdir(templatesDir, { recursive: true });
     }
     const created = [];
-    const featurePath = path3.join(templatesDir, "feature.md");
+    const featurePath = path4.join(templatesDir, "feature.md");
     if (!fs2.existsSync(featurePath)) {
       const featureContent = `# {id} \u2014 {title}
 
@@ -1531,7 +1578,7 @@ Detailed background, UX requirements, architecture decisions, and implementation
       await fs2.promises.writeFile(featurePath, featureContent, "utf8");
       created.push("feature.md");
     }
-    const bugPath = path3.join(templatesDir, "bug.md");
+    const bugPath = path4.join(templatesDir, "bug.md");
     if (!fs2.existsSync(bugPath)) {
       const bugContent = `# {id} \u2014 Fix: {title}
 
@@ -1587,19 +1634,31 @@ Brief description of the bug and its impact.
   setupWatchers(context) {
     const watcher = vscode2.workspace.createFileSystemWatcher("**/*.md");
     const handleFileChange = (uri) => {
+      if (/[\\/](node_modules|\.git)[\\/]/.test(uri.fsPath))
+        return;
+      this.pendingFiles.add(uri.fsPath);
       if (this.debounceTimer) {
         clearTimeout(this.debounceTimer);
       }
       this.debounceTimer = setTimeout(async () => {
-        const filePath = uri.fsPath;
-        for (const board of this.boards.values()) {
-          if (filePath.startsWith(board.rootPath)) {
-            await this.reloadSingleBoard(board.rootPath);
-            return;
-          }
+        const files = Array.from(this.pendingFiles);
+        this.pendingFiles.clear();
+        const boardRoots = /* @__PURE__ */ new Set();
+        let unknown = false;
+        for (const filePath of files) {
+          const owner = Array.from(this.boards.values()).find((b) => isInside(b.rootPath, filePath));
+          if (owner)
+            boardRoots.add(owner.rootPath);
+          else
+            unknown = true;
         }
-        await this.reloadBoards();
-        this.changeEmitter.fire(null);
+        for (const root of boardRoots) {
+          await this.reloadSingleBoard(root);
+        }
+        if (unknown) {
+          await this.reloadBoards();
+          this.changeEmitter.fire(null);
+        }
       }, 300);
     };
     watcher.onDidCreate(handleFileChange);
@@ -1715,13 +1774,40 @@ var TreeItemNode = class extends vscode3.TreeItem {
 };
 
 // src/webviewPanel.ts
-var vscode4 = __toESM(require("vscode"));
-var path6 = __toESM(require("path"));
-var fs4 = __toESM(require("fs"));
+var vscode5 = __toESM(require("vscode"));
+var path10 = __toESM(require("path"));
+var fs7 = __toESM(require("fs"));
 
 // src/agentRunner.ts
-var path4 = __toESM(require("path"));
+var path5 = __toESM(require("path"));
 var fs3 = __toESM(require("fs"));
+
+// src/shellEscape.ts
+function detectShellKind(shellPath, platform = process.platform) {
+  const name = (shellPath || "").split(/[\\/]/).pop()?.toLowerCase() || "";
+  if (name.includes("pwsh") || name.includes("powershell"))
+    return "powershell";
+  if (name === "cmd.exe" || name === "cmd")
+    return "cmd";
+  if (name)
+    return "posix";
+  return platform === "win32" ? "powershell" : "posix";
+}
+function escapeForDoubleQuotes(value, shell) {
+  const flat = String(value ?? "").replace(/[\r\n\t]+/g, " ").replace(/[\u0000-\u001f\u007f]/g, "");
+  switch (shell) {
+    case "powershell":
+      return flat.replace(/[`$"“”„]/g, (ch) => "`" + ch);
+    case "cmd":
+      return flat.replace(/"/g, '""').replace(/%/g, "%%");
+    default:
+      return flat.replace(/[\\"$`!]/g, (ch) => "\\" + ch);
+  }
+}
+
+// src/agentRunner.ts
+var DEFAULT_TASK = "Review requirements and implement ticket {ticket_path}: {ticket_title}";
+var MODEL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:\/@+-]*$/;
 function getVsCode() {
   try {
     return require("vscode");
@@ -1730,7 +1816,6 @@ function getVsCode() {
   }
 }
 var AgentRunner = class {
-  static terminals = /* @__PURE__ */ new Map();
   /**
    * Resolves the executable path for the Antigravity CLI (agy).
    * Resolution priority:
@@ -1749,8 +1834,8 @@ var AgentRunner = class {
       return boardConfig.antigravityPath.trim();
     }
     try {
-      const vscode6 = getVsCode();
-      const vscodeConfig = vscode6?.workspace?.getConfiguration?.("agenticKanban")?.get("antigravityPath");
+      const vscode8 = getVsCode();
+      const vscodeConfig = vscode8?.workspace?.getConfiguration?.("agenticKanban")?.get("antigravityPath");
       if (vscodeConfig && vscodeConfig.trim()) {
         return vscodeConfig.trim();
       }
@@ -1766,21 +1851,21 @@ var AgentRunner = class {
     if (process.platform === "win32") {
       const localAppData = process.env.LOCALAPPDATA;
       if (localAppData) {
-        candidates.push(path4.join(localAppData, "agy", "bin", "agy.exe"));
+        candidates.push(path5.join(localAppData, "agy", "bin", "agy.exe"));
       }
       const userProfile = process.env.USERPROFILE;
       if (userProfile) {
-        candidates.push(path4.join(userProfile, "AppData", "Local", "agy", "bin", "agy.exe"));
+        candidates.push(path5.join(userProfile, "AppData", "Local", "agy", "bin", "agy.exe"));
       }
       const programFiles = process.env.ProgramFiles;
       if (programFiles) {
-        candidates.push(path4.join(programFiles, "agy", "bin", "agy.exe"));
+        candidates.push(path5.join(programFiles, "agy", "bin", "agy.exe"));
       }
     } else {
       const home = process.env.HOME;
       if (home) {
-        candidates.push(path4.join(home, ".agy", "bin", "agy"));
-        candidates.push(path4.join(home, ".local", "bin", "agy"));
+        candidates.push(path5.join(home, ".agy", "bin", "agy"));
+        candidates.push(path5.join(home, ".local", "bin", "agy"));
       }
       candidates.push("/usr/local/bin/agy");
       candidates.push("/usr/bin/agy");
@@ -1796,16 +1881,18 @@ var AgentRunner = class {
    * Formats the CLI command string for an agent, performing template substitution,
    * path resolution, and legacy syntax upgrade.
    */
-  static formatCliCommand(ticket, assignee, boardRoot, boardConfig, rawTicketContent) {
+  static formatCliCommand(ticket, assignee, boardRoot, boardConfig, rawTicketContent, options = {}) {
     const config = assignee.agentConfig;
     if (!config)
       return "";
-    const vscode6 = getVsCode();
-    const workspaceFolder = vscode6?.workspace?.workspaceFolders?.[0]?.uri.fsPath || path4.dirname(boardRoot);
+    const vscode8 = getVsCode();
+    const shell = options.shell || detectShellKind(vscode8?.env?.shell);
+    const esc = (v) => escapeForDoubleQuotes(v, shell);
+    const workspaceFolder = vscode8?.workspace?.workspaceFolders?.[0]?.uri.fsPath || path5.dirname(boardRoot);
     const content = rawTicketContent ?? ticket.summary ?? ticket.title;
     let effectiveBoardConfig = boardConfig;
     if (!effectiveBoardConfig) {
-      const configPath = path4.join(boardRoot, "config.md");
+      const configPath = path5.join(boardRoot, "config.md");
       if (fs3.existsSync(configPath)) {
         try {
           const cfgText = fs3.readFileSync(configPath, "utf8");
@@ -1815,17 +1902,23 @@ var AgentRunner = class {
       }
     }
     const agyPath = this.resolveAntigravityPath(config.path || config.executable, effectiveBoardConfig);
+    const model = options.model && MODEL_ID_PATTERN.test(options.model) ? options.model : "";
+    const modelArgs = model && options.modelFlag ? `${options.modelFlag} ${model}` : "";
+    const rawTask = (options.task || DEFAULT_TASK).replace(/\{ticket_path\}/g, () => ticket.path).replace(/\{ticket_title\}/g, () => ticket.title).replace(/\{ticket_id\}/g, () => ticket.id);
     const replacements = {
-      "{ticket_path}": ticket.path,
-      "{ticket_rel_path}": ticket.relativePath,
-      "{ticket_name}": ticket.filename,
-      "{ticket_id}": ticket.id,
-      "{ticket_title}": ticket.title,
-      "{ticket_summary}": ticket.summary,
-      "{ticket_content}": content.replace(/"/g, '\\"').slice(0, 1500),
-      "{workspace_root}": workspaceFolder,
-      "{board_root}": boardRoot,
-      "{column}": ticket.column,
+      "{task}": esc(rawTask),
+      "{ticket_path}": esc(ticket.path),
+      "{ticket_rel_path}": esc(ticket.relativePath),
+      "{ticket_name}": esc(ticket.filename),
+      "{ticket_id}": esc(ticket.id),
+      "{ticket_title}": esc(ticket.title),
+      "{ticket_summary}": esc(ticket.summary),
+      "{ticket_content}": esc(content.slice(0, 1500)),
+      "{workspace_root}": esc(workspaceFolder),
+      "{board_root}": esc(boardRoot),
+      "{column}": esc(ticket.column),
+      "{model}": model,
+      "{model_args}": modelArgs,
       "{agy_path}": agyPath,
       "{antigravity_path}": agyPath,
       "{executable}": config.path || config.executable || agyPath,
@@ -1845,10 +1938,11 @@ var AgentRunner = class {
         command = command.replace(/^agy\b/i, `& "{agy_path}"`);
       }
     }
-    for (const [placeholder, value] of Object.entries(replacements)) {
-      const safeValue = placeholder === "{ticket_title}" || placeholder === "{ticket_summary}" || placeholder === "{ticket_name}" ? value.replace(/"/g, '\\"') : value;
-      command = command.split(placeholder).join(safeValue);
+    if (modelArgs && !command.includes("{model_args}") && !command.includes("{model}")) {
+      command = `${command.trimEnd()} ${modelArgs}`;
     }
+    command = command.replace(/\{[a-z_]+\}/g, (m) => m in replacements ? replacements[m] : m);
+    command = command.replace(/ {2,}/g, " ").trim();
     if (process.platform === "win32") {
       const trimmed = command.trim();
       if (trimmed.startsWith('"') && !trimmed.startsWith("&")) {
@@ -1857,14 +1951,15 @@ var AgentRunner = class {
     }
     return command;
   }
-  static async dispatch(ticket, assignee, boardRoot, boardConfig) {
-    const vscode6 = getVsCode();
+  /** Resolves everything needed to start an agent for a ticket (command text, cwd, prompt) without starting it. */
+  static async prepareLaunch(ticket, assignee, boardRoot, boardConfig, options = {}) {
+    const vscode8 = getVsCode();
     if (assignee.type !== "agent" || !assignee.agentConfig) {
-      vscode6?.window.showWarningMessage(`Assignee "${assignee.name}" is not configured as an executable agent.`);
-      return false;
+      vscode8?.window.showWarningMessage(`Assignee "${assignee.name}" is not configured as an executable agent.`);
+      return null;
     }
     const config = assignee.agentConfig;
-    const workspaceFolder = vscode6?.workspace?.workspaceFolders?.[0]?.uri.fsPath || path4.dirname(boardRoot);
+    const workspaceFolder = vscode8?.workspace?.workspaceFolders?.[0]?.uri.fsPath || path5.dirname(boardRoot);
     let ticketContent = "";
     try {
       ticketContent = await fs3.promises.readFile(ticket.path, "utf8");
@@ -1872,30 +1967,11 @@ var AgentRunner = class {
       ticketContent = ticket.summary || ticket.title;
     }
     if (config.type === "cli") {
-      const command = this.formatCliCommand(ticket, assignee, boardRoot, boardConfig, ticketContent);
+      const command = this.formatCliCommand(ticket, assignee, boardRoot, boardConfig, ticketContent, options);
       const cwd = config.workingDir ? config.workingDir.replace("{workspace_root}", workspaceFolder).replace("{board_root}", boardRoot) : workspaceFolder;
-      const terminalName = `Agent: ${assignee.name}`;
-      let terminal = this.terminals.get(terminalName);
-      const existing = vscode6?.window.terminals?.find((t) => t.name === terminalName);
-      if (!existing) {
-        terminal = vscode6?.window.createTerminal({
-          name: terminalName,
-          cwd
-        });
-        if (terminal) {
-          this.terminals.set(terminalName, terminal);
-        }
-      } else {
-        terminal = existing;
-      }
-      terminal?.show(false);
-      if (!existing) {
-        await new Promise((r) => setTimeout(r, 600));
-      }
-      terminal?.sendText(command);
-      vscode6?.window.showInformationMessage(`Dispatched ticket "${ticket.title}" to ${assignee.name}.`);
-      return true;
-    } else if (config.type === "vscode-command") {
+      return { kind: "cli", ticket, assignee, command, cwd, model: options.model };
+    }
+    if (config.type === "vscode-command") {
       const replacements = {
         "{ticket_path}": ticket.path,
         "{ticket_rel_path}": ticket.relativePath,
@@ -1903,10 +1979,11 @@ var AgentRunner = class {
         "{ticket_id}": ticket.id,
         "{ticket_title}": ticket.title,
         "{ticket_summary}": ticket.summary,
-        "{ticket_content}": ticketContent.replace(/"/g, '\\"').slice(0, 1500),
+        "{ticket_content}": ticketContent.slice(0, 1500),
         "{workspace_root}": workspaceFolder,
         "{board_root}": boardRoot,
-        "{column}": ticket.column
+        "{column}": ticket.column,
+        "{model}": options.model || ""
       };
       let prompt = config.prompt || `Please review and work on ticket "${ticket.title}" at: ${ticket.path}
 
@@ -1915,23 +1992,49 @@ ${ticket.summary}`;
       for (const [placeholder, value] of Object.entries(replacements)) {
         prompt = prompt.split(placeholder).join(value);
       }
-      await vscode6?.env.clipboard.writeText(prompt);
-      vscode6?.window.showInformationMessage(
-        `Copied ticket context to clipboard! Triggering ${assignee.name} (${config.command})...`
-      );
-      try {
-        await vscode6?.commands.executeCommand(config.command);
-      } catch (err) {
-        vscode6?.window.showErrorMessage(`Failed to execute command "${config.command}": ${err?.message || err}`);
-      }
+      return { kind: "vscode-command", ticket, assignee, command: config.command, cwd: workspaceFolder, prompt, model: options.model };
+    }
+    return null;
+  }
+  /** Optional hook (set by the fleet controller) that tracks each launch as a session. */
+  static launcher;
+  static async dispatch(ticket, assignee, boardRoot, boardConfig, options = {}) {
+    const req = await this.prepareLaunch(ticket, assignee, boardRoot, boardConfig, options);
+    if (!req)
+      return false;
+    return this.launcher ? this.launcher(req) : this.launchDefault(req);
+  }
+  /** Fallback launcher: a fresh terminal per dispatch (never type a new command into a still-running agent). */
+  static async launchDefault(req) {
+    const vscode8 = getVsCode();
+    if (req.kind === "cli") {
+      const base = `Agent: ${req.assignee.name} \xB7 ${req.ticket.id || req.ticket.filename}`;
+      let name = base;
+      let n = 2;
+      while (vscode8?.window.terminals?.some((t) => t.name === name))
+        name = `${base} #${n++}`;
+      const terminal = vscode8?.window.createTerminal({ name, cwd: req.cwd });
+      if (!terminal)
+        return false;
+      terminal.show(false);
+      await new Promise((r) => setTimeout(r, 600));
+      terminal.sendText(req.command);
+      vscode8?.window.showInformationMessage(`Dispatched ticket "${req.ticket.title}" to ${req.assignee.name}.`);
       return true;
     }
-    return false;
+    await vscode8?.env.clipboard.writeText(req.prompt || "");
+    vscode8?.window.showInformationMessage(`Copied ticket context to clipboard! Triggering ${req.assignee.name} (${req.command})...`);
+    try {
+      await vscode8?.commands.executeCommand(req.command);
+    } catch (err) {
+      vscode8?.window.showErrorMessage(`Failed to execute command "${req.command}": ${err?.message || err}`);
+    }
+    return true;
   }
 };
 
 // src/promptFormatter.ts
-var path5 = __toESM(require("path"));
+var path6 = __toESM(require("path"));
 var PromptFormatter = class {
   static DEFAULT_TEMPLATE = `Please review and work on ticket **{id}: {title}** located at \`{relative_path}\`.
 
@@ -1952,18 +2055,18 @@ var PromptFormatter = class {
   static formatPrompt(ticket, boardConfig, workspaceRoot, boardRoot) {
     let relPath = ticket.relativePath || ticket.filename;
     if (workspaceRoot && ticket.path) {
-      const calculated = path5.relative(workspaceRoot, ticket.path).replace(/\\/g, "/");
+      const calculated = path6.relative(workspaceRoot, ticket.path).replace(/\\/g, "/");
       if (!calculated.startsWith("..")) {
         relPath = calculated;
       }
     } else if (boardRoot && ticket.path) {
-      const boardDirName = path5.basename(boardRoot);
-      const fromBoard = path5.relative(boardRoot, ticket.path).replace(/\\/g, "/");
+      const boardDirName = path6.basename(boardRoot);
+      const fromBoard = path6.relative(boardRoot, ticket.path).replace(/\\/g, "/");
       relPath = `${boardDirName}/${fromBoard}`;
     }
     let completedPath = "Tickets/Completed/";
     if (boardRoot && workspaceRoot) {
-      const relBoard = path5.relative(workspaceRoot, boardRoot).replace(/\\/g, "/");
+      const relBoard = path6.relative(workspaceRoot, boardRoot).replace(/\\/g, "/");
       completedPath = relBoard && relBoard !== "." ? `${relBoard}/Completed/` : "Completed/";
     } else if (ticket.column) {
       const colSubstr = "/" + ticket.column + "/";
@@ -2028,6 +2131,1143 @@ var PromptFormatter = class {
   }
 };
 
+// src/fleet/fleetController.ts
+var vscode4 = __toESM(require("vscode"));
+var fs6 = __toESM(require("fs"));
+var path9 = __toESM(require("path"));
+
+// src/fleet/providers.ts
+var fs4 = __toESM(require("fs"));
+var path7 = __toESM(require("path"));
+var PROVIDER_PRESETS = [
+  {
+    kind: "claude-code",
+    label: "Claude Code",
+    type: "cli",
+    command: `claude {model_args} -p "{task}"`,
+    modelFlag: "--model",
+    models: ["opus", "sonnet", "haiku"],
+    defaultModel: "sonnet",
+    maxParallel: 3,
+    maxSessionsPerWindow: 40,
+    windowMinutes: 300,
+    minSpacingSeconds: 10
+  },
+  {
+    kind: "devin",
+    label: "Devin",
+    type: "cli",
+    command: `devin {model_args} -p "{task}"`,
+    modelFlag: "--model",
+    models: [],
+    defaultModel: "",
+    maxParallel: 2,
+    maxSessionsPerWindow: 0,
+    windowMinutes: 60,
+    minSpacingSeconds: 30
+  },
+  {
+    kind: "antigravity",
+    label: "Antigravity CLI",
+    type: "cli",
+    command: `& "{agy_path}" {model_args} -p "{task}" --dangerously-skip-permissions`,
+    modelFlag: "--model",
+    models: [],
+    defaultModel: "",
+    maxParallel: 2,
+    maxSessionsPerWindow: 0,
+    windowMinutes: 60,
+    minSpacingSeconds: 15
+  },
+  {
+    kind: "gemini",
+    label: "Gemini CLI",
+    type: "cli",
+    command: `gemini {model_args} --prompt "{task}"`,
+    modelFlag: "--model",
+    models: ["gemini-2.5-pro", "gemini-2.5-flash"],
+    defaultModel: "gemini-2.5-pro",
+    maxParallel: 2,
+    maxSessionsPerWindow: 60,
+    windowMinutes: 60,
+    minSpacingSeconds: 10
+  },
+  {
+    kind: "codex",
+    label: "Codex CLI",
+    type: "cli",
+    command: `codex exec {model_args} "{task}"`,
+    modelFlag: "--model",
+    models: [],
+    defaultModel: "",
+    maxParallel: 2,
+    maxSessionsPerWindow: 0,
+    windowMinutes: 300,
+    minSpacingSeconds: 10
+  },
+  {
+    kind: "aider",
+    label: "Aider",
+    type: "cli",
+    command: 'aider {model_args} --message "Implement ticket requirements in {ticket_path}" "{ticket_path}"',
+    modelFlag: "--model",
+    models: [],
+    defaultModel: "",
+    maxParallel: 2,
+    maxSessionsPerWindow: 0,
+    windowMinutes: 60,
+    minSpacingSeconds: 5
+  },
+  {
+    kind: "copilot-cli",
+    label: "GitHub Copilot CLI",
+    type: "cli",
+    command: `copilot {model_args} -p "{task}"`,
+    modelFlag: "--model",
+    models: [],
+    defaultModel: "",
+    maxParallel: 1,
+    maxSessionsPerWindow: 0,
+    windowMinutes: 60,
+    minSpacingSeconds: 10
+  },
+  {
+    kind: "cline",
+    label: "Cline CLI",
+    type: "cli",
+    command: `cline {model_args} "{task}"`,
+    modelFlag: "-m",
+    models: [],
+    defaultModel: "",
+    maxParallel: 2,
+    maxSessionsPerWindow: 0,
+    windowMinutes: 60,
+    minSpacingSeconds: 5
+  },
+  {
+    kind: "ide-chat",
+    label: "IDE Chat (Copilot / Cursor / Antigravity)",
+    type: "vscode-command",
+    command: "workbench.action.chat.open",
+    models: [],
+    defaultModel: "",
+    maxParallel: 1,
+    maxSessionsPerWindow: 0,
+    windowMinutes: 60,
+    minSpacingSeconds: 0,
+    prompt: "Please work on ticket {ticket_title} located at: {ticket_path}"
+  },
+  {
+    kind: "custom",
+    label: "Custom CLI",
+    type: "cli",
+    command: `my-agent {model_args} "{task}"`,
+    modelFlag: "--model",
+    models: [],
+    defaultModel: "",
+    maxParallel: 1,
+    maxSessionsPerWindow: 0,
+    windowMinutes: 60,
+    minSpacingSeconds: 5
+  }
+];
+function getPreset(kind) {
+  return PROVIDER_PRESETS.find((p) => p.kind === kind) || PROVIDER_PRESETS[PROVIDER_PRESETS.length - 1];
+}
+var LEGACY_ID_TO_KIND = {
+  "antigravity-cli": "antigravity",
+  agy: "antigravity",
+  "claude-code": "claude-code",
+  claude: "claude-code",
+  "gemini-cli": "gemini",
+  gemini: "gemini",
+  "devin-cli": "devin",
+  devin: "devin",
+  aider: "aider",
+  "ide-chat": "ide-chat",
+  codex: "codex",
+  "codex-cli": "codex",
+  "copilot-cli": "copilot-cli",
+  "cline-ollama": "cline",
+  cline: "cline"
+};
+function clampInt(v, min, max, fallback) {
+  const n = Math.round(Number(v));
+  return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : fallback;
+}
+function sanitizeProvider(raw, existingIds = []) {
+  const kind = PROVIDER_PRESETS.some((p) => p.kind === raw?.kind) ? raw.kind : "custom";
+  const preset = getPreset(kind);
+  const name = String(raw?.name || preset.label).trim().slice(0, 60) || preset.label;
+  let id = String(raw?.id || "").trim().replace(/[^a-zA-Z0-9_-]/g, "-");
+  if (!id)
+    id = uniqueProviderId(kind, existingIds);
+  const models = Array.isArray(raw?.models) ? raw.models.map((m) => String(m).trim()).filter(Boolean) : preset.models.slice();
+  const defaultModel = String(raw?.defaultModel ?? preset.defaultModel).trim();
+  const roles = (Array.isArray(raw?.roles) ? raw.roles : ["worker"]).filter((r) => r === "worker" || r === "reviewer" || r === "orchestrator");
+  return {
+    id,
+    kind,
+    name,
+    account: raw?.account ? String(raw.account).trim().slice(0, 60) : void 0,
+    enabled: raw?.enabled !== false,
+    type: raw?.type === "vscode-command" ? "vscode-command" : raw?.type === "cli" ? "cli" : preset.type,
+    command: String(raw?.command ?? preset.command),
+    modelFlag: raw?.modelFlag !== void 0 ? String(raw.modelFlag).trim() || void 0 : preset.modelFlag,
+    workingDir: raw?.workingDir ? String(raw.workingDir) : void 0,
+    path: raw?.path ? String(raw.path) : void 0,
+    prompt: raw?.prompt ? String(raw.prompt) : preset.prompt,
+    models,
+    defaultModel: defaultModel && models.length && !models.includes(defaultModel) ? models[0] : defaultModel,
+    maxParallel: clampInt(raw?.maxParallel, 1, 32, preset.maxParallel),
+    maxSessionsPerWindow: clampInt(raw?.maxSessionsPerWindow, 0, 1e5, preset.maxSessionsPerWindow),
+    windowMinutes: clampInt(raw?.windowMinutes, 1, 10080, preset.windowMinutes),
+    minSpacingSeconds: clampInt(raw?.minSpacingSeconds, 0, 3600, preset.minSpacingSeconds),
+    safetyMarginPct: clampInt(raw?.safetyMarginPct, 0, 50, 10),
+    roles: roles.length ? roles : ["worker"]
+  };
+}
+function uniqueProviderId(base, existing) {
+  if (!existing.includes(base))
+    return base;
+  let n = 2;
+  while (existing.includes(`${base}-${n}`))
+    n++;
+  return `${base}-${n}`;
+}
+function createProvider(kind, existing, name) {
+  const preset = getPreset(kind);
+  const ids = existing.map((p) => p.id);
+  const sameKind = existing.filter((p) => p.kind === kind).length;
+  return sanitizeProvider({
+    ...preset,
+    id: uniqueProviderId(kind, ids),
+    kind,
+    name: name || (sameKind ? `${preset.label} ${sameKind + 1}` : preset.label),
+    models: preset.models.slice(),
+    roles: kind === "ide-chat" ? ["worker"] : ["worker", "reviewer"]
+  }, ids);
+}
+function providersFromAssignees(assignees, existing = []) {
+  const out = [];
+  const ids = existing.map((p) => p.id);
+  for (const a of assignees) {
+    if (a.type !== "agent" || !a.agentConfig)
+      continue;
+    if (existing.some((p2) => p2.id === a.id || p2.name.toLowerCase() === a.name.toLowerCase()))
+      continue;
+    const kind = LEGACY_ID_TO_KIND[a.id] || "custom";
+    const preset = getPreset(kind);
+    const p = sanitizeProvider({
+      ...preset,
+      id: uniqueProviderId(a.id, ids.concat(out.map((o) => o.id))),
+      kind,
+      name: a.name,
+      type: a.agentConfig.type,
+      command: a.agentConfig.command || preset.command,
+      workingDir: a.agentConfig.workingDir,
+      path: a.agentConfig.path || a.agentConfig.executable,
+      prompt: a.agentConfig.prompt || preset.prompt,
+      models: preset.models.slice(),
+      // legacy commands have no model placeholder and must keep working unchanged
+      modelFlag: void 0,
+      // legacy commands hard-code an "implement" prompt, so they cannot act as reviewers/planners
+      roles: ["worker"]
+    });
+    out.push(p);
+  }
+  return out;
+}
+function providerToAssignee(p) {
+  return {
+    id: p.id,
+    name: p.name,
+    type: "agent",
+    role: p.account ? `Account: ${p.account}` : void 0,
+    agentConfig: {
+      type: p.type,
+      command: p.command,
+      workingDir: p.workingDir,
+      prompt: p.prompt,
+      path: p.path,
+      executable: p.path
+    }
+  };
+}
+var ProviderRegistry = class {
+  constructor(workspaceRoot) {
+    this.workspaceRoot = workspaceRoot;
+    this.filePath = path7.join(workspaceRoot, ".agentic-kanban", "providers.json");
+    this.load();
+  }
+  providers = [];
+  listeners = [];
+  filePath;
+  onChange(fn) {
+    this.listeners.push(fn);
+  }
+  load() {
+    try {
+      const raw = JSON.parse(fs4.readFileSync(this.filePath, "utf8"));
+      const list = Array.isArray(raw) ? raw : raw?.providers || [];
+      const ids = [];
+      this.providers = list.map((r) => {
+        const p = sanitizeProvider(r, ids);
+        ids.push(p.id);
+        return p;
+      });
+    } catch {
+      this.providers = [];
+    }
+  }
+  isEmpty() {
+    return this.providers.length === 0;
+  }
+  list() {
+    return this.providers.map((p) => ({ ...p, models: p.models.slice(), roles: p.roles.slice() }));
+  }
+  get(idOrName) {
+    if (!idOrName)
+      return void 0;
+    const key = idOrName.toLowerCase();
+    return this.providers.find((p) => p.id.toLowerCase() === key) || this.providers.find((p) => p.name.toLowerCase() === key);
+  }
+  upsert(raw) {
+    const others = this.providers.filter((p2) => p2.id !== raw?.id).map((p2) => p2.id);
+    const p = sanitizeProvider(raw, others);
+    const idx = this.providers.findIndex((x) => x.id === p.id);
+    if (idx >= 0)
+      this.providers[idx] = p;
+    else
+      this.providers.push(p);
+    this.save();
+    return p;
+  }
+  add(kind, name) {
+    const p = createProvider(kind, this.providers, name);
+    this.providers.push(p);
+    this.save();
+    return p;
+  }
+  duplicate(id) {
+    const src = this.providers.find((p) => p.id === id);
+    if (!src)
+      return void 0;
+    const copy = {
+      ...src,
+      models: src.models.slice(),
+      roles: src.roles.slice(),
+      id: uniqueProviderId(src.kind, this.providers.map((p) => p.id)),
+      name: `${src.name} (copy)`
+    };
+    this.providers.push(copy);
+    this.save();
+    return copy;
+  }
+  remove(id) {
+    const before = this.providers.length;
+    this.providers = this.providers.filter((p) => p.id !== id);
+    if (this.providers.length !== before) {
+      this.save();
+      return true;
+    }
+    return false;
+  }
+  seedFromAssignees(assignees) {
+    const added = providersFromAssignees(assignees, this.providers);
+    if (added.length) {
+      this.providers.push(...added);
+      this.save();
+    }
+    return added.length;
+  }
+  save() {
+    fs4.mkdirSync(path7.dirname(this.filePath), { recursive: true });
+    const tmp = `${this.filePath}.tmp`;
+    fs4.writeFileSync(tmp, JSON.stringify({ version: 1, providers: this.providers }, null, 2), "utf8");
+    fs4.renameSync(tmp, this.filePath);
+    this.listeners.forEach((fn) => fn());
+  }
+};
+
+// src/fleet/sessions.ts
+var fs5 = __toESM(require("fs"));
+var path8 = __toESM(require("path"));
+var QUICK_FAIL_MS = 2e4;
+var COOLDOWN_BASE_MIN = 5;
+var COOLDOWN_MAX_MIN = 30;
+var DEFAULT_SESSION_TIMEOUT_MIN = 180;
+var JsonFleetStore = class {
+  constructor(file) {
+    this.file = file;
+  }
+  load() {
+    try {
+      const raw = JSON.parse(fs5.readFileSync(this.file, "utf8"));
+      return { starts: raw?.starts && typeof raw.starts === "object" ? raw.starts : {} };
+    } catch {
+      return { starts: {} };
+    }
+  }
+  save(data) {
+    try {
+      fs5.mkdirSync(path8.dirname(this.file), { recursive: true });
+      fs5.writeFileSync(this.file, JSON.stringify(data), "utf8");
+    } catch {
+    }
+  }
+};
+var SessionManager = class {
+  constructor(getProvider, launcher, store, clock = Date.now, sessionTimeoutMinutes = DEFAULT_SESSION_TIMEOUT_MIN) {
+    this.getProvider = getProvider;
+    this.launcher = launcher;
+    this.store = store;
+    this.clock = clock;
+    this.sessionTimeoutMinutes = sessionTimeoutMinutes;
+    this.starts = store ? store.load().starts : {};
+  }
+  sessions = [];
+  payloads = /* @__PURE__ */ new Map();
+  starts;
+  cooldownUntil = /* @__PURE__ */ new Map();
+  quickFails = /* @__PURE__ */ new Map();
+  listeners = [];
+  seq = 0;
+  onChange(fn) {
+    this.listeners.push(fn);
+  }
+  emit() {
+    this.listeners.forEach((fn) => {
+      try {
+        fn();
+      } catch {
+      }
+    });
+  }
+  list() {
+    return this.sessions.map((s) => ({ ...s }));
+  }
+  get(id) {
+    return this.sessions.find((s) => s.id === id);
+  }
+  active() {
+    return this.sessions.filter((s) => s.status === "running" || s.status === "queued");
+  }
+  activeForTicket(ticketPath) {
+    const key = path8.resolve(ticketPath).toLowerCase();
+    return this.active().find((s) => path8.resolve(s.ticketPath).toLowerCase() === key);
+  }
+  startsInWindow(p, now) {
+    const since = now - p.windowMinutes * 6e4;
+    return (this.starts[p.id] || []).filter((t) => t > since);
+  }
+  /** Can this provider start another session right now? Never throws. */
+  canStart(p, now = this.clock()) {
+    if (!p.enabled)
+      return { ok: false, state: "disabled", reason: "Provider is disabled" };
+    const cd = this.cooldownUntil.get(p.id) || 0;
+    if (cd > now) {
+      return { ok: false, state: "cooldown", reason: "Cooling down after a failed start (possible rate limit)", retryAt: cd };
+    }
+    const running = this.sessions.filter((s) => s.providerId === p.id && s.status === "running").length;
+    if (running >= p.maxParallel) {
+      return { ok: false, state: "busy", reason: `${running}/${p.maxParallel} parallel sessions in use` };
+    }
+    const recent = this.startsInWindow(p, now);
+    if (p.maxSessionsPerWindow > 0) {
+      const allowed = Math.max(1, Math.floor(p.maxSessionsPerWindow * (1 - p.safetyMarginPct / 100)));
+      if (recent.length >= allowed) {
+        const oldest = Math.min(...recent);
+        return {
+          ok: false,
+          state: "throttled",
+          reason: `${recent.length}/${p.maxSessionsPerWindow} sessions used in the last ${p.windowMinutes} min (keeping ${p.safetyMarginPct}% headroom)`,
+          retryAt: oldest + p.windowMinutes * 6e4
+        };
+      }
+    }
+    const last = recent.length ? Math.max(...recent) : 0;
+    const readyAt = last + p.minSpacingSeconds * 1e3;
+    if (p.minSpacingSeconds > 0 && last && readyAt > now) {
+      return { ok: false, state: "throttled", reason: `Spacing starts by ${p.minSpacingSeconds}s`, retryAt: readyAt };
+    }
+    return { ok: true, state: "ready" };
+  }
+  /** How many sessions could start right now without breaking any limit (0 when throttled/busy/cooling). */
+  headroom(p, now = this.clock()) {
+    if (!this.canStart(p, now).ok)
+      return 0;
+    const running = this.sessions.filter((x) => x.providerId === p.id && x.status === "running").length;
+    let room = p.maxParallel - running;
+    if (p.maxSessionsPerWindow > 0) {
+      const allowed = Math.max(1, Math.floor(p.maxSessionsPerWindow * (1 - p.safetyMarginPct / 100)));
+      room = Math.min(room, allowed - this.startsInWindow(p, now).length);
+    }
+    if (p.minSpacingSeconds > 0)
+      room = Math.min(room, 1);
+    return Math.max(0, room);
+  }
+  usage(p, now = this.clock()) {
+    const check = this.canStart(p, now);
+    const recent = this.startsInWindow(p, now).length;
+    return {
+      providerId: p.id,
+      state: check.state,
+      reason: check.reason,
+      running: this.sessions.filter((s) => s.providerId === p.id && s.status === "running").length,
+      queued: this.sessions.filter((s) => s.providerId === p.id && s.status === "queued").length,
+      maxParallel: p.maxParallel,
+      startsInWindow: recent,
+      maxSessionsPerWindow: p.maxSessionsPerWindow,
+      windowMinutes: p.windowMinutes,
+      pct: p.maxSessionsPerWindow > 0 ? Math.min(100, Math.round(recent / p.maxSessionsPerWindow * 100)) : null,
+      retryAt: check.retryAt,
+      cooldownUntil: this.cooldownUntil.get(p.id)
+    };
+  }
+  /** Starts the session now if the provider has capacity, otherwise queues it (or rejects when queueIfBusy is false). */
+  async request(req) {
+    const existing = this.activeForTicket(req.ticketPath);
+    if (existing && existing.providerId === req.provider.id && existing.role === req.role) {
+      return existing;
+    }
+    const now = this.clock();
+    const session = {
+      id: `s${now.toString(36)}${(++this.seq).toString(36)}`,
+      providerId: req.provider.id,
+      providerName: req.provider.name,
+      model: req.model,
+      role: req.role,
+      ticketPath: req.ticketPath,
+      ticketId: req.ticketId,
+      ticketTitle: req.ticketTitle,
+      boardId: req.boardId,
+      status: "queued",
+      queuedAt: now
+    };
+    this.sessions.push(session);
+    this.payloads.set(session.id, { req });
+    const check = this.canStart(req.provider, now);
+    if (check.ok) {
+      await this.start(session);
+    } else if (req.queueIfBusy === false) {
+      session.status = "cancelled";
+      session.endedAt = now;
+      session.note = `Not started: ${check.reason}`;
+      this.payloads.delete(session.id);
+    } else {
+      session.note = `Queued: ${check.reason}`;
+    }
+    this.emit();
+    return session;
+  }
+  async start(session) {
+    const entry = this.payloads.get(session.id);
+    const provider = this.getProvider(session.providerId);
+    if (!entry || !provider) {
+      this.finish(session, "failed", void 0, "Provider no longer exists");
+      return;
+    }
+    const now = this.clock();
+    session.status = "running";
+    session.startedAt = now;
+    session.note = void 0;
+    (this.starts[provider.id] ||= []).push(now);
+    this.trimHistory(provider, now);
+    this.store?.save({ starts: this.starts });
+    this.emit();
+    let ok = false;
+    try {
+      ok = await this.launcher.launch(session, entry.req.payload);
+    } catch (e) {
+      session.note = `Launch error: ${e?.message || e}`;
+    }
+    if (!ok && session.status === "running") {
+      this.finish(session, "failed", void 0, session.note || "Launcher could not start the session");
+    }
+  }
+  trimHistory(p, now) {
+    const keep = now - Math.max(p.windowMinutes, 60) * 6e4;
+    this.starts[p.id] = (this.starts[p.id] || []).filter((t) => t > keep);
+  }
+  /** Called by the launcher when the agent process/terminal ends. exitCode may be unknown. */
+  ended(sessionId, exitCode, note) {
+    const s = this.get(sessionId);
+    if (!s || s.status !== "running" && s.status !== "queued")
+      return;
+    const now = this.clock();
+    const quick = s.startedAt !== void 0 && now - s.startedAt < QUICK_FAIL_MS;
+    if (exitCode !== void 0 && exitCode !== 0) {
+      this.finish(s, "failed", exitCode, note || `Exited with code ${exitCode}`);
+      if (quick)
+        this.enterCooldown(s.providerId, now);
+    } else {
+      this.finish(s, "finished", exitCode, note);
+      if (exitCode === 0)
+        this.quickFails.set(s.providerId, 0);
+    }
+    void this.pump();
+  }
+  enterCooldown(providerId, now) {
+    const n = (this.quickFails.get(providerId) || 0) + 1;
+    this.quickFails.set(providerId, n);
+    const minutes = Math.min(COOLDOWN_MAX_MIN, COOLDOWN_BASE_MIN * 2 ** (n - 1));
+    this.cooldownUntil.set(providerId, now + minutes * 6e4);
+  }
+  finish(s, status, exitCode, note) {
+    s.status = status;
+    s.endedAt = this.clock();
+    if (exitCode !== void 0)
+      s.exitCode = exitCode;
+    if (note)
+      s.note = note;
+    this.payloads.delete(s.id);
+    this.emit();
+  }
+  markFinished(id) {
+    const s = this.get(id);
+    if (s && s.status === "running") {
+      this.finish(s, "finished", void 0, "Marked finished manually");
+      void this.pump();
+    }
+  }
+  cancel(id) {
+    const s = this.get(id);
+    if (!s)
+      return;
+    if (s.status === "running") {
+      try {
+        this.launcher.kill(s);
+      } catch {
+      }
+      this.finish(s, "cancelled", void 0, "Cancelled by user");
+      void this.pump();
+    } else if (s.status === "queued") {
+      this.finish(s, "cancelled", void 0, "Cancelled by user");
+    }
+  }
+  show(id) {
+    const s = this.get(id);
+    if (s)
+      this.launcher.show(s);
+  }
+  /** Starts queued sessions (oldest first) wherever capacity has opened up. Safe to call often. */
+  async pump() {
+    const now = this.clock();
+    for (const s of this.sessions.filter((x) => x.status === "queued").sort((a, b) => a.queuedAt - b.queuedAt)) {
+      const p = this.getProvider(s.providerId);
+      if (!p) {
+        this.finish(s, "failed", void 0, "Provider no longer exists");
+        continue;
+      }
+      const check = this.canStart(p, now);
+      if (check.ok) {
+        await this.start(s);
+      } else {
+        const note = `Queued: ${check.reason}`;
+        if (s.note !== note) {
+          s.note = note;
+          this.emit();
+        }
+      }
+    }
+  }
+  /** Periodic housekeeping: start queued work and retire sessions that clearly outlived any real run. */
+  async tick() {
+    const now = this.clock();
+    for (const s of this.sessions.filter((x) => x.status === "running")) {
+      if (s.startedAt && now - s.startedAt > this.sessionTimeoutMinutes * 6e4) {
+        this.finish(s, "finished", void 0, `Assumed finished after ${this.sessionTimeoutMinutes} min`);
+      }
+    }
+    await this.pump();
+  }
+  /** Drops finished sessions older than `keepMinutes` so the list stays readable. */
+  prune(keepMinutes = 240) {
+    const cutoff = this.clock() - keepMinutes * 6e4;
+    const before = this.sessions.length;
+    this.sessions = this.sessions.filter((s) => s.status === "running" || s.status === "queued" || (s.endedAt || 0) > cutoff);
+    if (this.sessions.length !== before)
+      this.emit();
+  }
+};
+
+// src/fleet/scheduler.ts
+var PRIORITY_RANK = {
+  p0: 0,
+  critical: 0,
+  p1: 1,
+  high: 1,
+  p2: 2,
+  medium: 2,
+  normal: 2,
+  p3: 3,
+  low: 3
+};
+function priorityRank(priority) {
+  const m = (priority || "").toLowerCase().match(/^(p[0-3]|critical|high|medium|normal|low)/);
+  return m ? PRIORITY_RANK[m[1]] : 2;
+}
+function automatableWorkers(providers) {
+  return providers.filter((p) => p.enabled && p.type === "cli" && p.roles.includes("worker"));
+}
+function modelFor(provider, ticket) {
+  const label = (ticket.labels || []).map((l) => l.replace(/[`\s]/g, "")).find((l) => /^model:/i.test(l));
+  if (label) {
+    const wanted = label.slice(label.indexOf(":") + 1).toLowerCase();
+    const hit = provider.models.find((m) => m.toLowerCase() === wanted);
+    if (hit)
+      return hit;
+  }
+  return provider.defaultModel;
+}
+function matchProvider(providers, assignee) {
+  if (!assignee)
+    return void 0;
+  const key = assignee.trim().toLowerCase();
+  return providers.find((p) => p.id.toLowerCase() === key) || providers.find((p) => p.name.toLowerCase() === key);
+}
+function planWork(candidates, providers, sessions, opts = {}) {
+  const now = opts.now ?? Date.now();
+  const maxNew = opts.maxNew ?? 8;
+  const workers = automatableWorkers(providers);
+  const spent = /* @__PURE__ */ new Map();
+  const room = (p) => sessions.headroom(p, now) - (spent.get(p.id) || 0);
+  const ordered = candidates.filter((c) => !sessions.activeForTicket(c.ticket.path)).filter((c) => !(c.ticket.unresolvedDependencies && c.ticket.unresolvedDependencies.length)).sort((a, b) => priorityRank(a.ticket.priority) - priorityRank(b.ticket.priority) || a.ticket.mtime - b.ticket.mtime);
+  const out = [];
+  for (const c of ordered) {
+    if (out.length >= maxNew)
+      break;
+    const t = c.ticket;
+    const requested = matchProvider(providers, t.assignee);
+    let chosen;
+    let reason;
+    if (requested) {
+      if (!workers.includes(requested))
+        continue;
+      chosen = requested;
+      reason = `Assigned to ${requested.name}`;
+    } else if (t.assignee && !/^(unassigned|—|-)$/i.test(t.assignee.trim())) {
+      continue;
+    } else {
+      const ranked = workers.map((p) => ({ p, free: room(p), u: sessions.usage(p, now) })).filter((x) => x.free > 0).sort((a, b) => (a.u.pct ?? 0) - (b.u.pct ?? 0) || b.free - a.free);
+      chosen = ranked[0]?.p;
+      reason = chosen ? "Most headroom available" : "No provider has free capacity";
+    }
+    if (!chosen)
+      continue;
+    const startsNow = room(chosen) > 0;
+    if (startsNow)
+      spent.set(chosen.id, (spent.get(chosen.id) || 0) + 1);
+    out.push({
+      ticketPath: t.path,
+      ticketId: t.id,
+      title: t.title,
+      boardId: c.boardId,
+      providerId: chosen.id,
+      providerName: chosen.name,
+      model: modelFor(chosen, t),
+      startsNow,
+      reason: startsNow ? reason : `${reason} \u2014 will queue (${sessions.canStart(chosen, now).reason || "at capacity"})`
+    });
+  }
+  return out;
+}
+function pickReviewer(providers, sessions, authorProviderId, now = Date.now()) {
+  const reviewers = providers.filter((p) => p.enabled && p.type === "cli" && p.roles.includes("reviewer"));
+  const scored = reviewers.map((p) => ({ p, free: sessions.headroom(p, now), other: p.id !== authorProviderId ? 1 : 0, pct: sessions.usage(p, now).pct ?? 0 })).sort((a, b) => (b.free > 0 ? 1 : 0) - (a.free > 0 ? 1 : 0) || b.other - a.other || a.pct - b.pct);
+  return scored[0]?.p;
+}
+
+// src/fleet/fleetController.ts
+var DEFAULT_SETTINGS = {
+  autopilot: false,
+  autoReview: false,
+  orchestratorProviderId: "",
+  orchestratorModel: "",
+  intervalSeconds: 30,
+  maxNewPerTick: 3
+};
+var REVIEW_TASK = "Code-review the work done for ticket {ticket_path}: {ticket_title}. Check every acceptance criterion, run the tests, and record findings under the ticket Work Log. Do not start new features. If the work passes, say so in the Work Log.";
+var TerminalLauncher = class {
+  terminals = /* @__PURE__ */ new Map();
+  manager;
+  constructor(disposables) {
+    disposables.push(
+      vscode4.window.onDidCloseTerminal((t) => {
+        for (const [id, term] of this.terminals) {
+          if (term === t) {
+            this.terminals.delete(id);
+            this.manager.ended(id, t.exitStatus?.code, "Terminal closed");
+          }
+        }
+      })
+    );
+    const onEnd = vscode4.window.onDidEndTerminalShellExecution;
+    if (typeof onEnd === "function") {
+      disposables.push(
+        onEnd((e) => {
+          for (const [id, term] of this.terminals) {
+            if (term === e.terminal) {
+              this.manager.ended(id, typeof e.exitCode === "number" ? e.exitCode : void 0);
+            }
+          }
+        })
+      );
+    }
+  }
+  async launch(session, payload) {
+    if (payload.kind === "vscode-command") {
+      await AgentRunner.launchDefault(payload);
+      setTimeout(() => this.manager.ended(session.id, 0, "Handed to IDE chat"), 0);
+      return true;
+    }
+    const base = `Agent: ${session.providerName} \xB7 ${session.ticketId || path9.basename(session.ticketPath)}`;
+    let name = base;
+    let n = 2;
+    while (vscode4.window.terminals.some((t) => t.name === name))
+      name = `${base} #${n++}`;
+    const terminal = vscode4.window.createTerminal({ name, cwd: payload.cwd });
+    this.terminals.set(session.id, terminal);
+    terminal.show(true);
+    const deadline = Date.now() + 3e3;
+    while (!terminal.shellIntegration && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    const si = terminal.shellIntegration;
+    if (si && typeof si.executeCommand === "function") {
+      si.executeCommand(payload.command);
+    } else {
+      terminal.sendText(payload.command);
+    }
+    return true;
+  }
+  show(session) {
+    const t = this.terminals.get(session.id);
+    if (t)
+      t.show(false);
+    else
+      vscode4.window.showInformationMessage(`No live terminal for this session (${session.status}).`);
+  }
+  kill(session) {
+    const t = this.terminals.get(session.id);
+    if (t) {
+      this.terminals.delete(session.id);
+      t.dispose();
+    }
+  }
+};
+var FleetController = class _FleetController {
+  static instance;
+  registry;
+  sessions;
+  settings;
+  settingsPath;
+  briefPath;
+  timer;
+  reviewed = /* @__PURE__ */ new Set();
+  changeEmitter = new vscode4.EventEmitter();
+  onDidChange = this.changeEmitter.event;
+  static get() {
+    return _FleetController.instance;
+  }
+  static init(context) {
+    if (!_FleetController.instance) {
+      _FleetController.instance = new _FleetController(context);
+    }
+    return _FleetController.instance;
+  }
+  constructor(context) {
+    const root = vscode4.workspace.workspaceFolders?.[0]?.uri.fsPath || context.globalStorageUri.fsPath;
+    const dir = path9.join(root, ".agentic-kanban");
+    this.settingsPath = path9.join(dir, "fleet.json");
+    this.briefPath = path9.join(dir, "runtime", "orchestrator-brief.md");
+    this.registry = new ProviderRegistry(root);
+    this.settings = this.loadSettings();
+    const launcher = new TerminalLauncher(context.subscriptions);
+    this.sessions = new SessionManager(
+      (id) => this.registry.list().find((p) => p.id === id),
+      launcher,
+      new JsonFleetStore(path9.join(dir, "runtime", "fleet-usage.json"))
+    );
+    launcher.manager = this.sessions;
+    AgentRunner.launcher = async (req) => {
+      const provider = this.registry.get(req.assignee.id);
+      if (!provider)
+        return AgentRunner.launchDefault(req);
+      const board = BoardManager.getInstance().findBoardForTicketPath(req.ticket.path);
+      await this.startSession(provider, req.model || provider.defaultModel, "worker", req.ticket, board?.id || "", req);
+      return true;
+    };
+    this.sessions.onChange(() => {
+      this.maybeAutoReview();
+      this.changeEmitter.fire();
+    });
+    this.registry.onChange(() => this.changeEmitter.fire());
+    this.restartTimer();
+    context.subscriptions.push({ dispose: () => this.timer && clearInterval(this.timer) });
+  }
+  // ---------------------------------------------------------------- settings
+  loadSettings() {
+    try {
+      return { ...DEFAULT_SETTINGS, ...JSON.parse(fs6.readFileSync(this.settingsPath, "utf8")) };
+    } catch {
+      return { ...DEFAULT_SETTINGS };
+    }
+  }
+  saveSettings(patch) {
+    const next = { ...this.settings, ...patch };
+    next.intervalSeconds = Math.min(3600, Math.max(10, Math.round(Number(next.intervalSeconds)) || 30));
+    next.maxNewPerTick = Math.min(20, Math.max(1, Math.round(Number(next.maxNewPerTick)) || 3));
+    this.settings = next;
+    try {
+      fs6.mkdirSync(path9.dirname(this.settingsPath), { recursive: true });
+      fs6.writeFileSync(this.settingsPath, JSON.stringify(next, null, 2), "utf8");
+    } catch (e) {
+      console.warn("[Agentic Kanban] Could not save fleet settings:", e);
+    }
+    this.restartTimer();
+    this.changeEmitter.fire();
+    return next;
+  }
+  restartTimer() {
+    if (this.timer)
+      clearInterval(this.timer);
+    this.timer = setInterval(() => {
+      void this.tick();
+    }, this.settings.intervalSeconds * 1e3);
+  }
+  /** Seeds the registry from legacy config.md agents the first time (so existing boards keep working). */
+  seedFromBoards(boards) {
+    for (const b of boards) {
+      this.registry.seedFromAssignees(b.config.assignees);
+    }
+  }
+  // ---------------------------------------------------------------- starting sessions
+  async startSession(provider, model, role, ticket, boardId, prebuilt, task, queueIfBusy = true) {
+    const board = boardId && BoardManager.getInstance().getBoard(boardId) || BoardManager.getInstance().findBoardForTicketPath(ticket.path);
+    const boardRoot = board?.rootPath || path9.dirname(ticket.path);
+    let payload = prebuilt;
+    if (!payload || task) {
+      if (role !== "worker" && !provider.command.includes("{task}")) {
+        vscode4.window.showWarningMessage(
+          `${provider.name} uses a custom command without {task}, so it cannot act as ${role}. Add {task} to its command in Agent Providers.`
+        );
+        return void 0;
+      }
+      payload = await AgentRunner.prepareLaunch(ticket, providerToAssignee(provider), boardRoot, board?.config, {
+        model,
+        modelFlag: provider.modelFlag,
+        task
+      }) || void 0;
+    }
+    if (!payload)
+      return void 0;
+    const session = await this.sessions.request({
+      provider,
+      model,
+      role,
+      ticketPath: ticket.path,
+      ticketId: ticket.id,
+      ticketTitle: ticket.title,
+      boardId: board?.id || boardId,
+      payload,
+      queueIfBusy
+    });
+    if (session.status === "queued") {
+      vscode4.window.showInformationMessage(`${provider.name} is at capacity \u2014 "${ticket.title}" queued. ${session.note || ""}`.trim());
+    } else if (session.status === "cancelled") {
+      vscode4.window.showWarningMessage(session.note || `${provider.name} could not start the session.`);
+    } else if (session.status === "running") {
+      vscode4.window.showInformationMessage(`Dispatched "${ticket.title}" to ${provider.name}${model ? ` (${model})` : ""}.`);
+    }
+    return session;
+  }
+  /** Assign menu / card action: run a ticket on a specific provider + model. */
+  async dispatchTicket(boardId, ticket, providerId, model) {
+    const provider = this.registry.get(providerId);
+    if (!provider) {
+      vscode4.window.showErrorMessage(`Agent provider "${providerId}" not found. Open Agent Providers to configure it.`);
+      return false;
+    }
+    if (!provider.enabled) {
+      vscode4.window.showWarningMessage(`${provider.name} is disabled in Agent Providers.`);
+      return false;
+    }
+    const chosen = model && (provider.models.length === 0 || provider.models.includes(model)) ? model : provider.defaultModel;
+    return !!await this.startSession(provider, chosen, "worker", ticket, boardId);
+  }
+  // ---------------------------------------------------------------- planning
+  candidates() {
+    const out = [];
+    for (const board of BoardManager.getInstance().getAllBoards()) {
+      for (const col of board.columns) {
+        if (!/^backlog$/i.test(col.name))
+          continue;
+        for (const t of col.tickets) {
+          if (t.subfolder && /^ready$/i.test(t.subfolder)) {
+            out.push({ ticket: t, boardId: board.id, boardRoot: board.rootPath });
+          }
+        }
+      }
+    }
+    return out;
+  }
+  plan() {
+    return planWork(this.candidates(), this.registry.list(), this.sessions, { maxNew: this.settings.maxNewPerTick * 3 });
+  }
+  usage() {
+    return this.registry.list().map((p) => this.sessions.usage(p));
+  }
+  findTicket(ticketPath) {
+    const key = path9.resolve(ticketPath).toLowerCase();
+    for (const board of BoardManager.getInstance().getAllBoards()) {
+      for (const col of board.columns) {
+        const t = col.tickets.find((x) => path9.resolve(x.path).toLowerCase() === key);
+        if (t)
+          return { ticket: t, board };
+      }
+    }
+    return void 0;
+  }
+  /** Executes one plan decision: assign, move to Ongoing when a slot is free, and start (or queue) the session. */
+  async execute(decision) {
+    const found = this.findTicket(decision.ticketPath);
+    const provider = this.registry.get(decision.providerId);
+    if (!found || !provider)
+      return false;
+    const bm = BoardManager.getInstance();
+    await bm.assignTicket(found.board.id, found.ticket.path, provider.name);
+    let ticket = found.ticket;
+    if (decision.startsNow) {
+      const ongoing = found.board.columns.find((c) => /ongoing|in progress/i.test(c.name));
+      if (ongoing && await bm.moveTicket(found.board.id, found.ticket.path, ongoing.name, null)) {
+        ticket = this.findTicket(path9.join(found.board.rootPath, ongoing.name, path9.basename(found.ticket.path)))?.ticket || ticket;
+      }
+    }
+    return !!await this.startSession(provider, decision.model, "worker", ticket, found.board.id);
+  }
+  async runPlan() {
+    let started = 0;
+    for (const d of this.plan().slice(0, this.settings.maxNewPerTick)) {
+      if (await this.execute(d))
+        started++;
+    }
+    return started;
+  }
+  async tick() {
+    await this.sessions.tick();
+    this.sessions.prune();
+    if (this.settings.autopilot) {
+      await this.runPlan();
+    }
+    this.changeEmitter.fire();
+  }
+  // ---------------------------------------------------------------- reviews & orchestrator agent
+  async requestReview(sessionId) {
+    const s = this.sessions.get(sessionId);
+    if (!s)
+      return false;
+    const found = this.findTicket(s.ticketPath);
+    if (!found) {
+      vscode4.window.showWarningMessage("Ticket for this session was not found on the board (it may have moved or been deleted).");
+      return false;
+    }
+    const reviewer = pickReviewer(this.registry.list(), this.sessions, s.providerId);
+    if (!reviewer) {
+      vscode4.window.showWarningMessage('No reviewer-capable provider is available. Enable the "reviewer" role on a provider with a {task} command.');
+      return false;
+    }
+    return !!await this.startSession(reviewer, reviewer.defaultModel, "reviewer", found.ticket, found.board.id, void 0, REVIEW_TASK);
+  }
+  maybeAutoReview() {
+    if (!this.settings.autoReview)
+      return;
+    for (const s of this.sessions.list()) {
+      if (s.role === "worker" && s.status === "finished" && !this.reviewed.has(s.id)) {
+        this.reviewed.add(s.id);
+        void this.requestReview(s.id);
+      }
+    }
+  }
+  /** Writes a capacity/board brief and asks the chosen orchestrator provider to set assignees on Ready tickets. */
+  async askOrchestrator() {
+    const provider = this.registry.get(this.settings.orchestratorProviderId);
+    if (!provider) {
+      vscode4.window.showWarningMessage("Pick an orchestrator agent first (Orchestrator view \u2192 Orchestrator agent).");
+      return false;
+    }
+    const boards = BoardManager.getInstance().getAllBoards();
+    const board = boards[0];
+    if (!board)
+      return false;
+    const providers = this.registry.list();
+    const usage = this.usage();
+    const lines = [
+      "# Orchestrator brief",
+      "",
+      "You are the orchestrator for this Agentic Kanban workspace. Your job: decide which agent should take each Ready ticket.",
+      "",
+      "## Rules",
+      "- Only edit the `| **Assignee** |` row (and optionally add a `model:<name>` label) of tickets in `Backlog/Ready/`.",
+      "- Assign to a provider by its exact name from the table below. Never exceed a provider's free capacity.",
+      "- Prefer cheaper/faster models for small tickets and stronger models for architecture or risky changes.",
+      "- Leave tickets you are unsure about unassigned and say why in `00_Plan.md`. Do not start implementing anything yourself.",
+      '- The autopilot / "Run plan" button will start the sessions; do not launch other agents.',
+      "",
+      "## Provider capacity",
+      "| Provider | Account | State | Running | Window usage | Models | Roles |",
+      "|---|---|---|---|---|---|---|"
+    ];
+    for (const p of providers) {
+      const u = usage.find((x) => x.providerId === p.id);
+      lines.push(
+        `| ${p.name} | ${p.account || "-"} | ${u.state} | ${u.running}/${u.maxParallel} | ${u.pct === null ? "unlimited" : `${u.startsInWindow}/${u.maxSessionsPerWindow} per ${u.windowMinutes}m`} | ${p.models.join(", ") || "-"} | ${p.roles.join(", ")} |`
+      );
+    }
+    lines.push("", "## Ready tickets");
+    const cands = this.candidates();
+    if (!cands.length)
+      lines.push("(none)");
+    for (const c of cands) {
+      lines.push(`- ${c.ticket.id || path9.basename(c.ticket.path)} \u2014 ${c.ticket.title} [${c.ticket.priority}] (${c.ticket.path}) assignee: ${c.ticket.assignee || "unassigned"}`);
+    }
+    fs6.mkdirSync(path9.dirname(this.briefPath), { recursive: true });
+    fs6.writeFileSync(this.briefPath, lines.join("\n"), "utf8");
+    const planTicket = {
+      id: "ORCHESTRATE",
+      filename: path9.basename(this.briefPath),
+      path: this.briefPath,
+      relativePath: path9.relative(board.rootPath, this.briefPath),
+      column: "Backlog",
+      subfolder: null,
+      title: "Orchestration planning",
+      summary: "Assign Ready tickets to agents",
+      description: "",
+      status: "Ongoing",
+      priority: "P1",
+      epic: null,
+      type: "Architecture",
+      estimate: null,
+      milestone: null,
+      assignee: provider.name,
+      dependsOn: [],
+      blocks: [],
+      labels: [],
+      acceptanceCriteria: [],
+      progress: { done: 0, total: 0 },
+      mtime: Date.now(),
+      hasWorkLog: false
+    };
+    const task = `Read ${this.briefPath} and follow its instructions to assign the Ready tickets.`;
+    const model = this.settings.orchestratorModel || provider.defaultModel;
+    return !!await this.startSession(provider, model, "orchestrator", planTicket, board.id, void 0, task);
+  }
+  providerForAssignee(name) {
+    return matchProvider(this.registry.list(), name);
+  }
+};
+
 // src/webviewPanel.ts
 var KanbanWebviewManager = class _KanbanWebviewManager {
   static currentPanel;
@@ -2037,7 +3277,7 @@ var KanbanWebviewManager = class _KanbanWebviewManager {
   currentBoardId = null;
   isOverviewMode = false;
   static createOrShow(extensionUri, initialBoardId, isOverview = false) {
-    const column = vscode4.window.activeTextEditor ? vscode4.window.activeTextEditor.viewColumn : void 0;
+    const column = vscode5.window.activeTextEditor ? vscode5.window.activeTextEditor.viewColumn : void 0;
     if (_KanbanWebviewManager.currentPanel) {
       _KanbanWebviewManager.currentPanel.panel.reveal(column);
       if (isOverview) {
@@ -2047,17 +3287,17 @@ var KanbanWebviewManager = class _KanbanWebviewManager {
       }
       return _KanbanWebviewManager.currentPanel;
     }
-    const panel = vscode4.window.createWebviewPanel(
+    const panel = vscode5.window.createWebviewPanel(
       "agenticKanban",
       "Agentic Kanban",
-      column || vscode4.ViewColumn.One,
+      column || vscode5.ViewColumn.One,
       {
         enableScripts: true,
         retainContextWhenHidden: true,
         localResourceRoots: [
-          vscode4.Uri.joinPath(extensionUri, "dist", "webview"),
-          vscode4.Uri.joinPath(extensionUri, "src", "webview"),
-          vscode4.Uri.joinPath(extensionUri, "media")
+          vscode5.Uri.joinPath(extensionUri, "dist", "webview"),
+          vscode5.Uri.joinPath(extensionUri, "src", "webview"),
+          vscode5.Uri.joinPath(extensionUri, "media")
         ]
       }
     );
@@ -2069,7 +3309,7 @@ var KanbanWebviewManager = class _KanbanWebviewManager {
     this.extensionUri = extensionUri;
     this.currentBoardId = initialBoardId || null;
     this.isOverviewMode = isOverview;
-    this.panel.iconPath = vscode4.Uri.joinPath(this.extensionUri, "media", "kanban-icon.svg");
+    this.panel.iconPath = vscode5.Uri.joinPath(this.extensionUri, "media", "kanban-icon.svg");
     this.panel.webview.html = this.getHtmlForWebview(this.panel.webview);
     this.panel.onDidDispose(() => this.dispose(), null, this.disposables);
     this.panel.webview.onDidReceiveMessage(
@@ -2119,52 +3359,52 @@ var KanbanWebviewManager = class _KanbanWebviewManager {
         break;
       case "openTicketFile":
         try {
-          const doc = await vscode4.workspace.openTextDocument(vscode4.Uri.file(message.filePath));
-          const editor = await vscode4.window.showTextDocument(doc, { viewColumn: vscode4.ViewColumn.Beside });
+          const doc = await vscode5.workspace.openTextDocument(vscode5.Uri.file(message.filePath));
+          const editor = await vscode5.window.showTextDocument(doc, { viewColumn: vscode5.ViewColumn.Beside });
           if (message.line && typeof message.line === "number" && message.line > 0) {
-            const pos = new vscode4.Position(message.line - 1, 0);
-            editor.selection = new vscode4.Selection(pos, pos);
-            editor.revealRange(new vscode4.Range(pos, pos), vscode4.TextEditorRevealType.InCenter);
+            const pos = new vscode5.Position(message.line - 1, 0);
+            editor.selection = new vscode5.Selection(pos, pos);
+            editor.revealRange(new vscode5.Range(pos, pos), vscode5.TextEditorRevealType.InCenter);
           }
         } catch (err) {
-          vscode4.window.showErrorMessage(`Failed to open ticket: ${err?.message || err}`);
+          vscode5.window.showErrorMessage(`Failed to open ticket: ${err?.message || err}`);
         }
         break;
       case "toggleCriterion":
         await boardManager.toggleTicketCriterion(message.ticketPath, message.index, message.done);
         break;
       case "generateAgentRules":
-        await vscode4.commands.executeCommand("agenticKanban.generateAgentRules", {
+        await vscode5.commands.executeCommand("agenticKanban.generateAgentRules", {
           board: boardManager.getBoard(message.boardId)
         });
         break;
       case "initTemplates":
-        await vscode4.commands.executeCommand("agenticKanban.initTemplates", {
+        await vscode5.commands.executeCommand("agenticKanban.initTemplates", {
           board: boardManager.getBoard(message.boardId)
         });
         break;
       case "openPlan":
         try {
-          const doc = await vscode4.workspace.openTextDocument(vscode4.Uri.file(message.filePath));
-          await vscode4.window.showTextDocument(doc, { viewColumn: vscode4.ViewColumn.Beside });
+          const doc = await vscode5.workspace.openTextDocument(vscode5.Uri.file(message.filePath));
+          await vscode5.window.showTextDocument(doc, { viewColumn: vscode5.ViewColumn.Beside });
         } catch (err) {
-          vscode4.window.showErrorMessage(`Failed to open plan document: ${err?.message || err}`);
+          vscode5.window.showErrorMessage(`Failed to open plan document: ${err?.message || err}`);
         }
         break;
       case "openConfig":
         try {
           const board = boardManager.getBoard(message.boardId);
           if (board) {
-            const configPath = path6.join(board.rootPath, "config.md");
-            if (fs4.existsSync(configPath)) {
-              const doc = await vscode4.workspace.openTextDocument(vscode4.Uri.file(configPath));
-              await vscode4.window.showTextDocument(doc, { viewColumn: vscode4.ViewColumn.Beside });
+            const configPath = path10.join(board.rootPath, "config.md");
+            if (fs7.existsSync(configPath)) {
+              const doc = await vscode5.workspace.openTextDocument(vscode5.Uri.file(configPath));
+              await vscode5.window.showTextDocument(doc, { viewColumn: vscode5.ViewColumn.Beside });
             } else {
-              vscode4.window.showInformationMessage(`No config.md found at board root.`);
+              vscode5.window.showInformationMessage(`No config.md found at board root.`);
             }
           }
         } catch (err) {
-          vscode4.window.showErrorMessage(`Failed to open config: ${err?.message || err}`);
+          vscode5.window.showErrorMessage(`Failed to open config: ${err?.message || err}`);
         }
         break;
       case "createTicket":
@@ -2176,8 +3416,8 @@ var KanbanWebviewManager = class _KanbanWebviewManager {
           message.content
         );
         if (createdPath && message.openImmediately) {
-          const doc = await vscode4.workspace.openTextDocument(vscode4.Uri.file(createdPath));
-          await vscode4.window.showTextDocument(doc, { viewColumn: vscode4.ViewColumn.Beside });
+          const doc = await vscode5.workspace.openTextDocument(vscode5.Uri.file(createdPath));
+          await vscode5.window.showTextDocument(doc, { viewColumn: vscode5.ViewColumn.Beside });
         }
         break;
       case "dispatchAgent":
@@ -2187,7 +3427,7 @@ var KanbanWebviewManager = class _KanbanWebviewManager {
           if (assignee) {
             await AgentRunner.dispatch(message.ticket, assignee, targetBoard.rootPath, targetBoard.config);
           } else {
-            vscode4.window.showErrorMessage(`Agent with ID "${message.agentId}" not found in board config.`);
+            vscode5.window.showErrorMessage(`Agent with ID "${message.agentId}" not found in board config.`);
           }
         }
         break;
@@ -2213,18 +3453,18 @@ Instructions:
 1. Implement the requested changes.
 2. Verify tests pass.
 3. Update the ticket's Work Log and move to Completed when finished.`;
-          await vscode4.env.clipboard.writeText(prompt);
-          vscode4.window.showInformationMessage(`Copied ticket prompt to clipboard. Opening IDE Chat...`);
+          await vscode5.env.clipboard.writeText(prompt);
+          vscode5.window.showInformationMessage(`Copied ticket prompt to clipboard. Opening IDE Chat...`);
           try {
-            await vscode4.commands.executeCommand("workbench.action.chat.open");
+            await vscode5.commands.executeCommand("workbench.action.chat.open");
           } catch {
             try {
-              await vscode4.commands.executeCommand("aichat.opensidebar");
+              await vscode5.commands.executeCommand("aichat.opensidebar");
             } catch {
             }
           }
         } catch (err) {
-          vscode4.window.showErrorMessage(`Failed to open IDE chat: ${err?.message || err}`);
+          vscode5.window.showErrorMessage(`Failed to open IDE chat: ${err?.message || err}`);
         }
         break;
       case "copyAgentPrompt":
@@ -2234,7 +3474,7 @@ Instructions:
           const allBoards = boardManager.getAllBoards();
           if (t && t.path) {
             const foundBoard = allBoards.find(
-              (b) => path6.resolve(t.path).toLowerCase().startsWith(path6.resolve(b.rootPath).toLowerCase())
+              (b) => path10.resolve(t.path).toLowerCase().startsWith(path10.resolve(b.rootPath).toLowerCase())
             );
             if (foundBoard)
               targetBoard2 = foundBoard;
@@ -2245,19 +3485,19 @@ Instructions:
           if (!targetBoard2 && allBoards.length > 0) {
             targetBoard2 = allBoards[0];
           }
-          const workspaceFolder = vscode4.workspace.workspaceFolders?.[0]?.uri.fsPath;
+          const workspaceFolder = vscode5.workspace.workspaceFolders?.[0]?.uri.fsPath;
           const prompt = PromptFormatter.formatPrompt(
             t,
             targetBoard2 ? targetBoard2.config : null,
             workspaceFolder,
             targetBoard2 ? targetBoard2.rootPath : void 0
           );
-          await vscode4.env.clipboard.writeText(prompt);
-          vscode4.window.showInformationMessage(
+          await vscode5.env.clipboard.writeText(prompt);
+          vscode5.window.showInformationMessage(
             `Copied Agent Task Prompt for "${t.id ? t.id + ": " : ""}${t.title}" to clipboard!`
           );
         } catch (err) {
-          vscode4.window.showErrorMessage(`Failed to copy agent prompt: ${err?.message || err}`);
+          vscode5.window.showErrorMessage(`Failed to copy agent prompt: ${err?.message || err}`);
         }
         break;
       case "assignTicket":
@@ -2266,7 +3506,7 @@ Instructions:
           const allBoards = boardManager.getAllBoards();
           if (message.ticketPath) {
             const foundBoard = allBoards.find(
-              (b) => path6.resolve(message.ticketPath).toLowerCase().startsWith(path6.resolve(b.rootPath).toLowerCase())
+              (b) => path10.resolve(message.ticketPath).toLowerCase().startsWith(path10.resolve(b.rootPath).toLowerCase())
             );
             if (foundBoard)
               targetBoard2 = foundBoard;
@@ -2275,7 +3515,7 @@ Instructions:
             targetBoard2 = allBoards[0];
           }
           if (!targetBoard2) {
-            vscode4.window.showErrorMessage("No board found to assign ticket.");
+            vscode5.window.showErrorMessage("No board found to assign ticket.");
             break;
           }
           this.currentBoardId = targetBoard2.id;
@@ -2283,20 +3523,22 @@ Instructions:
           const assigneeId = message.assigneeId ? message.assigneeId.trim() : "";
           const assigned = await boardManager.assignTicket(targetBoard2.id, message.ticketPath, targetName);
           if (!assigned) {
-            vscode4.window.showErrorMessage(`Failed to assign ticket at ${message.ticketPath}`);
+            vscode5.window.showErrorMessage(`Failed to assign ticket at ${message.ticketPath}`);
             break;
           }
           this.broadcastCurrentState();
           if (message.runCli && targetName) {
+            const fleetCtl = FleetController.get();
+            const provider = fleetCtl ? fleetCtl.registry.get(message.providerId || assigneeId) || fleetCtl.registry.get(targetName) : void 0;
             const assignee = targetBoard2.config.assignees.find(
               (a) => assigneeId && a.id === assigneeId || a.name.toLowerCase() === targetName.toLowerCase()
             );
-            if (assignee && assignee.type === "agent") {
+            if (provider || assignee && assignee.type === "agent") {
               const reloadedBoard = boardManager.getBoard(targetBoard2.id) || targetBoard2;
               let ticketObj = null;
               for (const col of reloadedBoard.columns) {
                 const found = col.tickets.find(
-                  (t) => path6.resolve(t.path).toLowerCase() === path6.resolve(message.ticketPath).toLowerCase() || message.ticketId && t.id === message.ticketId || t.filename.toLowerCase() === path6.basename(message.ticketPath).toLowerCase()
+                  (t) => path10.resolve(t.path).toLowerCase() === path10.resolve(message.ticketPath).toLowerCase() || message.ticketId && t.id === message.ticketId || t.filename.toLowerCase() === path10.basename(message.ticketPath).toLowerCase()
                 );
                 if (found) {
                   ticketObj = found;
@@ -2305,31 +3547,41 @@ Instructions:
               }
               if (!ticketObj) {
                 const sourcePath = boardManager.resolveTicketPathOnDisk(targetBoard2, message.ticketPath) || message.ticketPath;
-                const fileContent = await fs4.promises.readFile(sourcePath, "utf8");
+                const fileContent = await fs7.promises.readFile(sourcePath, "utf8");
                 ticketObj = TicketParser.parse(sourcePath, fileContent, targetBoard2.rootPath, "", null);
                 if (ticketObj) {
-                  ticketObj.assignee = assignee.name;
+                  ticketObj.assignee = targetName;
                 }
               }
-              if (ticketObj) {
+              if (!ticketObj) {
+                vscode5.window.showErrorMessage(`Assigned, but could not locate the ticket to start the agent: ${message.ticketPath}`);
+              } else if (provider && fleetCtl) {
+                await fleetCtl.dispatchTicket(targetBoard2.id, ticketObj, provider.id, message.model);
+              } else if (assignee) {
                 await AgentRunner.dispatch(ticketObj, assignee, targetBoard2.rootPath, targetBoard2.config);
               }
             } else {
-              vscode4.window.showInformationMessage(`Assigned ticket to ${targetName}.`);
+              vscode5.window.showInformationMessage(`Assigned ticket to ${targetName}.`);
             }
           } else if (targetName) {
-            vscode4.window.showInformationMessage(`Assigned ticket to ${targetName}.`);
+            vscode5.window.showInformationMessage(`Assigned ticket to ${targetName}.`);
           } else {
-            vscode4.window.showInformationMessage("Unassigned ticket.");
+            vscode5.window.showInformationMessage("Unassigned ticket.");
           }
         } catch (err) {
-          vscode4.window.showErrorMessage(`Failed to assign ticket: ${err?.message || err}`);
+          vscode5.window.showErrorMessage(`Failed to assign ticket: ${err?.message || err}`);
         }
+        break;
+      case "openProviders":
+        await vscode5.commands.executeCommand("agenticKanban.openProviders");
+        break;
+      case "openOrchestrator":
+        await vscode5.commands.executeCommand("agenticKanban.openOrchestrator");
         break;
       case "log":
         console.log(`[Webview ${message.level || "info"}] ${message.text}`);
         if (message.level === "error") {
-          vscode4.window.showErrorMessage(`[Agentic Kanban UI Error] ${message.text}`);
+          vscode5.window.showErrorMessage(`[Agentic Kanban UI Error] ${message.text}`);
         }
         break;
       case "refresh":
@@ -2347,7 +3599,8 @@ Instructions:
         isOverview: false,
         boards: [],
         currentBoard: null,
-        overview: null
+        overview: null,
+        providers: this.providerSummaries()
       });
       return;
     }
@@ -2359,7 +3612,8 @@ Instructions:
         isOverview: true,
         boards: boards.map((b) => ({ id: b.id, name: b.name, rootPath: b.rootPath })),
         currentBoard: null,
-        overview
+        overview,
+        providers: this.providerSummaries()
       });
       return;
     }
@@ -2374,17 +3628,39 @@ Instructions:
       isOverview: false,
       boards: boards.map((b) => ({ id: b.id, name: b.name, rootPath: b.rootPath })),
       currentBoard,
-      overview: null
+      overview: null,
+      providers: this.providerSummaries()
+    });
+  }
+  /** Enabled agent providers for the assign menu (id/name never change together: rename-safe). */
+  providerSummaries() {
+    const fleet = FleetController.get();
+    if (!fleet)
+      return [];
+    return fleet.registry.list().filter((p) => p.enabled).map((p) => {
+      const u = fleet.sessions.usage(p);
+      return {
+        id: p.id,
+        name: p.name,
+        account: p.account || "",
+        kind: p.kind,
+        models: p.models,
+        defaultModel: p.defaultModel,
+        type: p.type,
+        state: u.state,
+        running: u.running,
+        maxParallel: u.maxParallel
+      };
     });
   }
   getHtmlForWebview(webview) {
-    let webviewDir = vscode4.Uri.joinPath(this.extensionUri, "dist", "webview");
-    if (!fs4.existsSync(webviewDir.fsPath)) {
-      webviewDir = vscode4.Uri.joinPath(this.extensionUri, "src", "webview");
+    let webviewDir = vscode5.Uri.joinPath(this.extensionUri, "dist", "webview");
+    if (!fs7.existsSync(webviewDir.fsPath)) {
+      webviewDir = vscode5.Uri.joinPath(this.extensionUri, "src", "webview");
     }
     const v = Date.now();
-    const scriptUri = webview.asWebviewUri(vscode4.Uri.joinPath(webviewDir, "app.js")).with({ query: `v=${v}` });
-    const stylesUri = webview.asWebviewUri(vscode4.Uri.joinPath(webviewDir, "styles.css")).with({ query: `v=${v}` });
+    const scriptUri = webview.asWebviewUri(vscode5.Uri.joinPath(webviewDir, "app.js")).with({ query: `v=${v}` });
+    const stylesUri = webview.asWebviewUri(vscode5.Uri.joinPath(webviewDir, "styles.css")).with({ query: `v=${v}` });
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -2470,6 +3746,8 @@ Instructions:
           <span>New Ticket</span>
         </button>
 
+        <button id="btnOrchestrator" class="nav-action-btn secondary" title="Orchestrator: usage, plan and running sub-agents"><span>Orchestrator</span></button>
+        <button id="btnProviders" class="nav-action-btn secondary" title="Configure agent providers, models and limits"><span>Agents</span></button>
         <button id="btnConfig" class="icon-btn" title="Open Board Configuration">
           <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
             <circle cx="12" cy="12" r="3"/>
@@ -2694,34 +3972,204 @@ Instructions:
   }
 };
 
+// src/fleet/panels.ts
+var vscode6 = __toESM(require("vscode"));
+var fs8 = __toESM(require("fs"));
+var TITLES = {
+  providers: "Agent Providers",
+  orchestrator: "Orchestrator"
+};
+var FleetPanel = class _FleetPanel {
+  constructor(panel, extensionUri, kind) {
+    this.panel = panel;
+    this.extensionUri = extensionUri;
+    this.kind = kind;
+    this.panel.iconPath = vscode6.Uri.joinPath(extensionUri, "media", "kanban-icon.svg");
+    this.panel.webview.html = this.html();
+    this.panel.onDidDispose(() => this.dispose(), null, this.disposables);
+    this.panel.webview.onDidReceiveMessage((m) => this.onMessage(m), null, this.disposables);
+    const fleet = FleetController.get();
+    if (fleet)
+      this.disposables.push(fleet.onDidChange(() => this.push()));
+    this.disposables.push(BoardManager.getInstance().onDidChangeBoard(() => this.push()));
+  }
+  static panels = /* @__PURE__ */ new Map();
+  disposables = [];
+  static show(extensionUri, kind) {
+    const existing = _FleetPanel.panels.get(kind);
+    if (existing) {
+      existing.panel.reveal(vscode6.ViewColumn.Active);
+      existing.push();
+      return;
+    }
+    const panel = vscode6.window.createWebviewPanel(
+      `agenticKanban.${kind}`,
+      TITLES[kind],
+      vscode6.ViewColumn.Active,
+      { enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [extensionUri] }
+    );
+    _FleetPanel.panels.set(kind, new _FleetPanel(panel, extensionUri, kind));
+  }
+  dispose() {
+    _FleetPanel.panels.delete(this.kind);
+    while (this.disposables.length)
+      this.disposables.pop()?.dispose();
+  }
+  async onMessage(m) {
+    const fleet = FleetController.get();
+    if (!fleet)
+      return;
+    try {
+      switch (m.type) {
+        case "ready":
+        case "refresh":
+          break;
+        case "saveProvider":
+          fleet.registry.upsert(m.provider);
+          vscode6.window.setStatusBarMessage(`Saved ${m.provider?.name || "provider"}`, 2500);
+          break;
+        case "addProvider":
+          fleet.registry.add(m.kindId);
+          break;
+        case "duplicateProvider":
+          fleet.registry.duplicate(m.id);
+          break;
+        case "deleteProvider": {
+          const p = fleet.registry.get(m.id);
+          const pick = await vscode6.window.showWarningMessage(
+            `Delete provider "${p?.name || m.id}"? Running sessions are not affected.`,
+            { modal: true },
+            "Delete"
+          );
+          if (pick === "Delete")
+            fleet.registry.remove(m.id);
+          break;
+        }
+        case "saveSettings":
+          fleet.saveSettings(m.settings || {});
+          break;
+        case "runPlan": {
+          const n = await fleet.runPlan();
+          vscode6.window.showInformationMessage(n ? `Orchestrator started ${n} session(s).` : "Nothing to start right now (no Ready tickets or no free capacity).");
+          break;
+        }
+        case "startDecision": {
+          const d = fleet.plan().find((x) => x.ticketPath === m.ticketPath);
+          if (d)
+            await fleet.execute(d);
+          break;
+        }
+        case "askOrchestrator":
+          await fleet.askOrchestrator();
+          break;
+        case "focusSession":
+          fleet.sessions.show(m.id);
+          break;
+        case "cancelSession":
+          fleet.sessions.cancel(m.id);
+          break;
+        case "markFinished":
+          fleet.sessions.markFinished(m.id);
+          break;
+        case "requestReview":
+          await fleet.requestReview(m.id);
+          break;
+        case "openTicket": {
+          if (m.path && fs8.existsSync(m.path)) {
+            const doc = await vscode6.workspace.openTextDocument(vscode6.Uri.file(m.path));
+            await vscode6.window.showTextDocument(doc, { viewColumn: vscode6.ViewColumn.Beside });
+          }
+          break;
+        }
+        case "openProviders":
+          _FleetPanel.show(this.extensionUri, "providers");
+          return;
+        case "openOrchestrator":
+          _FleetPanel.show(this.extensionUri, "orchestrator");
+          return;
+      }
+    } catch (e) {
+      vscode6.window.showErrorMessage(`Agentic Kanban: ${e?.message || e}`);
+    }
+    this.push();
+  }
+  push() {
+    const fleet = FleetController.get();
+    if (!fleet)
+      return;
+    const providers = fleet.registry.list();
+    const base = {
+      type: "state",
+      now: Date.now(),
+      providers,
+      usage: fleet.usage(),
+      presets: PROVIDER_PRESETS.map((p) => ({ kind: p.kind, label: p.label }))
+    };
+    if (this.kind === "providers") {
+      this.panel.webview.postMessage(base);
+      return;
+    }
+    this.panel.webview.postMessage({
+      ...base,
+      settings: fleet.settings,
+      sessions: fleet.sessions.list().sort((a, b) => (b.startedAt || b.queuedAt) - (a.startedAt || a.queuedAt)),
+      plan: fleet.plan()
+    });
+  }
+  html() {
+    const webview = this.panel.webview;
+    let dir = vscode6.Uri.joinPath(this.extensionUri, "dist", "webview");
+    if (!fs8.existsSync(dir.fsPath))
+      dir = vscode6.Uri.joinPath(this.extensionUri, "src", "webview");
+    const v = Date.now();
+    const css = webview.asWebviewUri(vscode6.Uri.joinPath(dir, "fleet.css")).with({ query: `v=${v}` });
+    const js = webview.asWebviewUri(vscode6.Uri.joinPath(dir, `${this.kind}.js`)).with({ query: `v=${v}` });
+    return `<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src ${webview.cspSource};">
+<title>${TITLES[this.kind]}</title>
+<link rel="stylesheet" href="${css}">
+</head><body><div id="root" class="fleet-root"></div><script src="${js}"></script></body></html>`;
+  }
+};
+
 // src/extension.ts
 async function activate(context) {
   console.log("[Agentic Kanban] Extension activating...");
   const boardManager = BoardManager.getInstance();
   await boardManager.reloadBoards();
+  const fleet = FleetController.init(context);
+  fleet.seedFromBoards(boardManager.getAllBoards());
   boardManager.setupWatchers(context);
   const treeProvider = new BoardsTreeProvider(boardManager);
-  vscode5.window.registerTreeDataProvider("agenticKanban.boardsView", treeProvider);
+  vscode7.window.registerTreeDataProvider("agenticKanban.boardsView", treeProvider);
   context.subscriptions.push(
-    vscode5.commands.registerCommand("agenticKanban.openBoard", (boardId) => {
+    vscode7.commands.registerCommand("agenticKanban.openBoard", (boardId) => {
       KanbanWebviewManager.createOrShow(context.extensionUri, boardId, false);
     }),
-    vscode5.commands.registerCommand("agenticKanban.openOverview", () => {
+    vscode7.commands.registerCommand("agenticKanban.openOverview", () => {
       KanbanWebviewManager.createOrShow(context.extensionUri, void 0, true);
     }),
-    vscode5.commands.registerCommand("agenticKanban.refreshBoards", async () => {
-      await boardManager.reloadBoards();
-      vscode5.window.showInformationMessage("Agentic Kanban: Boards refreshed.");
+    vscode7.commands.registerCommand("agenticKanban.openProviders", () => {
+      FleetPanel.show(context.extensionUri, "providers");
     }),
-    vscode5.commands.registerCommand("agenticKanban.createTicket", async () => {
+    vscode7.commands.registerCommand("agenticKanban.openOrchestrator", () => {
+      FleetPanel.show(context.extensionUri, "orchestrator");
+    }),
+    vscode7.commands.registerCommand("agenticKanban.refreshBoards", async () => {
+      await boardManager.reloadBoards();
+      vscode7.window.showInformationMessage("Agentic Kanban: Boards refreshed.");
+    }),
+    vscode7.commands.registerCommand("agenticKanban.createTicket", async () => {
       const boards = boardManager.getAllBoards();
       if (boards.length === 0) {
-        vscode5.window.showWarningMessage("No Kanban boards discovered in the workspace.");
+        vscode7.window.showWarningMessage("No Kanban boards discovered in the workspace.");
         return;
       }
       let selectedBoard = boards[0];
       if (boards.length > 1) {
-        const boardPick = await vscode5.window.showQuickPick(
+        const boardPick = await vscode7.window.showQuickPick(
           boards.map((b) => ({ label: b.name, description: b.rootPath, board: b })),
           { placeHolder: "Select target board" }
         );
@@ -2729,7 +4177,7 @@ async function activate(context) {
           return;
         selectedBoard = boardPick.board;
       }
-      const columnPick = await vscode5.window.showQuickPick(
+      const columnPick = await vscode7.window.showQuickPick(
         selectedBoard.columns.map((c) => ({ label: c.name, description: `${c.tickets.length} tickets`, column: c })),
         { placeHolder: "Select destination column" }
       );
@@ -2737,7 +4185,7 @@ async function activate(context) {
         return;
       let subfolder = null;
       if (columnPick.column.subfolders.length > 0) {
-        const subfolderPick = await vscode5.window.showQuickPick(
+        const subfolderPick = await vscode7.window.showQuickPick(
           [
             { label: "(Column Root)", subfolder: null },
             ...columnPick.column.subfolders.map((s) => ({ label: s.name, subfolder: s.name }))
@@ -2748,7 +4196,7 @@ async function activate(context) {
           subfolder = subfolderPick.subfolder;
         }
       }
-      const title = await vscode5.window.showInputBox({
+      const title = await vscode7.window.showInputBox({
         prompt: "Enter ticket title",
         placeHolder: "e.g. Implement resilient retry loop"
       });
@@ -2761,11 +4209,11 @@ async function activate(context) {
         title.trim()
       );
       if (createdPath) {
-        const doc = await vscode5.workspace.openTextDocument(vscode5.Uri.file(createdPath));
-        await vscode5.window.showTextDocument(doc);
+        const doc = await vscode7.workspace.openTextDocument(vscode7.Uri.file(createdPath));
+        await vscode7.window.showTextDocument(doc);
       }
     }),
-    vscode5.commands.registerCommand("agenticKanban.openConfig", async (item) => {
+    vscode7.commands.registerCommand("agenticKanban.openConfig", async (item) => {
       const boards = boardManager.getAllBoards();
       if (boards.length === 0)
         return;
@@ -2773,7 +4221,7 @@ async function activate(context) {
       if (item && item.board) {
         board = item.board;
       } else if (boards.length > 1) {
-        const pick = await vscode5.window.showQuickPick(
+        const pick = await vscode7.window.showQuickPick(
           boards.map((b) => ({ label: b.name, description: b.rootPath, board: b })),
           { placeHolder: "Select board" }
         );
@@ -2781,25 +4229,25 @@ async function activate(context) {
           return;
         board = pick.board;
       }
-      const configPath = path7.join(board.rootPath, "config.md");
-      if (!fs5.existsSync(configPath)) {
+      const configPath = path11.join(board.rootPath, "config.md");
+      if (!fs9.existsSync(configPath)) {
         const defaultConfig = ConfigParser.generateDefaultConfig(board.name);
-        await fs5.promises.writeFile(configPath, defaultConfig, "utf8");
+        await fs9.promises.writeFile(configPath, defaultConfig, "utf8");
       }
-      const doc = await vscode5.workspace.openTextDocument(vscode5.Uri.file(configPath));
-      await vscode5.window.showTextDocument(doc);
+      const doc = await vscode7.workspace.openTextDocument(vscode7.Uri.file(configPath));
+      await vscode7.window.showTextDocument(doc);
     }),
-    vscode5.commands.registerCommand("agenticKanban.generateAgentRules", async (item) => {
+    vscode7.commands.registerCommand("agenticKanban.generateAgentRules", async (item) => {
       const boards = boardManager.getAllBoards();
       if (boards.length === 0) {
-        vscode5.window.showWarningMessage("No active Kanban boards found.");
+        vscode7.window.showWarningMessage("No active Kanban boards found.");
         return;
       }
       let board = boards[0];
       if (item && item.board) {
         board = item.board;
       } else if (boards.length > 1) {
-        const pick = await vscode5.window.showQuickPick(
+        const pick = await vscode7.window.showQuickPick(
           boards.map((b) => ({ label: b.name, description: b.rootPath, board: b })),
           { placeHolder: "Select board to generate agent rules for" }
         );
@@ -2810,43 +4258,43 @@ async function activate(context) {
       const res = await boardManager.generateAgentRules(board.id);
       if (!res)
         return;
-      if (fs5.existsSync(res.targetPath)) {
-        const choice = await vscode5.window.showQuickPick(
+      if (fs9.existsSync(res.targetPath)) {
+        const choice = await vscode7.window.showQuickPick(
           [
-            { label: "Overwrite", description: `Replace entire ${path7.basename(res.targetPath)}` },
-            { label: "Append", description: `Append Kanban rules to existing ${path7.basename(res.targetPath)}` },
+            { label: "Overwrite", description: `Replace entire ${path11.basename(res.targetPath)}` },
+            { label: "Append", description: `Append Kanban rules to existing ${path11.basename(res.targetPath)}` },
             { label: "Cancel", description: "Keep existing file unchanged" }
           ],
-          { placeHolder: `${path7.basename(res.targetPath)} already exists. What would you like to do?` }
+          { placeHolder: `${path11.basename(res.targetPath)} already exists. What would you like to do?` }
         );
         if (!choice || choice.label === "Cancel")
           return;
         if (choice.label === "Append") {
-          const existing = await fs5.promises.readFile(res.targetPath, "utf8");
-          await fs5.promises.writeFile(res.targetPath, `${existing}
+          const existing = await fs9.promises.readFile(res.targetPath, "utf8");
+          await fs9.promises.writeFile(res.targetPath, `${existing}
 
 ${res.content}`, "utf8");
         } else {
-          await fs5.promises.writeFile(res.targetPath, res.content, "utf8");
+          await fs9.promises.writeFile(res.targetPath, res.content, "utf8");
         }
       } else {
-        await fs5.promises.writeFile(res.targetPath, res.content, "utf8");
+        await fs9.promises.writeFile(res.targetPath, res.content, "utf8");
       }
-      vscode5.window.showInformationMessage(`Agent rules generated at ${path7.basename(res.targetPath)}`);
-      const doc = await vscode5.workspace.openTextDocument(vscode5.Uri.file(res.targetPath));
-      await vscode5.window.showTextDocument(doc);
+      vscode7.window.showInformationMessage(`Agent rules generated at ${path11.basename(res.targetPath)}`);
+      const doc = await vscode7.workspace.openTextDocument(vscode7.Uri.file(res.targetPath));
+      await vscode7.window.showTextDocument(doc);
     }),
-    vscode5.commands.registerCommand("agenticKanban.initTemplates", async (item) => {
+    vscode7.commands.registerCommand("agenticKanban.initTemplates", async (item) => {
       const boards = boardManager.getAllBoards();
       if (boards.length === 0) {
-        vscode5.window.showWarningMessage("No active Kanban boards found.");
+        vscode7.window.showWarningMessage("No active Kanban boards found.");
         return;
       }
       let board = boards[0];
       if (item && item.board) {
         board = item.board;
       } else if (boards.length > 1) {
-        const pick = await vscode5.window.showQuickPick(
+        const pick = await vscode7.window.showQuickPick(
           boards.map((b) => ({ label: b.name, description: b.rootPath, board: b })),
           { placeHolder: "Select board to initialize templates in" }
         );
@@ -2856,14 +4304,14 @@ ${res.content}`, "utf8");
       }
       const created = await boardManager.initTemplates(board.id);
       if (created && created.length > 0) {
-        vscode5.window.showInformationMessage(`Initialized templates: ${created.join(", ")} in ${board.name}/.templates/`);
-        const firstTemplate = path7.join(board.rootPath, ".templates", created[0]);
-        if (fs5.existsSync(firstTemplate)) {
-          const doc = await vscode5.workspace.openTextDocument(vscode5.Uri.file(firstTemplate));
-          await vscode5.window.showTextDocument(doc);
+        vscode7.window.showInformationMessage(`Initialized templates: ${created.join(", ")} in ${board.name}/.templates/`);
+        const firstTemplate = path11.join(board.rootPath, ".templates", created[0]);
+        if (fs9.existsSync(firstTemplate)) {
+          const doc = await vscode7.workspace.openTextDocument(vscode7.Uri.file(firstTemplate));
+          await vscode7.window.showTextDocument(doc);
         }
       } else {
-        vscode5.window.showInformationMessage(`.templates/ already contains templates for ${board.name}.`);
+        vscode7.window.showInformationMessage(`.templates/ already contains templates for ${board.name}.`);
       }
     })
   );

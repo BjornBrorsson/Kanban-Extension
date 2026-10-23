@@ -271,12 +271,12 @@ var TicketParser = class {
     let updated = content;
     const tableRegex = /^(\|\s*\*{0,2}Status\*{0,2}\s*\|\s*)([^|\r\n]+?)(\s*\|.*)$/im;
     if (tableRegex.test(updated)) {
-      updated = updated.replace(tableRegex, `$1${newStatus} |`);
+      updated = updated.replace(tableRegex, (_m, pre, _old, rest) => `${pre}${newStatus} ${rest.trimStart()}`);
       return updated;
     }
     const frontmatterRegex = /^(status\s*:\s*)([^\r\n]+)$/im;
     if (frontmatterRegex.test(updated)) {
-      updated = updated.replace(frontmatterRegex, `$1${newStatus}`);
+      updated = updated.replace(frontmatterRegex, (_m, pre) => `${pre}${newStatus}`);
       return updated;
     }
     return updated;
@@ -287,27 +287,27 @@ var TicketParser = class {
     const val = newAssignee && newAssignee.trim() ? newAssignee.trim() : "\u2014";
     const tableAssigneeRegex = /^(\|\s*\*{0,2}Assignee\*{0,2}\s*\|\s*)([^|\r\n]+?)(\s*\|.*)$/im;
     if (tableAssigneeRegex.test(updated)) {
-      updated = updated.replace(tableAssigneeRegex, `$1${val} |`);
+      updated = updated.replace(tableAssigneeRegex, (_m, pre, _old, rest) => `${pre}${val} ${rest.trimStart()}`);
       return updated;
     }
     const statusRowRegex = /^(\|\s*\*{0,2}Status\*{0,2}\s*\|.*)$/im;
     if (statusRowRegex.test(updated)) {
-      updated = updated.replace(statusRowRegex, `$1${eol}| **Assignee** | ${val} |`);
+      updated = updated.replace(statusRowRegex, (_m, row) => `${row}${eol}| **Assignee** | ${val} |`);
       return updated;
     }
     const dividerRegex = /^(\|[-:\s|]+[-:]+\|)$/im;
     if (dividerRegex.test(updated)) {
-      updated = updated.replace(dividerRegex, `$1${eol}| **Assignee** | ${val} |`);
+      updated = updated.replace(dividerRegex, (_m, row) => `${row}${eol}| **Assignee** | ${val} |`);
       return updated;
     }
     const anyTableRowRegex = /^(\|\s*\*{0,2}(?:Priority|Type|Epic|Estimate|Milestone)\*{0,2}\s*\|.*)$/im;
     if (anyTableRowRegex.test(updated)) {
-      updated = updated.replace(anyTableRowRegex, `$1${eol}| **Assignee** | ${val} |`);
+      updated = updated.replace(anyTableRowRegex, (_m, row) => `${row}${eol}| **Assignee** | ${val} |`);
       return updated;
     }
     const frontmatterAssigneeRegex = /^(assignee\s*:\s*)([^\r\n]+)$/im;
     if (frontmatterAssigneeRegex.test(updated)) {
-      updated = updated.replace(frontmatterAssigneeRegex, `$1${val === "\u2014" ? "" : val}`);
+      updated = updated.replace(frontmatterAssigneeRegex, (_m, pre) => `${pre}${val === "\u2014" ? "" : val}`);
       return updated;
     }
     const frontmatterBlockRegex = /^---\r?\n([\s\S]*?)\r?\n---/;
@@ -315,13 +315,13 @@ var TicketParser = class {
     if (fmMatch) {
       const fmContent = fmMatch[1];
       const newFm = `---${eol}${fmContent}${eol}assignee: ${val === "\u2014" ? "" : val}${eol}---`;
-      return updated.replace(frontmatterBlockRegex, newFm);
+      return updated.replace(frontmatterBlockRegex, () => newFm);
     }
     const headingRegex = /^(#\s+[^\r\n]+(?:\r?\n)+)/;
     const headingMatch = updated.match(headingRegex);
     const tableBlock = `| Field | Value |${eol}|-------|-------|${eol}| **Assignee** | ${val} |${eol}${eol}`;
     if (headingMatch) {
-      return updated.replace(headingRegex, `${headingMatch[1]}${tableBlock}`);
+      return updated.replace(headingRegex, () => `${headingMatch[1]}${tableBlock}`);
     }
     return `${tableBlock}${updated}`;
   }
@@ -905,6 +905,33 @@ var PromptFormatter = class {
 // src/agentRunner.ts
 var path3 = __toESM(require("path"));
 var fs = __toESM(require("fs"));
+
+// src/shellEscape.ts
+function detectShellKind(shellPath, platform = process.platform) {
+  const name = (shellPath || "").split(/[\\/]/).pop()?.toLowerCase() || "";
+  if (name.includes("pwsh") || name.includes("powershell"))
+    return "powershell";
+  if (name === "cmd.exe" || name === "cmd")
+    return "cmd";
+  if (name)
+    return "posix";
+  return platform === "win32" ? "powershell" : "posix";
+}
+function escapeForDoubleQuotes(value, shell) {
+  const flat = String(value ?? "").replace(/[\r\n\t]+/g, " ").replace(/[\u0000-\u001f\u007f]/g, "");
+  switch (shell) {
+    case "powershell":
+      return flat.replace(/[`$"“”„]/g, (ch) => "`" + ch);
+    case "cmd":
+      return flat.replace(/"/g, '""').replace(/%/g, "%%");
+    default:
+      return flat.replace(/[\\"$`!]/g, (ch) => "\\" + ch);
+  }
+}
+
+// src/agentRunner.ts
+var DEFAULT_TASK = "Review requirements and implement ticket {ticket_path}: {ticket_title}";
+var MODEL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:\/@+-]*$/;
 function getVsCode() {
   try {
     return require("vscode");
@@ -913,7 +940,6 @@ function getVsCode() {
   }
 }
 var AgentRunner = class {
-  static terminals = /* @__PURE__ */ new Map();
   /**
    * Resolves the executable path for the Antigravity CLI (agy).
    * Resolution priority:
@@ -979,11 +1005,13 @@ var AgentRunner = class {
    * Formats the CLI command string for an agent, performing template substitution,
    * path resolution, and legacy syntax upgrade.
    */
-  static formatCliCommand(ticket, assignee, boardRoot, boardConfig, rawTicketContent) {
+  static formatCliCommand(ticket, assignee, boardRoot, boardConfig, rawTicketContent, options = {}) {
     const config = assignee.agentConfig;
     if (!config)
       return "";
     const vscode = getVsCode();
+    const shell = options.shell || detectShellKind(vscode?.env?.shell);
+    const esc = (v) => escapeForDoubleQuotes(v, shell);
     const workspaceFolder = vscode?.workspace?.workspaceFolders?.[0]?.uri.fsPath || path3.dirname(boardRoot);
     const content = rawTicketContent ?? ticket.summary ?? ticket.title;
     let effectiveBoardConfig = boardConfig;
@@ -998,17 +1026,23 @@ var AgentRunner = class {
       }
     }
     const agyPath = this.resolveAntigravityPath(config.path || config.executable, effectiveBoardConfig);
+    const model = options.model && MODEL_ID_PATTERN.test(options.model) ? options.model : "";
+    const modelArgs = model && options.modelFlag ? `${options.modelFlag} ${model}` : "";
+    const rawTask = (options.task || DEFAULT_TASK).replace(/\{ticket_path\}/g, () => ticket.path).replace(/\{ticket_title\}/g, () => ticket.title).replace(/\{ticket_id\}/g, () => ticket.id);
     const replacements = {
-      "{ticket_path}": ticket.path,
-      "{ticket_rel_path}": ticket.relativePath,
-      "{ticket_name}": ticket.filename,
-      "{ticket_id}": ticket.id,
-      "{ticket_title}": ticket.title,
-      "{ticket_summary}": ticket.summary,
-      "{ticket_content}": content.replace(/"/g, '\\"').slice(0, 1500),
-      "{workspace_root}": workspaceFolder,
-      "{board_root}": boardRoot,
-      "{column}": ticket.column,
+      "{task}": esc(rawTask),
+      "{ticket_path}": esc(ticket.path),
+      "{ticket_rel_path}": esc(ticket.relativePath),
+      "{ticket_name}": esc(ticket.filename),
+      "{ticket_id}": esc(ticket.id),
+      "{ticket_title}": esc(ticket.title),
+      "{ticket_summary}": esc(ticket.summary),
+      "{ticket_content}": esc(content.slice(0, 1500)),
+      "{workspace_root}": esc(workspaceFolder),
+      "{board_root}": esc(boardRoot),
+      "{column}": esc(ticket.column),
+      "{model}": model,
+      "{model_args}": modelArgs,
       "{agy_path}": agyPath,
       "{antigravity_path}": agyPath,
       "{executable}": config.path || config.executable || agyPath,
@@ -1028,10 +1062,11 @@ var AgentRunner = class {
         command = command.replace(/^agy\b/i, `& "{agy_path}"`);
       }
     }
-    for (const [placeholder, value] of Object.entries(replacements)) {
-      const safeValue = placeholder === "{ticket_title}" || placeholder === "{ticket_summary}" || placeholder === "{ticket_name}" ? value.replace(/"/g, '\\"') : value;
-      command = command.split(placeholder).join(safeValue);
+    if (modelArgs && !command.includes("{model_args}") && !command.includes("{model}")) {
+      command = `${command.trimEnd()} ${modelArgs}`;
     }
+    command = command.replace(/\{[a-z_]+\}/g, (m) => m in replacements ? replacements[m] : m);
+    command = command.replace(/ {2,}/g, " ").trim();
     if (process.platform === "win32") {
       const trimmed = command.trim();
       if (trimmed.startsWith('"') && !trimmed.startsWith("&")) {
@@ -1040,11 +1075,12 @@ var AgentRunner = class {
     }
     return command;
   }
-  static async dispatch(ticket, assignee, boardRoot, boardConfig) {
+  /** Resolves everything needed to start an agent for a ticket (command text, cwd, prompt) without starting it. */
+  static async prepareLaunch(ticket, assignee, boardRoot, boardConfig, options = {}) {
     const vscode = getVsCode();
     if (assignee.type !== "agent" || !assignee.agentConfig) {
       vscode?.window.showWarningMessage(`Assignee "${assignee.name}" is not configured as an executable agent.`);
-      return false;
+      return null;
     }
     const config = assignee.agentConfig;
     const workspaceFolder = vscode?.workspace?.workspaceFolders?.[0]?.uri.fsPath || path3.dirname(boardRoot);
@@ -1055,30 +1091,11 @@ var AgentRunner = class {
       ticketContent = ticket.summary || ticket.title;
     }
     if (config.type === "cli") {
-      const command = this.formatCliCommand(ticket, assignee, boardRoot, boardConfig, ticketContent);
+      const command = this.formatCliCommand(ticket, assignee, boardRoot, boardConfig, ticketContent, options);
       const cwd = config.workingDir ? config.workingDir.replace("{workspace_root}", workspaceFolder).replace("{board_root}", boardRoot) : workspaceFolder;
-      const terminalName = `Agent: ${assignee.name}`;
-      let terminal = this.terminals.get(terminalName);
-      const existing = vscode?.window.terminals?.find((t) => t.name === terminalName);
-      if (!existing) {
-        terminal = vscode?.window.createTerminal({
-          name: terminalName,
-          cwd
-        });
-        if (terminal) {
-          this.terminals.set(terminalName, terminal);
-        }
-      } else {
-        terminal = existing;
-      }
-      terminal?.show(false);
-      if (!existing) {
-        await new Promise((r) => setTimeout(r, 600));
-      }
-      terminal?.sendText(command);
-      vscode?.window.showInformationMessage(`Dispatched ticket "${ticket.title}" to ${assignee.name}.`);
-      return true;
-    } else if (config.type === "vscode-command") {
+      return { kind: "cli", ticket, assignee, command, cwd, model: options.model };
+    }
+    if (config.type === "vscode-command") {
       const replacements = {
         "{ticket_path}": ticket.path,
         "{ticket_rel_path}": ticket.relativePath,
@@ -1086,10 +1103,11 @@ var AgentRunner = class {
         "{ticket_id}": ticket.id,
         "{ticket_title}": ticket.title,
         "{ticket_summary}": ticket.summary,
-        "{ticket_content}": ticketContent.replace(/"/g, '\\"').slice(0, 1500),
+        "{ticket_content}": ticketContent.slice(0, 1500),
         "{workspace_root}": workspaceFolder,
         "{board_root}": boardRoot,
-        "{column}": ticket.column
+        "{column}": ticket.column,
+        "{model}": options.model || ""
       };
       let prompt = config.prompt || `Please review and work on ticket "${ticket.title}" at: ${ticket.path}
 
@@ -1098,18 +1116,44 @@ ${ticket.summary}`;
       for (const [placeholder, value] of Object.entries(replacements)) {
         prompt = prompt.split(placeholder).join(value);
       }
-      await vscode?.env.clipboard.writeText(prompt);
-      vscode?.window.showInformationMessage(
-        `Copied ticket context to clipboard! Triggering ${assignee.name} (${config.command})...`
-      );
-      try {
-        await vscode?.commands.executeCommand(config.command);
-      } catch (err) {
-        vscode?.window.showErrorMessage(`Failed to execute command "${config.command}": ${err?.message || err}`);
-      }
+      return { kind: "vscode-command", ticket, assignee, command: config.command, cwd: workspaceFolder, prompt, model: options.model };
+    }
+    return null;
+  }
+  /** Optional hook (set by the fleet controller) that tracks each launch as a session. */
+  static launcher;
+  static async dispatch(ticket, assignee, boardRoot, boardConfig, options = {}) {
+    const req = await this.prepareLaunch(ticket, assignee, boardRoot, boardConfig, options);
+    if (!req)
+      return false;
+    return this.launcher ? this.launcher(req) : this.launchDefault(req);
+  }
+  /** Fallback launcher: a fresh terminal per dispatch (never type a new command into a still-running agent). */
+  static async launchDefault(req) {
+    const vscode = getVsCode();
+    if (req.kind === "cli") {
+      const base = `Agent: ${req.assignee.name} \xB7 ${req.ticket.id || req.ticket.filename}`;
+      let name = base;
+      let n = 2;
+      while (vscode?.window.terminals?.some((t) => t.name === name))
+        name = `${base} #${n++}`;
+      const terminal = vscode?.window.createTerminal({ name, cwd: req.cwd });
+      if (!terminal)
+        return false;
+      terminal.show(false);
+      await new Promise((r) => setTimeout(r, 600));
+      terminal.sendText(req.command);
+      vscode?.window.showInformationMessage(`Dispatched ticket "${req.ticket.title}" to ${req.assignee.name}.`);
       return true;
     }
-    return false;
+    await vscode?.env.clipboard.writeText(req.prompt || "");
+    vscode?.window.showInformationMessage(`Copied ticket context to clipboard! Triggering ${req.assignee.name} (${req.command})...`);
+    try {
+      await vscode?.commands.executeCommand(req.command);
+    } catch (err) {
+      vscode?.window.showErrorMessage(`Failed to execute command "${req.command}": ${err?.message || err}`);
+    }
+    return true;
   }
 };
 

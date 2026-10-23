@@ -226,6 +226,26 @@ async function run() {
     });
   }
 
+  for (const [entry, out, stub] of [
+    ['fleetTests.ts', 'fleetTests.js', false],
+    ['boardManagerTests.ts', 'boardManagerTests.js', true]
+  ]) {
+    if (fs.existsSync(path.join(__dirname, 'test', entry))) {
+      await esbuild.build({
+        entryPoints: ['./test/' + entry],
+        bundle: true,
+        outfile: './dist/' + out,
+        // BoardManager imports vscode, so its test bundle swaps in a minimal stub.
+        external: stub ? [] : ['vscode'],
+        alias: stub ? { vscode: './test/fixtures/vscodeStub.ts' } : {},
+        format: 'cjs',
+        platform: 'node',
+        sourcemap: true,
+        minify: false
+      });
+    }
+  }
+
   if (isWatch) {
     await context.watch();
     console.log('[esbuild] Watching for changes...');

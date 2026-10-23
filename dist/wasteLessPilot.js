@@ -2487,8 +2487,8 @@ async function runWasteLessPilot() {
   const reportOutPath = path10.join(pilotRoot, "overnight_summary.md");
   fs9.writeFileSync(reportOutPath, outcomeMarkdown, "utf8");
   console.log("\u2713 WasteLess overnight pilot executed under bounded-autonomous \u20AC10.00 ceiling.");
-  console.log(`\u2713 Full Flutter verification stack passed: static analysis, unit tests, APK assembly.`);
-  console.log(`\u2713 Output APK tagged with exact tested Git revision SHA: ${testedCommitSha}.`);
+  console.log(`\u2713 [simulated: fake adapter, no Flutter run] Full Flutter verification stack passed: static analysis, unit tests, APK assembly.`);
+  console.log(`\u2713 [simulated] Output APK tagged with exact tested Git revision SHA: ${testedCommitSha}.`);
   console.log(`\u2713 Transparent reporting: Cash \u20AC${cashSpent.toFixed(2)} / ${subscriptionUnits} sub units.
 `);
   return {

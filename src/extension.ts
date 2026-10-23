@@ -5,6 +5,8 @@ import { BoardManager } from './boardManager';
 import { BoardsTreeProvider } from './sidebarProvider';
 import { KanbanWebviewManager } from './webviewPanel';
 import { ConfigParser } from './configParser';
+import { FleetController } from './fleet/fleetController';
+import { FleetPanel } from './fleet/panels';
 
 export async function activate(context: vscode.ExtensionContext) {
   console.log('[Agentic Kanban] Extension activating...');
@@ -13,6 +15,10 @@ export async function activate(context: vscode.ExtensionContext) {
 
   // 1. Initial scan of boards
   await boardManager.reloadBoards();
+
+  // Agent providers, session tracking and the orchestrator. Legacy config.md agents are imported once.
+  const fleet = FleetController.init(context);
+  fleet.seedFromBoards(boardManager.getAllBoards());
 
   // 2. Setup filesystem watcher for markdown files
   boardManager.setupWatchers(context);
@@ -29,6 +35,14 @@ export async function activate(context: vscode.ExtensionContext) {
 
     vscode.commands.registerCommand('agenticKanban.openOverview', () => {
       KanbanWebviewManager.createOrShow(context.extensionUri, undefined, true);
+    }),
+
+    vscode.commands.registerCommand('agenticKanban.openProviders', () => {
+      FleetPanel.show(context.extensionUri, 'providers');
+    }),
+
+    vscode.commands.registerCommand('agenticKanban.openOrchestrator', () => {
+      FleetPanel.show(context.extensionUri, 'orchestrator');
     }),
 
     vscode.commands.registerCommand('agenticKanban.refreshBoards', async () => {
