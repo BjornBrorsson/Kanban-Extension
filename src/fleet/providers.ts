@@ -13,6 +13,7 @@ export type ProviderKind =
   | 'copilot-cli'
   | 'cline'
   | 'ollama'
+  | 'ollama-aider'
   | 'ide-chat'
   | 'custom';
 
@@ -34,6 +35,14 @@ export interface AgentProvider {
    * Without it, a resume re-runs `command` with a recovery prompt that tells the agent to check the ticket and git state.
    */
   resumeCommand?: string;
+  /** Command that prints this provider's models (one per line, id first). Built-in for devin, agy and ollama. */
+  listCommand?: string;
+  /** Can this provider edit files / run tools (a real coding agent)? Plain `ollama run` cannot. */
+  agentic: boolean;
+  /** Spend caps in USD per calendar day / week / month (0 = no cap). The orchestrator stays under them. */
+  budgetDaily: number;
+  budgetWeekly: number;
+  budgetMonthly: number;
   /** Optional capability overrides for failover, e.g. "opus=5, sonnet=4, haiku=2" (1 = small, 5 = frontier). */
   modelTiers?: string;
   /** Flag used to build {model_args}; if the template uses neither {model} nor {model_args}, it is appended. */
@@ -130,6 +139,14 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     maxParallel: 1, maxSessionsPerWindow: 0, windowMinutes: 60, minSpacingSeconds: 0
   },
   {
+    // Local models driven by Aider, which can edit files (unlike plain `ollama run`).
+    kind: 'ollama-aider', label: 'Aider + Ollama (local, edits files)', type: 'cli',
+    command: 'aider {model_args} --message "{task}" "{ticket_path}"', modelFlag: '--model',
+    resumeCommand: 'aider {model_args} --restore-chat-history --message "{task}" "{ticket_path}"',
+    models: [], defaultModel: '',
+    maxParallel: 1, maxSessionsPerWindow: 0, windowMinutes: 60, minSpacingSeconds: 0
+  },
+  {
     kind: 'ide-chat', label: 'IDE Chat (Copilot / Cursor / Antigravity)', type: 'vscode-command',
     command: 'workbench.action.chat.open', models: [], defaultModel: '',
     maxParallel: 1, maxSessionsPerWindow: 0, windowMinutes: 60, minSpacingSeconds: 0,
@@ -156,6 +173,7 @@ const LEGACY_ID_TO_KIND: Record<string, ProviderKind> = {
   'ide-chat': 'ide-chat',
   codex: 'codex', 'codex-cli': 'codex',
   ollama: 'ollama',
+  'ollama-aider': 'ollama-aider',
   'copilot-cli': 'copilot-cli',
   'cline-ollama': 'cline', cline: 'cline'
 };
@@ -186,6 +204,11 @@ export function sanitizeProvider(raw: any, existingIds: string[] = []): AgentPro
     enabled: raw?.enabled !== false,
     type: raw?.type === 'vscode-command' ? 'vscode-command' : (raw?.type === 'cli' ? 'cli' : preset.type),
     command: String(raw?.command ?? preset.command),
+    listCommand: raw?.listCommand ? String(raw.listCommand).slice(0, 300) : undefined,
+    agentic: raw?.agentic !== undefined ? !!raw.agentic : kind !== 'ollama' && kind !== 'ide-chat',
+    budgetDaily: Math.max(0, Number(raw?.budgetDaily) || 0),
+    budgetWeekly: Math.max(0, Number(raw?.budgetWeekly) || 0),
+    budgetMonthly: Math.max(0, Number(raw?.budgetMonthly) || 0),
     modelTiers: raw?.modelTiers ? String(raw.modelTiers).slice(0, 400) : undefined,
     resumeCommand: raw?.resumeCommand !== undefined ? (String(raw.resumeCommand).trim() || undefined) : preset.resumeCommand,
     modelFlag: raw?.modelFlag !== undefined ? String(raw.modelFlag).trim() || undefined : preset.modelFlag,

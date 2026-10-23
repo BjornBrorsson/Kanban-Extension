@@ -86,6 +86,9 @@ export function findForKind(kind: ProviderKind, env: NodeJS.ProcessEnv = process
   if (!names) return undefined;
   // Honour explicit overrides first (same ones the antigravity resolver already knows).
   if (kind === 'antigravity') {
+    // `agy` on PATH is often the Antigravity IDE launcher; the agent CLI lives under LOCALAPPDATA/agy/bin.
+    const local = env.LOCALAPPDATA ? path.join(env.LOCALAPPDATA, 'agy', 'bin', 'agy.exe') : '';
+    if (local && isFile(local)) return local;
     for (const key of ['AGY_PATH', 'ANTIGRAVITY_PATH']) {
       const v = env[key];
       if (v && isFile(v)) return v;

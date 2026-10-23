@@ -69,6 +69,16 @@ export class FleetPanel {
         case 'addProvider':
           fleet.registry.add(m.kindId as ProviderKind);
           break;
+        case 'importModels': {
+          const text = await vscode.env.clipboard.readText();
+          vscode.window.showInformationMessage(await fleet.importModels(m.id, text));
+          break;
+        }
+        case 'refreshModels': {
+          vscode.window.setStatusBarMessage('Agentic Kanban: refreshing model lists...', 8000);
+          vscode.window.showInformationMessage(await fleet.refreshCatalog(!!m.apply));
+          break;
+        }
         case 'detectAll': {
           const r = await fleet.autoDetect();
           vscode.window.showInformationMessage(r.summary);
@@ -160,7 +170,8 @@ export class FleetPanel {
       now: Date.now(),
       providers,
       usage: fleet.usage(),
-      presets: PROVIDER_PRESETS.map(p => ({ kind: p.kind, label: p.label }))
+      presets: PROVIDER_PRESETS.map(p => ({ kind: p.kind, label: p.label })),
+      catalog: fleet.catalogSummary()
     };
     if (this.kind === 'providers') {
       this.panel.webview.postMessage(base);

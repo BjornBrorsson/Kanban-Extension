@@ -167,8 +167,8 @@ export function pickFallback(
 
   const options: (Fallback & { pct: number })[] = [];
   for (const p of providers) {
-    // Ollama only answers; it cannot edit files, so it never takes over coding work.
-    if (!p.enabled || p.type !== 'cli' || p.kind === 'ollama' || !p.roles.includes(role)) continue;
+    // Answer-only providers (plain Ollama) cannot edit files, so they never take over coding work.
+    if (!p.enabled || p.type !== 'cli' || !p.agentic || !p.roles.includes(role)) continue;
     if (sessions.headroom(p, now) <= 0 && p.id !== from.providerId) continue;
     const models = p.models.length ? p.models : [p.defaultModel];
     for (const model of models) {

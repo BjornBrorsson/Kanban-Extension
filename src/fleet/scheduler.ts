@@ -1,6 +1,7 @@
 import { Ticket } from '../types';
 import { AgentProvider } from './providers';
 import { SessionManager } from './sessions';
+import { Option, OptimizerContext, rankOptions } from './optimizer';
 
 export interface PlanCandidate {
   ticket: Ticket;
@@ -19,12 +20,20 @@ export interface PlanDecision {
   /** True when a slot is free right now; false means the session would queue. */
   startsNow: boolean;
   reason: string;
+  /** Optimizer estimates (when a model catalog / cost data is available). */
+  estMinutes?: number;
+  estCost?: number;
+  points?: number;
+  /** The runners-up and what they would have cost, for transparency. */
+  alternatives?: string[];
 }
 
 export interface PlanOptions {
   now?: number;
   /** Upper bound on decisions returned (keeps one tick from flooding the providers). */
   maxNew?: number;
+  /** When given, providers/models are chosen by predicted time + cost + quota scarcity instead of plain headroom. */
+  optimizer?: OptimizerContext;
 }
 
 const PRIORITY_RANK: Record<string, number> = {
@@ -38,7 +47,7 @@ export function priorityRank(priority: string | undefined): number {
 
 /** Providers the scheduler may drive on its own: CLI agents that are enabled and allowed to work (Ollama only answers, it cannot edit files). */
 export function automatableWorkers(providers: AgentProvider[]): AgentProvider[] {
-  return providers.filter(p => p.enabled && p.type === 'cli' && p.kind !== 'ollama' && p.roles.includes('worker'));
+  return providers.filter(p => p.enabled && p.type === 'cli' && p.agentic && p.roles.includes('worker'));
 }
 
 /** `model:opus` label on a ticket overrides the provider default (if the provider lists that model). */
@@ -93,6 +102,32 @@ export function planWork(
     const requested = matchProvider(providers, t.assignee);
     let chosen: AgentProvider | undefined;
     let reason: string;
+
+    if (opts.optimizer) {
+      // Cost / speed / quota aware path: rank every capable (provider, model) and take the cheapest overall.
+      if (requested && !workers.includes(requested)) continue;
+      if (!requested && t.assignee && !/^(unassigned|\u2014|-)$/i.test(t.assignee.trim())) continue;
+      const ranked: Option[] = rankOptions(t, workers, sessions, { ...opts.optimizer, now, virtualSpent: spent }, requested);
+      const best = ranked[0];
+      if (!best) continue;
+      if (best.startsNow) spent.set(best.provider.id, (spent.get(best.provider.id) || 0) + 1);
+      out.push({
+        ticketPath: t.path,
+        ticketId: t.id,
+        title: t.title,
+        boardId: c.boardId,
+        providerId: best.provider.id,
+        providerName: best.provider.name,
+        model: best.model,
+        startsNow: best.startsNow,
+        reason: (requested ? `Assigned to ${requested.name}. ` : 'Best time/cost/quota trade-off. ') + best.summary,
+        estMinutes: best.estMinutes,
+        estCost: best.estCost,
+        points: best.points,
+        alternatives: ranked.slice(1, 4).map(o => o.summary)
+      });
+      continue;
+    }
     if (requested) {
       if (!workers.includes(requested)) continue; // assigned to a human / IDE chat: not ours to start
       chosen = requested;

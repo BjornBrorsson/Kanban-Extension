@@ -43,6 +43,13 @@
     f.resumeCommand = el('textarea', { spellcheck: 'false', placeholder: 'Optional. e.g. claude --resume {session_id} -p "{task}"' });
     f.resumeCommand.value = p.resumeCommand || '';
     f.resumeCommand.addEventListener('input', mark);
+    f.budgetDaily = input('budgetDaily', 'number', p.budgetDaily, { min: 0, step: '0.5' });
+    f.budgetWeekly = input('budgetWeekly', 'number', p.budgetWeekly, { min: 0, step: '1' });
+    f.budgetMonthly = input('budgetMonthly', 'number', p.budgetMonthly, { min: 0, step: '1' });
+    f.listCommand = input('listCommand', 'text', p.listCommand, { placeholder: 'e.g. mytool models  (built in for devin, agy, ollama)' });
+    f.agentic = el('input', { type: 'checkbox' });
+    f.agentic.checked = p.agentic !== false;
+    f.agentic.addEventListener('change', mark);
     f.modelTiers = input('modelTiers', 'text', p.modelTiers, { placeholder: 'opus=5, sonnet=4, haiku=2' });
     f.models = input('models', 'text', p.models.join(', '), { placeholder: 'comma separated, e.g. opus, sonnet, haiku' });
     // Default model is a real dropdown fed by the Models field (and refreshed as you type).
@@ -82,7 +89,9 @@
       const out = {
         id: p.id, kind: p.kind, type: p.type,
         name: f.name.value, account: f.account.value, enabled: f.enabled.checked,
-        command: f.command.value, resumeCommand: f.resumeCommand.value, modelTiers: f.modelTiers.value, modelFlag: f.modelFlag.value,
+        command: f.command.value, resumeCommand: f.resumeCommand.value, modelTiers: f.modelTiers.value,
+        budgetDaily: +f.budgetDaily.value, budgetWeekly: +f.budgetWeekly.value, budgetMonthly: +f.budgetMonthly.value,
+        listCommand: f.listCommand.value, agentic: f.agentic.checked, modelFlag: f.modelFlag.value,
         models, defaultModel: f.defaultModel.value,
         maxParallel: +f.maxParallel.value, maxSessionsPerWindow: +f.maxSessionsPerWindow.value,
         windowMinutes: +f.windowMinutes.value, minSpacingSeconds: +f.minSpacingSeconds.value,
@@ -100,6 +109,7 @@
         el('span', { class: 'badge', text: p.kind }),
         el('span', { class: 'grow' }),
         save,
+        el('button', { class: 'small', text: 'Import models', title: 'Copy a model list first (e.g. GitHub Copilot model-policy page), then click: only models marked Enabled are used', onclick: () => vscode.postMessage({ type: 'importModels', id: p.id }) }),
         el('button', { class: 'small', text: 'Detect', title: 'Find the executable path and installed models automatically', onclick: () => vscode.postMessage({ type: 'detectProvider', id: p.id }) }),
         el('button', { class: 'small', text: 'Duplicate', title: 'Same provider, another account', onclick: () => vscode.postMessage({ type: 'duplicateProvider', id: p.id }) }),
         el('button', { class: 'small danger', text: 'Delete', onclick: () => vscode.postMessage({ type: 'deleteProvider', id: p.id }) })
@@ -110,6 +120,10 @@
           (hasTask ? '' : 'No {task}: this provider can only work on tickets (not review or plan).'))),
         el('div', { class: 'wide' }, field('Resume command (optional)', f.resumeCommand,
           'Continues an interrupted conversation via {session_id}. Without it, a resume re-runs the command with a "check the ticket and git state, then continue" prompt.')),
+        field('Budget per day (USD, 0 = none)', f.budgetDaily, 'Orchestrator stays under this'),
+        field('Budget per week (USD)', f.budgetWeekly),
+        field('Budget per month (USD)', f.budgetMonthly),
+        field('List command (optional)', f.listCommand, 'Prints this provider\'s models, one per line'),
         field('Model capability 1-5 (optional)', f.modelTiers, 'Used to pick a replacement when a model hits its usage limit'),
         field('Models', f.models, p.kind === 'ollama' ? 'Use Detect to list your installed Ollama models' : 'Shown in the Assign menu'),
         field('Default model', f.defaultModel, 'Pre-selected in the Assign menu'),
@@ -122,8 +136,41 @@
         field('Working directory', f.workingDir),
         field('Executable path', f.path, p.path ? '' : 'Empty = use PATH; Detect fills it in')
       ),
-      el('div', { class: 'bar-row' }, 'Roles:', roleBox('worker'), roleBox('reviewer'), roleBox('orchestrator'))
+      el('div', { class: 'bar-row' }, 'Roles:', roleBox('worker'), roleBox('reviewer'), roleBox('orchestrator'),
+        el('label', { class: 'inline', title: 'Unticked = answers only (e.g. plain ollama run): never given coding tickets automatically' }, f.agentic, 'can edit files (agentic)'))
     );
+  }
+
+  let showHidden = false;
+  let lastCatalog = null;
+
+  function renderCatalog(cat) {
+    lastCatalog = cat;
+    let host = document.getElementById('catalogHost');
+    if (!host) {
+      host = el('div', { id: 'catalogHost' });
+      root.append(host);
+    }
+    const models = (cat && cat.models) || [];
+    const shown = models.filter(m => !m.hidden);
+    const hiddenN = models.length - shown.length;
+    const when = cat && cat.generatedAt ? new Date(cat.generatedAt).toLocaleString() : 'never';
+    const price = m => m.free ? 'free' : m.outPerM !== undefined && m.outPerM !== null ? '$' + (m.inPerM ?? '?') + ' / $' + m.outPerM + (m.priceSource === 'estimated' ? ' (est.)' : m.priceSource === 'reference' ? ' (ref.)' : '') : '?';
+    const rows = (showHidden ? models : shown).map(m => el('tr', { style: m.hidden ? 'opacity:.55' : '' },
+      el('td', { text: m.providerId }),
+      el('td', { text: m.id }),
+      el('td', {}, el('span', { class: 'badge', text: m.category })),
+      el('td', { text: 'T' + m.tier }),
+      el('td', { text: price(m) }),
+      el('td', {}, m.hidden ? el('span', { class: 'note', text: m.reason || 'hidden' }) : (m.efforts && m.efforts.length ? el('span', { class: 'note', text: m.efforts.join(' / ') }) : null))));
+    const toggle = el('input', { type: 'checkbox', onchange: () => { showHidden = toggle.checked; renderCatalog(lastCatalog); } });
+    toggle.checked = showHidden;
+    host.replaceChildren(...[
+      el('h2', { text: 'Model catalog' }),
+      el('p', { class: 'sub', text: models.length ? shown.length + ' shown, ' + hiddenN + ' hidden (newest ' + (cat.keep || 2) + ' versions of each family kept) \u00b7 updated ' + when + ' \u00b7 prices per 1M tokens (input / output); (est.) = estimated, (ref.) = borrowed from another provider. Override in pricing.overrides.json.' : 'Not generated yet. Click "Refresh models & prices".' }),
+      models.length ? el('label', { class: 'inline' }, toggle, 'show hidden / superseded models') : null,
+      models.length ? el('table', {}, el('thead', {}, el('tr', {}, ['Provider', 'Model', 'Category', 'Tier', 'Price', 'Notes'].map(h => el('th', { text: h })))), el('tbody', {}, rows)) : null
+    ].filter(Boolean));
   }
 
   function render(state) {
@@ -136,12 +183,15 @@
         el('div', { class: 'bar-row' }, kindSel,
           el('button', { class: 'primary', text: '+ Add provider', onclick: () => vscode.postMessage({ type: 'addProvider', kindId: kindSel.value }) }),
           el('span', { class: 'grow' }),
+          el('button', { text: 'Refresh models & prices', title: 'Ask every provider for its models (devin models list, agy models, Ollama...), then categorise, price and hide superseded ones', onclick: () => vscode.postMessage({ type: 'refreshModels', apply: false }) }),
+          el('button', { text: 'Refresh + apply to providers', title: 'Also write the curated model list, default model and capability tiers into each provider', onclick: () => vscode.postMessage({ type: 'refreshModels', apply: true }) }),
           el('button', { text: 'Auto-detect installed agents', title: 'Scan PATH and common install folders, add missing providers, list Ollama models', onclick: () => vscode.postMessage({ type: 'detectAll' }) })),
         el('div', { id: 'providerList' })
       );
       return document.getElementById('providerList');
     })();
 
+    renderCatalog(state.catalog);
     const existing = new Map(Array.from(list.children).map(c => [c.dataset.id, c]));
     const ids = state.providers.map(p => p.id);
     existing.forEach((node, id) => { if (!ids.includes(id)) node.remove(); });

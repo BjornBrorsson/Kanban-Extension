@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { AgentProvider, ProviderRole } from './providers';
+import { PERIODS, Period, budgetOf, periodEnd, periodStart } from './cost';
 
 export type SessionStatus = 'queued' | 'running' | 'finished' | 'failed' | 'cancelled' | 'interrupted';
 
@@ -35,6 +36,10 @@ export interface Session {
   hidden?: boolean;
   /** The agent appears to be waiting for the user (permission prompt, login, question...). */
   attention?: string;
+  /** Work size in points and the estimated cost (USD) / duration (min) this run was planned with. */
+  points?: number;
+  estCost?: number;
+  estMinutes?: number;
   /** Usage-limit details when interruptKind is 'usage-limit'. */
   limit?: { model?: string; resetAt?: number };
   /** Epoch ms after which an auto-resume should happen (usage reset). */
@@ -58,6 +63,9 @@ export interface SessionRequest {
   resumedFrom?: string;
   /** Run in a background terminal (revealed on demand). */
   hidden?: boolean;
+  points?: number;
+  estCost?: number;
+  estMinutes?: number;
 }
 
 export interface SessionLauncher {
@@ -90,6 +98,9 @@ export interface ProviderUsage {
   pct: number | null;
   /** Models currently blocked by a usage limit. `until` is when they should be back (assumed when unknown). */
   blockedModels: { model: string; until: number; unknown: boolean }[];
+  /** Estimated spend (USD) in the current calendar day / week / month, and the caps (0 = none). */
+  spend: { day: number; week: number; month: number };
+  budget: { day: number; week: number; month: number };
   retryAt?: number;
   cooldownUntil?: number;
 }
@@ -101,8 +112,11 @@ const DEFAULT_SESSION_TIMEOUT_MIN = 180;
 
 export interface ModelBlock { until: number; unknown: boolean; reason?: string }
 
+export interface SpendEntry { providerId: string; model: string; cost: number; at: number; sessionId?: string }
+
 export interface FleetData {
   starts: Record<string, number[]>;
+  spend?: SpendEntry[];
   sessions?: Session[];
   blocks?: Record<string, ModelBlock>;
 }
@@ -120,7 +134,8 @@ export class JsonFleetStore implements FleetStore {
       return {
         starts: raw?.starts && typeof raw.starts === 'object' ? raw.starts : {},
         sessions: Array.isArray(raw?.sessions) ? raw.sessions : [],
-        blocks: raw?.blocks && typeof raw.blocks === 'object' ? raw.blocks : {}
+        blocks: raw?.blocks && typeof raw.blocks === 'object' ? raw.blocks : {},
+        spend: Array.isArray(raw?.spend) ? raw.spend : []
       };
     } catch {
       return { starts: {}, sessions: [] };
@@ -142,6 +157,7 @@ export class SessionManager {
   private payloads = new Map<string, { req: SessionRequest }>();
   private starts: Record<string, number[]>;
   private blocks: Record<string, ModelBlock> = {};
+  private spend: SpendEntry[] = [];
   private cooldownUntil = new Map<string, number>();
   private quickFails = new Map<string, number>();
   private listeners: (() => void)[] = [];
@@ -157,6 +173,7 @@ export class SessionManager {
     const saved = store ? store.load() : { starts: {}, sessions: [] };
     this.starts = saved.starts;
     this.blocks = saved.blocks || {};
+    this.spend = saved.spend || [];
     // Sessions that were running or queued when the editor/PC stopped have no process any more: keep them as
     // "interrupted" so they can be resumed instead of silently disappearing.
     for (const s of saved.sessions || []) {
@@ -174,7 +191,7 @@ export class SessionManager {
   }
 
   private persist(): void {
-    this.store?.save({ starts: this.starts, sessions: this.sessions, blocks: this.blocks });
+    this.store?.save({ starts: this.starts, sessions: this.sessions, blocks: this.blocks, spend: this.spend });
   }
 
   public onChange(fn: () => void): void { this.listeners.push(fn); }
@@ -197,7 +214,7 @@ export class SessionManager {
   }
 
   /** Can this provider start another session right now? Never throws. */
-  public canStart(p: AgentProvider, now: number = this.clock()): StartCheck {
+  public canStart(p: AgentProvider, now: number = this.clock(), estCost = 0): StartCheck {
     if (!p.enabled) return { ok: false, state: 'disabled', reason: 'Provider is disabled' };
 
     const cd = this.cooldownUntil.get(p.id) || 0;
@@ -208,6 +225,22 @@ export class SessionManager {
     if (p.models.length && p.models.every(m => this.modelBlock(p.id, m, now))) {
       const untils = p.models.map(m => this.modelBlock(p.id, m, now)!.until);
       return { ok: false, state: 'throttled', reason: 'Every model is at its usage limit', retryAt: Math.min(...untils) };
+    }
+
+    // Spend caps (daily / weekly / monthly): never plan a run that would cross one.
+    for (const period of PERIODS) {
+      const cap = budgetOf(p, period);
+      if (cap <= 0) continue;
+      const allowed = cap * (1 - p.safetyMarginPct / 100);
+      const spent = this.spentSince(p.id, periodStart(period, now));
+      if (spent + estCost > allowed && (spent > 0 || estCost > allowed)) {
+        const label = period === 'day' ? 'Daily' : period === 'week' ? 'Weekly' : 'Monthly';
+        return {
+          ok: false, state: 'throttled',
+          reason: `${label} budget reached ($${spent.toFixed(2)} of $${cap.toFixed(2)} used${estCost ? `, this run ~$${estCost.toFixed(2)}` : ''})`,
+          retryAt: periodEnd(period, now)
+        };
+      }
     }
 
     const running = this.sessions.filter(s => s.providerId === p.id && s.status === 'running').length;
@@ -235,6 +268,29 @@ export class SessionManager {
     }
 
     return { ok: true, state: 'ready' };
+  }
+
+  // ---------------------------------------------------------------- spend & windows
+
+  public spentSince(providerId: string, since: number): number {
+    return this.spend.filter(e => e.providerId === providerId && e.at >= since).reduce((sum, e) => sum + e.cost, 0);
+  }
+
+  public recordSpend(providerId: string, model: string, cost: number, sessionId?: string): void {
+    if (!(cost > 0)) return;
+    this.spend.push({ providerId, model, cost, at: this.clock(), sessionId });
+    const keep = this.clock() - 65 * 24 * 60 * 60_000; // a bit over a month of history
+    this.spend = this.spend.filter(e => e.at >= keep);
+    this.persist();
+  }
+
+  /** Start times inside the provider's rolling window (oldest first). */
+  public windowStarts(p: AgentProvider, now: number = this.clock()): number[] {
+    return this.startsInWindow(p, now).sort((a, b) => a - b);
+  }
+
+  public runningCount(providerId: string): number {
+    return this.sessions.filter(s => s.providerId === providerId && s.status === 'running').length;
   }
 
   // ---------------------------------------------------------------- model usage limits
@@ -317,6 +373,12 @@ export class SessionManager {
       windowMinutes: p.windowMinutes,
       pct: p.maxSessionsPerWindow > 0 ? Math.min(100, Math.round((recent / p.maxSessionsPerWindow) * 100)) : null,
       blockedModels: this.blockedModels(p.id, now),
+      spend: {
+        day: this.spentSince(p.id, periodStart('day', now)),
+        week: this.spentSince(p.id, periodStart('week', now)),
+        month: this.spentSince(p.id, periodStart('month', now))
+      },
+      budget: { day: p.budgetDaily, week: p.budgetWeekly, month: p.budgetMonthly },
       retryAt: check.retryAt,
       cooldownUntil: this.cooldownUntil.get(p.id)
     };
@@ -345,12 +407,15 @@ export class SessionManager {
       agentSessionId: req.agentSessionId,
       attempt: req.attempt ?? 1,
       resumedFrom: req.resumedFrom,
-      hidden: req.hidden
+      hidden: req.hidden,
+      points: req.points,
+      estCost: req.estCost,
+      estMinutes: req.estMinutes
     };
     this.sessions.push(session);
     this.payloads.set(session.id, { req });
 
-    const check = this.canStart(req.provider, now);
+    const check = this.canStart(req.provider, now, req.estCost || 0);
     if (check.ok) {
       await this.start(session);
     } else if (req.queueIfBusy === false) {
@@ -377,6 +442,7 @@ export class SessionManager {
     session.startedAt = now;
     session.note = undefined;
     (this.starts[provider.id] ||= []).push(now);
+    if (session.estCost) this.recordSpend(provider.id, session.model, session.estCost, session.id);
     this.trimHistory(provider, now);
     this.persist();
     this.emit();

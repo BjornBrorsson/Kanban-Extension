@@ -228,7 +228,8 @@ async function run() {
 
   for (const [entry, out, stub] of [
     ['fleetTests.ts', 'fleetTests.js', false],
-    ['boardManagerTests.ts', 'boardManagerTests.js', true]
+    ['boardManagerTests.ts', 'boardManagerTests.js', true],
+    ['catalogTests.ts', 'catalogTests.js', false]
   ]) {
     if (fs.existsSync(path.join(__dirname, 'test', entry))) {
       await esbuild.build({
@@ -245,6 +246,17 @@ async function run() {
       });
     }
   }
+
+  await esbuild.build({
+    entryPoints: ['./src/fleet/modelsCli.ts'],
+    bundle: true,
+    outfile: './dist/models-cli.js',
+    external: ['vscode'],
+    format: 'cjs',
+    platform: 'node',
+    sourcemap: false,
+    minify: false
+  });
 
   if (isWatch) {
     await context.watch();

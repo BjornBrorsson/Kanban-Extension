@@ -45,12 +45,16 @@
     resume.checked = s.autoResume;
     const retries = el('input', { type: 'number', min: 0, max: 10, value: s.maxAutoRetries, style: 'width:56px', onchange: () => save({ maxAutoRetries: +retries.value }) });
 
+    const objSel = el('select', { onchange: () => save({ objective: objSel.value }), title: 'What the orchestrator optimises when choosing an agent and model' },
+      [['balanced', 'Balanced (time + cost)'], ['cost', 'Cheapest'], ['speed', 'Fastest']].map(([v, t]) => el('option', { value: v, text: t, selected: v === s.objective })));
     const failover = el('input', { type: 'checkbox', onchange: () => save({ autoFailover: failover.checked }) });
     failover.checked = s.autoFailover;
     const bg = el('input', { type: 'checkbox', onchange: () => save({ backgroundTerminals: bg.checked }) });
     bg.checked = s.backgroundTerminals;
 
     return el('div', {},
+      el('div', { class: 'bar-row' }, el('label', { class: 'inline' }, el('b', { text: 'Optimise for' }), objSel,
+        el('span', { class: 'note', text: 'predicted time + cost + how scarce each provider\'s quota is' }))),
       el('div', { class: 'bar-row' },
         el('label', { class: 'inline', title: 'When a model hits its usage limit: continue on another capable model, or wait for the reset' }, failover, el('b', { text: 'Usage-limit failover' })),
         el('label', { class: 'inline', title: 'Automated sessions run in hidden terminals. Open terminal reveals them.' }, bg, 'run automated sessions in background terminals')),
@@ -84,6 +88,7 @@
         el('div', { class: 'meter' }, el('i', { class: pct >= 90 ? 'hot' : pct >= 70 ? 'warn' : '', style: 'width:' + (u.maxParallel ? Math.round(u.running / u.maxParallel * 100) : 0) + '%' })),
         el('div', { class: 'm', text: u.pct === null ? 'No rolling-window cap set' : 'Window ' + u.startsInWindow + '/' + u.maxSessionsPerWindow + ' per ' + u.windowMinutes + 'm (' + pct + '%)' }),
         u.pct === null ? null : el('div', { class: 'meter' }, el('i', { class: pct >= 90 ? 'hot' : pct >= 70 ? 'warn' : '', style: 'width:' + pct + '%' })),
+        (u.budget && (u.budget.day || u.budget.week || u.budget.month)) ? el('div', { class: 'm', text: 'Spend (est.) ' + [['day', 'today'], ['week', 'week'], ['month', 'month']].filter(([k]) => u.budget[k] > 0).map(([k, l]) => l + ' $' + u.spend[k].toFixed(2) + '/$' + u.budget[k]).join(' \u00b7 ') }) : (u.spend && u.spend.month > 0 ? el('div', { class: 'm', text: 'Spend (est.) today $' + u.spend.day.toFixed(2) + ' \u00b7 month $' + u.spend.month.toFixed(2) }) : null),
         (u.blockedModels || []).length ? el('div', { class: 'blocked', text: 'At limit: ' + u.blockedModels.map(b => b.model + (b.unknown ? ' (reset unknown, retrying)' : ' until ' + new Date(b.until).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }))).join(', ') }) : null,
         u.reason && u.state !== 'ready' ? el('div', { class: 'm', text: u.reason + retry }) : null
       );
@@ -94,12 +99,14 @@
   function planTable(state) {
     if (!state.plan.length) return el('div', { class: 'empty', text: 'Nothing to schedule: put tickets in Backlog/Ready (and make sure a provider has free capacity).' });
     return el('table', {},
-      el('thead', {}, el('tr', {}, ['Ticket', 'Agent · model', 'When', 'Why', ''].map(h => el('th', { text: h })))),
+      el('thead', {}, el('tr', {}, ['Ticket', 'Agent \u00b7 model', 'Est.', 'When', 'Why', ''].map(h => el('th', { text: h })))),
       el('tbody', {}, state.plan.map(d => el('tr', {},
         el('td', {}, el('a', { class: 'link', text: (d.ticketId ? d.ticketId + ' — ' : '') + d.title, onclick: () => send('openTicket', { path: d.ticketPath }) })),
-        el('td', { text: d.providerName + (d.model ? ' · ' + d.model : '') }),
+        el('td', { text: d.providerName + (d.model ? ' \u00b7 ' + d.model : '') }),
+        el('td', { text: d.estMinutes !== undefined ? '~' + Math.round(d.estMinutes) + ' min \u00b7 ' + (d.estCost > 0 ? '$' + d.estCost.toFixed(2) : 'free') : '' }),
         el('td', {}, el('span', { class: 'pill ' + (d.startsNow ? 'ready' : 'queued'), text: d.startsNow ? 'now' : 'queued' })),
-        el('td', {}, el('span', { class: 'note', text: d.reason })),
+        el('td', {}, el('span', { class: 'note', text: d.reason }),
+          (d.alternatives || []).length ? el('div', { class: 'note', text: 'Instead of: ' + d.alternatives.join('  |  ') }) : null),
         el('td', { class: 'actions' }, el('button', { class: 'small', text: 'Start', onclick: () => send('startDecision', { ticketPath: d.ticketPath }) }))
       )))
     );
@@ -156,7 +163,7 @@
     // Don't yank a dropdown/input out from under the user mid-edit.
     if (root.contains(document.activeElement) && /^(INPUT|SELECT)$/.test(document.activeElement.tagName)) return;
     const running = state.sessions.filter(s => s.status === 'running').length;
-    root.replaceChildren(
+    root.replaceChildren(...[
       el('h1', { text: 'Orchestrator' }),
       el('p', { class: 'sub', text: running + ' agent session' + (running === 1 ? '' : 's') + ' running. The orchestrator spreads work across your providers and stays below each one\'s limits so you are not rate-limited.' }),
       recoveryBanner(state),
@@ -166,7 +173,7 @@
         el('button', { class: 'primary', text: 'Run plan now', disabled: !state.plan.some(d => d.startsNow), onclick: () => send('runPlan') })),
       planTable(state),
       el('h2', { text: 'Sub-agent sessions' }), sessionTable(state)
-    );
+    ].filter(Boolean));
   }
 
   setInterval(() => {

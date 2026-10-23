@@ -9,6 +9,9 @@ import { AgentProvider, ProviderRegistry, ProviderRole, providerToAssignee } fro
 import { JsonFleetStore, ProviderUsage, Session, SessionLauncher, SessionManager } from './sessions';
 import { detectAll, detectOne } from './detect';
 import { LimitInfo, detectAttention, detectLimit, pickFallback } from './limits';
+import { CatalogIndex, CatalogStore, parseCopilotPolicy, providerPatches } from './catalog';
+import { JsonSpeedStore, SpeedBook } from './speed';
+import { Objective, OptimizerContext, estimateRun } from './optimizer';
 import { PlanCandidate, PlanDecision, matchProvider, pickReviewer, planWork } from './scheduler';
 
 export interface FleetSettings {
@@ -29,6 +32,10 @@ export interface FleetSettings {
   backgroundTerminals: boolean;
   /** Flag a running session as needing you after this many minutes without output. */
   idleMinutes: number;
+  /** What the orchestrator optimises: balanced, cost (cheapest) or speed (fastest). */
+  objective: Objective;
+  /** How many versions of each model family stay visible after curating the catalog. */
+  keepModelVersions: number;
 }
 
 const DEFAULT_SETTINGS: FleetSettings = {
@@ -42,7 +49,9 @@ const DEFAULT_SETTINGS: FleetSettings = {
   maxAutoRetries: 2,
   autoFailover: true,
   backgroundTerminals: true,
-  idleMinutes: 10
+  idleMinutes: 10,
+  objective: 'balanced',
+  keepModelVersions: 2
 };
 
 const RESUME_TASK =
@@ -179,6 +188,10 @@ export class FleetController {
   private attentionNotified = new Map<string, number>();
   private resumeTimers: NodeJS.Timeout[] = [];
   private readonly launcher: TerminalLauncher;
+  public readonly catalogStore: CatalogStore;
+  public catalog: CatalogIndex;
+  public readonly speed: SpeedBook;
+  private speedRecorded = new Set<string>();
   private changeEmitter = new vscode.EventEmitter<void>();
   public readonly onDidChange = this.changeEmitter.event;
 
@@ -198,6 +211,9 @@ export class FleetController {
     this.briefPath = path.join(dir, 'runtime', 'orchestrator-brief.md');
     this.registry = new ProviderRegistry(root);
     this.settings = this.loadSettings();
+    this.catalogStore = new CatalogStore(root);
+    this.catalog = new CatalogIndex(this.catalogStore.loadCatalog());
+    this.speed = new SpeedBook(new JsonSpeedStore(path.join(dir, 'runtime', 'speed.json')));
 
     const launcher = new TerminalLauncher(context.subscriptions);
     this.sessions = new SessionManager(
@@ -222,6 +238,7 @@ export class FleetController {
     };
 
     this.sessions.onChange(() => {
+      this.learnSpeeds();
       this.maybeAutoReview();
       this.scheduleAutoResumes();
       this.changeEmitter.fire();
@@ -358,8 +375,12 @@ export class FleetController {
     }
     if (!payload) return undefined;
 
+    const run = estimateRun(ticket, provider, model, this.optimizerBase());
     const session = await this.sessions.request({
       provider, model, role,
+      points: run.points,
+      estCost: run.estCost,
+      estMinutes: Math.round(run.estMinutes),
       ticketPath: ticket.path,
       ticketId: ticket.id,
       ticketTitle: ticket.title,
@@ -416,7 +437,75 @@ export class FleetController {
   }
 
   public plan(): PlanDecision[] {
-    return planWork(this.candidates(), this.registry.list(), this.sessions, { maxNew: this.settings.maxNewPerTick * 3 });
+    return planWork(this.candidates(), this.registry.list(), this.sessions, {
+      maxNew: this.settings.maxNewPerTick * 3,
+      optimizer: this.optimizerBase()
+    });
+  }
+
+  private optimizerBase(): OptimizerContext {
+    return { catalog: this.catalog, speed: this.speed, bench: this.catalogStore.loadBench(), objective: this.settings.objective };
+  }
+
+  /** Feeds finished sessions into the speed book so duration predictions improve with use. */
+  private learnSpeeds(): void {
+    for (const s of this.sessions.list()) {
+      if (s.status !== 'finished' || s.role !== 'worker' || this.speedRecorded.has(s.id)) continue;
+      this.speedRecorded.add(s.id);
+      if (!s.startedAt || !s.endedAt || !s.points || (s.exitCode !== undefined && s.exitCode !== 0) || /dismissed|manually/i.test(s.note || '')) continue;
+      const minutes = (s.endedAt - s.startedAt) / 60_000;
+      if (minutes >= 1) this.speed.record(s.providerId, s.model, s.points, minutes);
+    }
+  }
+
+  /**
+   * Re-reads every provider's models (CLI / API), curates them into the catalog (categories, prices, hides superseded
+   * versions) and optionally writes the result into the providers' model lists.
+   */
+  public async refreshCatalog(applyToProviders = false): Promise<string> {
+    const raws = await this.catalogStore.refreshRaw(this.registry.list());
+    const catalog = this.catalogStore.curateSaved(this.settings.keepModelVersions);
+    this.catalog = new CatalogIndex(catalog);
+    let applied = 0;
+    if (applyToProviders) {
+      for (const patch of providerPatches(this.registry.list(), catalog)) {
+        const p = this.registry.get(patch.id);
+        if (p) { this.registry.upsert({ ...p, models: patch.models, defaultModel: patch.defaultModel, modelTiers: patch.modelTiers }); applied++; }
+      }
+    }
+    const hidden = catalog.models.filter(m => m.hidden).length;
+    const failed = raws.filter(r => !r.ok).map(r => r.providerName);
+    this.changeEmitter.fire();
+    return `Model catalog updated: ${catalog.models.length - hidden} shown, ${hidden} hidden` +
+      `${applied ? `; applied to ${applied} provider(s)` : ''}${failed.length ? `. Could not list: ${failed.join(', ')}` : ''}.`;
+  }
+
+  /** Saves a pasted model list (e.g. Copilot's model-policy page) for a provider and re-curates. */
+  public async importModels(providerId: string, text: string): Promise<string> {
+    const p = this.registry.get(providerId);
+    if (!p) return 'Provider not found.';
+    const probe = parseCopilotPolicy(text);
+    const n = probe.length || text.split(/\r?\n/).filter(l => l.trim()).length;
+    if (!text.trim() || !n) return 'The clipboard has no model list to import.';
+    this.catalogStore.saveImport(p.id, text);
+    const summary = await this.refreshCatalog(false);
+    const on = probe.filter(m => m.enabled).length;
+    return `Imported ${probe.length ? `${probe.length} models for ${p.name} (${on} enabled)` : `a model list for ${p.name}`}. ${summary}`;
+  }
+
+  /** Compact view of the catalog for the UI. */
+  public catalogSummary(): any {
+    const c = this.catalog.catalog;
+    if (!c) return { generatedAt: 0, models: [] };
+    return {
+      generatedAt: c.generatedAt,
+      keep: c.keepVersionsPerFamily,
+      models: c.models.map(m => ({
+        providerId: m.providerId, id: m.id, label: m.label, tier: m.tier, category: m.category, hidden: m.hidden, reason: m.hiddenReason,
+        inPerM: m.pricing?.inPerM, outPerM: m.pricing?.outPerM, free: !!m.pricing?.free, priceSource: m.pricing?.source,
+        efforts: Object.keys(m.effortVariants)
+      }))
+    };
   }
 
   public usage(): ProviderUsage[] {

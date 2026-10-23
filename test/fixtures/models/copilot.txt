@@ -1,0 +1,77 @@
+* Anthropic Claude Sonnet 4
+Disabled
+You can use the latest Anthropic Claude Sonnet 4 model. [Learn more about how GitHub Copilot serves Anthropic Claude Sonnet 4.](https://gh.io/copilot-anthropic)
+* Anthropic Claude Haiku 4.5
+Disabled
+You can use the latest Anthropic Claude Haiku 4.5 model. [Learn more about how GitHub Copilot serves Anthropic Claude Haiku 4.5.](https://gh.io/copilot-anthropic)
+* Anthropic Claude Fable 5
+Disabled
+You can use the latest Anthropic Claude Fable 5 model. [Learn more.](https://github.com/)
+* Anthropic Claude Fable 5.1
+Enabled
+You can use the latest Anthropic Claude Fable 5.1 model. [Learn more about how GitHub Copilot serves Anthropic Claude Fable 5.1.](https://gh.io/copilot-claude-opus)
+* Anthropic Claude Haiku 5.5
+Disabled
+You can use the latest Anthropic Claude Haiku 5.5 model. [Learn more about how GitHub Copilot serves Anthropic Claude Haiku 5.5.](https://gh.io/copilot-claude-opus)
+* Anthropic Claude Opus 4.8
+Enabled
+You can use the latest Anthropic Claude Opus 4.8 model. [Learn more about how GitHub Copilot serves Anthropic Claude Opus 4.8.](https://gh.io/copilot-claude-opus)
+* Anthropic Claude Opus 4.8 (fast mode) Preview
+Disabled
+You can use the latest Anthropic Claude Opus 4.8 (fast mode) model. [Learn more about how GitHub Copilot serves Anthropic Claude Opus 4.8 (fast mode).](https://gh.io/copilot-claude-opus)
+* Anthropic Claude Opus 5
+Disabled
+You can use the latest Anthropic Claude Opus 5 model. [Learn more about how GitHub Copilot serves Anthropic Claude Opus 5.](https://gh.io/copilot-claude-opus)
+* Anthropic Claude Opus 5.5
+Disabled
+You can use the latest Anthropic Claude Opus 5.5 model. [Learn more about how GitHub Copilot serves Anthropic Claude Opus 5.5.](https://gh.io/copilot-claude-opus)
+* Anthropic Claude Sonnet 5
+Enabled
+You can use the latest Anthropic Claude Sonnet 5 model. [Learn more about how GitHub Copilot serves Anthropic Claude Sonnet 5.](https://gh.io/copilot-claude-opus)
+* Anthropic Claude Sonnet 5.5
+Enabled
+You can use the latest Anthropic Claude Sonnet 5.5 model. [Learn more about how GitHub Copilot serves Anthropic Claude.](https://gh.io/copilot-claude-opus)
+* Google Gemini 3.8 Flash
+Enabled
+You can use the latest Google Gemini 3.8 Flash model. [Learn more about how GitHub Copilot serves Google models.](https://docs.github.com/en/copilot/reference/ai-models/model-hosting#google-models)
+* Google Gemini 4 Argon
+Disabled
+You can use the latest Google Gemini 4 Argon model. [Learn more about how GitHub Copilot serves Google models.](https://docs.github.com/en/copilot/reference/ai-models/model-hosting#google-models)
+* OpenAI GPT-5.6 Luna
+Enabled
+You can use the latest OpenAI GPT-5.6 Luna model. [Learn more about how GitHub Copilot serves OpenAI GPT-5.6 Luna.](https://docs.github.com/en/copilot/reference/ai-models/model-hosting#openai-models)
+* OpenAI GPT-5.6 Sol
+Disabled
+You can use the latest OpenAI GPT-5.6 Sol model. [Learn more about how GitHub Copilot serves OpenAI GPT-5.6 Sol.](https://docs.github.com/en/copilot/reference/ai-models/model-hosting#openai-models)
+* OpenAI GPT-5.6 Terra
+Enabled
+You can use the latest OpenAI GPT-5.6 Terra model. [Learn more about how GitHub Copilot serves OpenAI GPT-5.6 Terra.](https://docs.github.com/en/copilot/reference/ai-models/model-hosting#openai-models)
+* OpenAI GPT-6 Astra
+Disabled
+You can use the latest OpenAI GPT-6 Astra model. [Learn more about how GitHub Copilot serves OpenAI GPT-6 Astra.](https://docs.github.com/en/copilot/reference/ai-models/model-hosting#openai-models)
+* OpenAI GPT-6 Luna
+Enabled
+You can use the latest OpenAI GPT-6 Luna model. [Learn more about how GitHub Copilot serves OpenAI GPT-6 Luna.](https://docs.github.com/en/copilot/reference/ai-models/model-hosting#openai-models)
+* OpenAI GPT-6 Sol
+Disabled
+You can use the latest OpenAI GPT-6 Sol model.
+* OpenAI GPT-6.1 Sol
+Enabled
+You can use the latest OpenAI GPT-6.1 Sol model. [Learn more about how GitHub Copilot serves OpenAI GPT-6.1 Sol.](https://docs.github.com/en/copilot/reference/ai-models/model-hosting#openai-models)
+* OpenAI GPT-5 mini
+Disabled
+You can use the latest OpenAI GPT-5 mini model. [Learn more about how GitHub Copilot serves OpenAI GPT-5 mini.](https://gh.io/copilot-gpt5mini)
+* xAI Grok Code Fast 1
+Disabled
+If enabled, you can access and send data to xAI Grok Code Fast 1. [Learn more about how GitHub Copilot serves xAI Grok Code Fast 1.](https://gh.io/xai-models)
+* xAI Grok 4.6
+Disabled
+You can use the latest xAI Grok 4.6 model. [Learn more.](https://github.com/)
+* xAI Grok 4.7
+Disabled
+You can use the latest xAI Grok 4.7 model. [Learn more.](https://github.com/)
+* Microsoft MAI-Code-1.1-Flash
+Enabled
+You can use the latest Microsoft MAI-Code-1.1-Flash model.
+* Moonshot AI Kimi K3
+Enabled

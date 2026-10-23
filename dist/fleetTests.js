@@ -1330,6 +1330,21 @@ var PROVIDER_PRESETS = [
     minSpacingSeconds: 0
   },
   {
+    // Local models driven by Aider, which can edit files (unlike plain `ollama run`).
+    kind: "ollama-aider",
+    label: "Aider + Ollama (local, edits files)",
+    type: "cli",
+    command: 'aider {model_args} --message "{task}" "{ticket_path}"',
+    modelFlag: "--model",
+    resumeCommand: 'aider {model_args} --restore-chat-history --message "{task}" "{ticket_path}"',
+    models: [],
+    defaultModel: "",
+    maxParallel: 1,
+    maxSessionsPerWindow: 0,
+    windowMinutes: 60,
+    minSpacingSeconds: 0
+  },
+  {
     kind: "ide-chat",
     label: "IDE Chat (Copilot / Cursor / Antigravity)",
     type: "vscode-command",
@@ -1373,6 +1388,7 @@ var LEGACY_ID_TO_KIND = {
   codex: "codex",
   "codex-cli": "codex",
   ollama: "ollama",
+  "ollama-aider": "ollama-aider",
   "copilot-cli": "copilot-cli",
   "cline-ollama": "cline",
   cline: "cline"
@@ -1399,6 +1415,11 @@ function sanitizeProvider(raw, existingIds = []) {
     enabled: raw?.enabled !== false,
     type: raw?.type === "vscode-command" ? "vscode-command" : raw?.type === "cli" ? "cli" : preset.type,
     command: String(raw?.command ?? preset.command),
+    listCommand: raw?.listCommand ? String(raw.listCommand).slice(0, 300) : void 0,
+    agentic: raw?.agentic !== void 0 ? !!raw.agentic : kind !== "ollama" && kind !== "ide-chat",
+    budgetDaily: Math.max(0, Number(raw?.budgetDaily) || 0),
+    budgetWeekly: Math.max(0, Number(raw?.budgetWeekly) || 0),
+    budgetMonthly: Math.max(0, Number(raw?.budgetMonthly) || 0),
     modelTiers: raw?.modelTiers ? String(raw.modelTiers).slice(0, 400) : void 0,
     resumeCommand: raw?.resumeCommand !== void 0 ? String(raw.resumeCommand).trim() || void 0 : preset.resumeCommand,
     modelFlag: raw?.modelFlag !== void 0 ? String(raw.modelFlag).trim() || void 0 : preset.modelFlag,
@@ -1618,6 +1639,59 @@ var ProviderRegistry = class {
 // src/fleet/sessions.ts
 var fs4 = __toESM(require("fs"));
 var path6 = __toESM(require("path"));
+
+// src/fleet/cost.ts
+function ticketPoints(t) {
+  const e = (t.estimate || "").trim().toLowerCase();
+  if (/^(xs|s\b|small)/.test(e))
+    return 1;
+  if (/^(xl|extra)/.test(e))
+    return 13;
+  if (/^(l\b|large)/.test(e))
+    return 8;
+  if (/^(m\b|medium)/.test(e))
+    return 3;
+  return 3;
+}
+var TOKENS_PER_POINT = { input: 6e4, output: 8e3 };
+var CACHED_SHARE = 0.7;
+function estimateCost(pricing, points) {
+  if (!pricing || pricing.free)
+    return 0;
+  const inTok = TOKENS_PER_POINT.input * points;
+  const outTok = TOKENS_PER_POINT.output * points;
+  const inPrice = pricing.inPerM ?? 0;
+  const cachedPrice = pricing.cachedPerM ?? inPrice;
+  const inCost = (inTok * (1 - CACHED_SHARE) * inPrice + inTok * CACHED_SHARE * cachedPrice) / 1e6;
+  return inCost + outTok * (pricing.outPerM ?? 0) / 1e6;
+}
+function periodStart(period, now) {
+  const d = new Date(now);
+  d.setHours(0, 0, 0, 0);
+  if (period === "week") {
+    const day = (d.getDay() + 6) % 7;
+    d.setDate(d.getDate() - day);
+  } else if (period === "month") {
+    d.setDate(1);
+  }
+  return d.getTime();
+}
+function periodEnd(period, now) {
+  const d = new Date(periodStart(period, now));
+  if (period === "day")
+    d.setDate(d.getDate() + 1);
+  else if (period === "week")
+    d.setDate(d.getDate() + 7);
+  else
+    d.setMonth(d.getMonth() + 1);
+  return d.getTime();
+}
+var PERIODS = ["day", "week", "month"];
+function budgetOf(p, period) {
+  return period === "day" ? p.budgetDaily : period === "week" ? p.budgetWeekly : p.budgetMonthly;
+}
+
+// src/fleet/sessions.ts
 var QUICK_FAIL_MS = 2e4;
 var COOLDOWN_BASE_MIN = 5;
 var COOLDOWN_MAX_MIN = 30;
@@ -1632,7 +1706,8 @@ var JsonFleetStore = class {
       return {
         starts: raw?.starts && typeof raw.starts === "object" ? raw.starts : {},
         sessions: Array.isArray(raw?.sessions) ? raw.sessions : [],
-        blocks: raw?.blocks && typeof raw.blocks === "object" ? raw.blocks : {}
+        blocks: raw?.blocks && typeof raw.blocks === "object" ? raw.blocks : {},
+        spend: Array.isArray(raw?.spend) ? raw.spend : []
       };
     } catch {
       return { starts: {}, sessions: [] };
@@ -1658,6 +1733,7 @@ var SessionManager = class {
     const saved = store ? store.load() : { starts: {}, sessions: [] };
     this.starts = saved.starts;
     this.blocks = saved.blocks || {};
+    this.spend = saved.spend || [];
     for (const s of saved.sessions || []) {
       if (s.status === "running" || s.status === "queued") {
         s.interruptKind = s.status === "queued" ? "queued-lost" : "host-closed";
@@ -1674,12 +1750,13 @@ var SessionManager = class {
   payloads = /* @__PURE__ */ new Map();
   starts;
   blocks = {};
+  spend = [];
   cooldownUntil = /* @__PURE__ */ new Map();
   quickFails = /* @__PURE__ */ new Map();
   listeners = [];
   seq = 0;
   persist() {
-    this.store?.save({ starts: this.starts, sessions: this.sessions, blocks: this.blocks });
+    this.store?.save({ starts: this.starts, sessions: this.sessions, blocks: this.blocks, spend: this.spend });
   }
   onChange(fn) {
     this.listeners.push(fn);
@@ -1711,7 +1788,7 @@ var SessionManager = class {
     return (this.starts[p.id] || []).filter((t) => t > since);
   }
   /** Can this provider start another session right now? Never throws. */
-  canStart(p, now = this.clock()) {
+  canStart(p, now = this.clock(), estCost = 0) {
     if (!p.enabled)
       return { ok: false, state: "disabled", reason: "Provider is disabled" };
     const cd = this.cooldownUntil.get(p.id) || 0;
@@ -1721,6 +1798,22 @@ var SessionManager = class {
     if (p.models.length && p.models.every((m) => this.modelBlock(p.id, m, now))) {
       const untils = p.models.map((m) => this.modelBlock(p.id, m, now).until);
       return { ok: false, state: "throttled", reason: "Every model is at its usage limit", retryAt: Math.min(...untils) };
+    }
+    for (const period of PERIODS) {
+      const cap = budgetOf(p, period);
+      if (cap <= 0)
+        continue;
+      const allowed = cap * (1 - p.safetyMarginPct / 100);
+      const spent = this.spentSince(p.id, periodStart(period, now));
+      if (spent + estCost > allowed && (spent > 0 || estCost > allowed)) {
+        const label = period === "day" ? "Daily" : period === "week" ? "Weekly" : "Monthly";
+        return {
+          ok: false,
+          state: "throttled",
+          reason: `${label} budget reached ($${spent.toFixed(2)} of $${cap.toFixed(2)} used${estCost ? `, this run ~$${estCost.toFixed(2)}` : ""})`,
+          retryAt: periodEnd(period, now)
+        };
+      }
     }
     const running = this.sessions.filter((s) => s.providerId === p.id && s.status === "running").length;
     if (running >= p.maxParallel) {
@@ -1745,6 +1838,25 @@ var SessionManager = class {
       return { ok: false, state: "throttled", reason: `Spacing starts by ${p.minSpacingSeconds}s`, retryAt: readyAt };
     }
     return { ok: true, state: "ready" };
+  }
+  // ---------------------------------------------------------------- spend & windows
+  spentSince(providerId, since) {
+    return this.spend.filter((e) => e.providerId === providerId && e.at >= since).reduce((sum, e) => sum + e.cost, 0);
+  }
+  recordSpend(providerId, model, cost, sessionId) {
+    if (!(cost > 0))
+      return;
+    this.spend.push({ providerId, model, cost, at: this.clock(), sessionId });
+    const keep = this.clock() - 65 * 24 * 60 * 6e4;
+    this.spend = this.spend.filter((e) => e.at >= keep);
+    this.persist();
+  }
+  /** Start times inside the provider's rolling window (oldest first). */
+  windowStarts(p, now = this.clock()) {
+    return this.startsInWindow(p, now).sort((a, b) => a - b);
+  }
+  runningCount(providerId) {
+    return this.sessions.filter((s) => s.providerId === providerId && s.status === "running").length;
   }
   // ---------------------------------------------------------------- model usage limits
   blockKey(providerId, model) {
@@ -1822,6 +1934,12 @@ var SessionManager = class {
       windowMinutes: p.windowMinutes,
       pct: p.maxSessionsPerWindow > 0 ? Math.min(100, Math.round(recent / p.maxSessionsPerWindow * 100)) : null,
       blockedModels: this.blockedModels(p.id, now),
+      spend: {
+        day: this.spentSince(p.id, periodStart("day", now)),
+        week: this.spentSince(p.id, periodStart("week", now)),
+        month: this.spentSince(p.id, periodStart("month", now))
+      },
+      budget: { day: p.budgetDaily, week: p.budgetWeekly, month: p.budgetMonthly },
       retryAt: check2.retryAt,
       cooldownUntil: this.cooldownUntil.get(p.id)
     };
@@ -1848,11 +1966,14 @@ var SessionManager = class {
       agentSessionId: req.agentSessionId,
       attempt: req.attempt ?? 1,
       resumedFrom: req.resumedFrom,
-      hidden: req.hidden
+      hidden: req.hidden,
+      points: req.points,
+      estCost: req.estCost,
+      estMinutes: req.estMinutes
     };
     this.sessions.push(session);
     this.payloads.set(session.id, { req });
-    const check2 = this.canStart(req.provider, now);
+    const check2 = this.canStart(req.provider, now, req.estCost || 0);
     if (check2.ok) {
       await this.start(session);
     } else if (req.queueIfBusy === false) {
@@ -1878,6 +1999,8 @@ var SessionManager = class {
     session.startedAt = now;
     session.note = void 0;
     (this.starts[provider.id] ||= []).push(now);
+    if (session.estCost)
+      this.recordSpend(provider.id, session.model, session.estCost, session.id);
     this.trimHistory(provider, now);
     this.persist();
     this.emit();
@@ -2046,6 +2169,132 @@ var SessionManager = class {
   }
 };
 
+// src/fleet/catalog.ts
+var ESTIMATED_OUT_PER_M = { 1: 0, 2: 1.5, 3: 6, 4: 15, 5: 30 };
+function estimatePricing(tier, local) {
+  if (local)
+    return { free: true, inPerM: 0, outPerM: 0, source: "estimated" };
+  const out = ESTIMATED_OUT_PER_M[tier] ?? 6;
+  return { inPerM: out / 5, cachedPerM: out / 50, outPerM: out, source: "estimated" };
+}
+
+// src/fleet/speed.ts
+function priorTps(tier, local, sizeB, benchTps) {
+  if (benchTps && benchTps > 0)
+    return benchTps;
+  if (local) {
+    const b = sizeB ?? 8;
+    return b <= 4 ? 40 : b <= 9 ? 25 : b <= 16 ? 14 : b <= 40 ? 6 : 3;
+  }
+  return tier <= 1 ? 200 : tier === 2 ? 180 : tier === 3 ? 110 : tier === 4 ? 75 : 45;
+}
+function priorMinutes(points, tps) {
+  const generation = TOKENS_PER_POINT.output * points / tps / 60;
+  return generation + 2 + points;
+}
+
+// src/fleet/optimizer.ts
+var OBJECTIVES = {
+  balanced: { timeValuePerMin: 0.2, quotaValue: 50 },
+  cost: { timeValuePerMin: 0.05, quotaValue: 50 },
+  speed: { timeValuePerMin: 1, quotaValue: 20 }
+};
+var MAX_WAIT_MIN = 8 * 60;
+var pow2 = (x) => x * x;
+function quotaPressure(p, sessions, now) {
+  let lambdaCount = 0;
+  let share = 0;
+  if (p.maxSessionsPerWindow > 0) {
+    const starts = sessions.windowStarts(p, now);
+    const windowMs = p.windowMinutes * 6e4;
+    const remaining = Math.max(0, 1 - starts.length / p.maxSessionsPerWindow);
+    const timeLeft = starts.length ? Math.min(1, Math.max(0, (starts[0] + windowMs - now) / windowMs)) : 1;
+    lambdaCount = remaining <= 1e-3 ? 10 : Math.min(10, pow2(timeLeft / remaining));
+    share = 1 / p.maxSessionsPerWindow;
+  }
+  let lambdaBudget = 0;
+  for (const period of PERIODS) {
+    const cap = budgetOf(p, period);
+    if (cap <= 0)
+      continue;
+    const start = periodStart(period, now);
+    const end = periodEnd(period, now);
+    const remaining = Math.max(0, 1 - sessions.spentSince(p.id, start) / cap);
+    const timeLeft = (end - now) / (end - start);
+    lambdaBudget = Math.max(lambdaBudget, remaining <= 1e-3 ? 10 : Math.min(10, pow2(timeLeft / remaining)));
+  }
+  return { lambdaCount, lambdaBudget, share };
+}
+function estimateRun(ticket, p, model, ctx) {
+  const points = ticketPoints(ticket);
+  const entry = ctx.catalog.get(p.id, model);
+  const local = entry ? entry.local : p.kind === "ollama" || p.kind === "ollama-aider";
+  const hasOverride = parseTierOverrides(p.modelTiers)[model.toLowerCase()] !== void 0;
+  const tier = entry && !hasOverride ? entry.tier : modelTier(p, model);
+  const pricing = entry?.pricing || estimatePricing(tier, local);
+  const tps = priorTps(tier, local, entry?.sizeB, ctx.bench?.[`${p.id}::${model}`]?.tps);
+  return {
+    points,
+    tier,
+    local,
+    estCost: estimateCost(pricing, points),
+    estMinutes: ctx.speed.predict(p.id, model, points, priorMinutes(points, tps))
+  };
+}
+function candidateModels(p, catalog) {
+  const fromCatalog = catalog.visible(p.id).map((m) => m.id);
+  const ids = fromCatalog.length ? fromCatalog : p.models.length ? p.models : [p.defaultModel];
+  return [...new Set(ids)];
+}
+function rankOptions(ticket, providers, sessions, ctx, restrictTo) {
+  const now = ctx.now ?? Date.now();
+  const w = { ...OBJECTIVES[ctx.objective || "balanced"], ...ctx.weights || {} };
+  const points = ticketPoints(ticket);
+  const needed = requiredTier(ticket);
+  const options = [];
+  for (const p of restrictTo ? [restrictTo] : providers) {
+    const pressure = quotaPressure(p, sessions, now);
+    for (const model of candidateModels(p, ctx.catalog)) {
+      if (sessions.modelBlock(p.id, model, now))
+        continue;
+      const run = estimateRun(ticket, p, model, ctx);
+      const { tier, estCost, estMinutes } = run;
+      if (tier < needed)
+        continue;
+      const check2 = sessions.canStart(p, now, estCost);
+      const virtual = ctx.virtualSpent?.get(p.id) || 0;
+      let waitMinutes = 0;
+      if (!check2.ok) {
+        waitMinutes = check2.retryAt ? Math.max(0, (check2.retryAt - now) / 6e4) : estMinutes / 2;
+      } else if (sessions.headroom(p, now) - virtual <= 0) {
+        waitMinutes = estMinutes / 2;
+      }
+      if (waitMinutes > MAX_WAIT_MIN)
+        continue;
+      const lambda = Math.max(pressure.lambdaCount, pressure.lambdaBudget);
+      const timeCost = (estMinutes + waitMinutes) * w.timeValuePerMin;
+      const moneyCost = estCost * (1 + pressure.lambdaBudget);
+      const quotaCost = pressure.lambdaCount * pressure.share * w.quotaValue;
+      const score = timeCost + moneyCost + quotaCost;
+      const startsNow = waitMinutes === 0;
+      options.push({
+        provider: p,
+        model,
+        tier,
+        points,
+        estMinutes,
+        estCost,
+        waitMinutes,
+        lambda,
+        score,
+        startsNow,
+        summary: `${p.name}${model ? " \xB7 " + model : ""}: ~${Math.round(estMinutes)} min${estCost > 0 ? `, ~$${estCost.toFixed(2)}` : ", free"}${waitMinutes > 0 ? `, starts in ~${Math.round(waitMinutes)} min` : ""}${lambda > 0.5 ? `, quota ${lambda >= 2 ? "scarce" : "tight"}` : ""}`
+      });
+    }
+  }
+  return options.sort((a, b) => a.score - b.score);
+}
+
 // src/fleet/scheduler.ts
 var PRIORITY_RANK = {
   p0: 0,
@@ -2063,7 +2312,7 @@ function priorityRank(priority) {
   return m ? PRIORITY_RANK[m[1]] : 2;
 }
 function automatableWorkers(providers) {
-  return providers.filter((p) => p.enabled && p.type === "cli" && p.kind !== "ollama" && p.roles.includes("worker"));
+  return providers.filter((p) => p.enabled && p.type === "cli" && p.agentic && p.roles.includes("worker"));
 }
 function modelFor(provider, ticket) {
   const label = (ticket.labels || []).map((l) => l.replace(/[`\s]/g, "")).find((l) => /^model:/i.test(l));
@@ -2101,6 +2350,34 @@ function planWork(candidates, providers, sessions, opts = {}) {
     const requested = matchProvider(providers, t.assignee);
     let chosen;
     let reason;
+    if (opts.optimizer) {
+      if (requested && !workers.includes(requested))
+        continue;
+      if (!requested && t.assignee && !/^(unassigned|\u2014|-)$/i.test(t.assignee.trim()))
+        continue;
+      const ranked = rankOptions(t, workers, sessions, { ...opts.optimizer, now, virtualSpent: spent }, requested);
+      const best = ranked[0];
+      if (!best)
+        continue;
+      if (best.startsNow)
+        spent.set(best.provider.id, (spent.get(best.provider.id) || 0) + 1);
+      out.push({
+        ticketPath: t.path,
+        ticketId: t.id,
+        title: t.title,
+        boardId: c.boardId,
+        providerId: best.provider.id,
+        providerName: best.provider.name,
+        model: best.model,
+        startsNow: best.startsNow,
+        reason: (requested ? `Assigned to ${requested.name}. ` : "Best time/cost/quota trade-off. ") + best.summary,
+        estMinutes: best.estMinutes,
+        estCost: best.estCost,
+        points: best.points,
+        alternatives: ranked.slice(1, 4).map((o) => o.summary)
+      });
+      continue;
+    }
     if (requested) {
       if (!workers.includes(requested))
         continue;
@@ -2273,7 +2550,7 @@ function pickFallback(providers, sessions, from, ticket, now = Date.now()) {
   const role = from.role === "orchestrator" ? "worker" : from.role;
   const options = [];
   for (const p of providers) {
-    if (!p.enabled || p.type !== "cli" || p.kind === "ollama" || !p.roles.includes(role))
+    if (!p.enabled || p.type !== "cli" || !p.agentic || !p.roles.includes(role))
       continue;
     if (sessions.headroom(p, now) <= 0 && p.id !== from.providerId)
       continue;
