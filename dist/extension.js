@@ -35,8 +35,8 @@ __export(extension_exports, {
 });
 module.exports = __toCommonJS(extension_exports);
 var vscode7 = __toESM(require("vscode"));
-var path11 = __toESM(require("path"));
-var fs9 = __toESM(require("fs"));
+var path12 = __toESM(require("path"));
+var fs10 = __toESM(require("fs"));
 
 // src/boardManager.ts
 var vscode2 = __toESM(require("vscode"));
@@ -1775,8 +1775,8 @@ var TreeItemNode = class extends vscode3.TreeItem {
 
 // src/webviewPanel.ts
 var vscode5 = __toESM(require("vscode"));
-var path10 = __toESM(require("path"));
-var fs7 = __toESM(require("fs"));
+var path11 = __toESM(require("path"));
+var fs8 = __toESM(require("fs"));
 
 // src/agentRunner.ts
 var path5 = __toESM(require("path"));
@@ -1807,6 +1807,7 @@ function escapeForDoubleQuotes(value, shell) {
 
 // src/agentRunner.ts
 var DEFAULT_TASK = "Review requirements and implement ticket {ticket_path}: {ticket_title}";
+var SESSION_ID_PATTERN = /^[0-9a-fA-F-]{8,64}$/;
 var MODEL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:\/@+-]*$/;
 function getVsCode() {
   try {
@@ -1918,6 +1919,7 @@ var AgentRunner = class {
       "{board_root}": esc(boardRoot),
       "{column}": esc(ticket.column),
       "{model}": model,
+      "{session_id}": options.sessionId && SESSION_ID_PATTERN.test(options.sessionId) ? options.sessionId : "",
       "{model_args}": modelArgs,
       "{agy_path}": agyPath,
       "{antigravity_path}": agyPath,
@@ -1943,7 +1945,13 @@ var AgentRunner = class {
     }
     command = command.replace(/\{[a-z_]+\}/g, (m) => m in replacements ? replacements[m] : m);
     command = command.replace(/ {2,}/g, " ").trim();
-    if (process.platform === "win32") {
+    const exePath = config.path || config.executable;
+    const first = command.match(/^([A-Za-z][\w.-]*)(?=\s|$)/);
+    if (exePath && first && path5.basename(exePath).replace(/\.[^.]+$/, "").toLowerCase() === first[1].toLowerCase()) {
+      const quoted = `"${exePath}"`;
+      command = (shell === "powershell" ? "& " : "") + quoted + command.slice(first[1].length);
+    }
+    if (process.platform === "win32" && shell === "powershell") {
       const trimmed = command.trim();
       if (trimmed.startsWith('"') && !trimmed.startsWith("&")) {
         command = "& " + trimmed;
@@ -2133,8 +2141,9 @@ var PromptFormatter = class {
 
 // src/fleet/fleetController.ts
 var vscode4 = __toESM(require("vscode"));
-var fs6 = __toESM(require("fs"));
-var path9 = __toESM(require("path"));
+var fs7 = __toESM(require("fs"));
+var path10 = __toESM(require("path"));
+var import_crypto = require("crypto");
 
 // src/fleet/providers.ts
 var fs4 = __toESM(require("fs"));
@@ -2144,8 +2153,9 @@ var PROVIDER_PRESETS = [
     kind: "claude-code",
     label: "Claude Code",
     type: "cli",
-    command: `claude {model_args} -p "{task}"`,
+    command: `claude {model_args} --session-id {session_id} -p "{task}"`,
     modelFlag: "--model",
+    resumeCommand: `claude {model_args} --resume {session_id} -p "{task}"`,
     models: ["opus", "sonnet", "haiku"],
     defaultModel: "sonnet",
     maxParallel: 3,
@@ -2211,6 +2221,7 @@ var PROVIDER_PRESETS = [
     type: "cli",
     command: 'aider {model_args} --message "Implement ticket requirements in {ticket_path}" "{ticket_path}"',
     modelFlag: "--model",
+    resumeCommand: 'aider {model_args} --restore-chat-history --message "{task}" "{ticket_path}"',
     models: [],
     defaultModel: "",
     maxParallel: 2,
@@ -2243,6 +2254,19 @@ var PROVIDER_PRESETS = [
     maxSessionsPerWindow: 0,
     windowMinutes: 60,
     minSpacingSeconds: 5
+  },
+  {
+    // Local models. `ollama run` answers/chats but cannot edit files; use Aider/Cline pointed at Ollama for coding.
+    kind: "ollama",
+    label: "Ollama (local)",
+    type: "cli",
+    command: 'ollama run {model} "{task}"',
+    models: [],
+    defaultModel: "",
+    maxParallel: 1,
+    maxSessionsPerWindow: 0,
+    windowMinutes: 60,
+    minSpacingSeconds: 0
   },
   {
     kind: "ide-chat",
@@ -2287,6 +2311,7 @@ var LEGACY_ID_TO_KIND = {
   "ide-chat": "ide-chat",
   codex: "codex",
   "codex-cli": "codex",
+  ollama: "ollama",
   "copilot-cli": "copilot-cli",
   "cline-ollama": "cline",
   cline: "cline"
@@ -2313,6 +2338,8 @@ function sanitizeProvider(raw, existingIds = []) {
     enabled: raw?.enabled !== false,
     type: raw?.type === "vscode-command" ? "vscode-command" : raw?.type === "cli" ? "cli" : preset.type,
     command: String(raw?.command ?? preset.command),
+    modelTiers: raw?.modelTiers ? String(raw.modelTiers).slice(0, 400) : void 0,
+    resumeCommand: raw?.resumeCommand !== void 0 ? String(raw.resumeCommand).trim() || void 0 : preset.resumeCommand,
     modelFlag: raw?.modelFlag !== void 0 ? String(raw.modelFlag).trim() || void 0 : preset.modelFlag,
     workingDir: raw?.workingDir ? String(raw.workingDir) : void 0,
     path: raw?.path ? String(raw.path) : void 0,
@@ -2345,7 +2372,7 @@ function createProvider(kind, existing, name) {
     kind,
     name: name || (sameKind ? `${preset.label} ${sameKind + 1}` : preset.label),
     models: preset.models.slice(),
-    roles: kind === "ide-chat" ? ["worker"] : ["worker", "reviewer"]
+    roles: kind === "ide-chat" || kind === "ollama" ? ["worker"] : ["worker", "reviewer"]
   }, ids);
 }
 function providersFromAssignees(assignees, existing = []) {
@@ -2394,6 +2421,14 @@ function providerToAssignee(p) {
     }
   };
 }
+var OLD_CLAUDE_COMMAND = 'claude {model_args} -p "{task}"';
+function migrateProvider(raw) {
+  if (raw?.kind === "claude-code" && raw.command === OLD_CLAUDE_COMMAND) {
+    const preset = getPreset("claude-code");
+    return { ...raw, command: preset.command, resumeCommand: raw.resumeCommand || preset.resumeCommand };
+  }
+  return raw;
+}
 var ProviderRegistry = class {
   constructor(workspaceRoot) {
     this.workspaceRoot = workspaceRoot;
@@ -2412,7 +2447,7 @@ var ProviderRegistry = class {
       const list = Array.isArray(raw) ? raw : raw?.providers || [];
       const ids = [];
       this.providers = list.map((r) => {
-        const p = sanitizeProvider(r, ids);
+        const p = sanitizeProvider(migrateProvider(r), ids);
         ids.push(p.id);
         return p;
       });
@@ -2473,6 +2508,35 @@ var ProviderRegistry = class {
     }
     return false;
   }
+  /** Applies a detection result to one provider: fills a missing path, and refreshes models for Ollama. */
+  applyDetection(id, d) {
+    const p = this.providers.find((x) => x.id === id);
+    if (!p)
+      return void 0;
+    const next = { ...p };
+    if (d.path && !p.path)
+      next.path = d.path;
+    if (d.models && d.models.length) {
+      next.models = d.models;
+      if (!d.models.includes(p.defaultModel))
+        next.defaultModel = d.models[0];
+    }
+    return this.upsert(next);
+  }
+  /** Adds a provider for every detected tool that has none yet. Returns the new providers. */
+  addDetected(found) {
+    const added = [];
+    for (const d of found) {
+      if (this.providers.some((p2) => p2.kind === d.kind))
+        continue;
+      const p = createProvider(d.kind, this.providers);
+      this.providers.push(p);
+      added.push(this.applyDetection(p.id, d) || p);
+    }
+    if (added.length)
+      this.save();
+    return added;
+  }
   seedFromAssignees(assignees) {
     const added = providersFromAssignees(assignees, this.providers);
     if (added.length) {
@@ -2504,15 +2568,21 @@ var JsonFleetStore = class {
   load() {
     try {
       const raw = JSON.parse(fs5.readFileSync(this.file, "utf8"));
-      return { starts: raw?.starts && typeof raw.starts === "object" ? raw.starts : {} };
+      return {
+        starts: raw?.starts && typeof raw.starts === "object" ? raw.starts : {},
+        sessions: Array.isArray(raw?.sessions) ? raw.sessions : [],
+        blocks: raw?.blocks && typeof raw.blocks === "object" ? raw.blocks : {}
+      };
     } catch {
-      return { starts: {} };
+      return { starts: {}, sessions: [] };
     }
   }
   save(data) {
     try {
       fs5.mkdirSync(path8.dirname(this.file), { recursive: true });
-      fs5.writeFileSync(this.file, JSON.stringify(data), "utf8");
+      const tmp = this.file + ".tmp";
+      fs5.writeFileSync(tmp, JSON.stringify(data), "utf8");
+      fs5.renameSync(tmp, this.file);
     } catch {
     }
   }
@@ -2524,19 +2594,37 @@ var SessionManager = class {
     this.store = store;
     this.clock = clock;
     this.sessionTimeoutMinutes = sessionTimeoutMinutes;
-    this.starts = store ? store.load().starts : {};
+    const saved = store ? store.load() : { starts: {}, sessions: [] };
+    this.starts = saved.starts;
+    this.blocks = saved.blocks || {};
+    for (const s of saved.sessions || []) {
+      if (s.status === "running" || s.status === "queued") {
+        s.interruptKind = s.status === "queued" ? "queued-lost" : "host-closed";
+        s.note = s.status === "queued" ? "Was queued when the editor closed" : "Interrupted: the editor or PC closed while this agent was running";
+        s.status = "interrupted";
+        s.endedAt = this.clock();
+      }
+      this.sessions.push(s);
+    }
+    if (saved.sessions?.some((x) => x.status === "interrupted"))
+      this.persist();
   }
   sessions = [];
   payloads = /* @__PURE__ */ new Map();
   starts;
+  blocks = {};
   cooldownUntil = /* @__PURE__ */ new Map();
   quickFails = /* @__PURE__ */ new Map();
   listeners = [];
   seq = 0;
+  persist() {
+    this.store?.save({ starts: this.starts, sessions: this.sessions, blocks: this.blocks });
+  }
   onChange(fn) {
     this.listeners.push(fn);
   }
   emit() {
+    this.persist();
     this.listeners.forEach((fn) => {
       try {
         fn();
@@ -2569,6 +2657,10 @@ var SessionManager = class {
     if (cd > now) {
       return { ok: false, state: "cooldown", reason: "Cooling down after a failed start (possible rate limit)", retryAt: cd };
     }
+    if (p.models.length && p.models.every((m) => this.modelBlock(p.id, m, now))) {
+      const untils = p.models.map((m) => this.modelBlock(p.id, m, now).until);
+      return { ok: false, state: "throttled", reason: "Every model is at its usage limit", retryAt: Math.min(...untils) };
+    }
     const running = this.sessions.filter((s) => s.providerId === p.id && s.status === "running").length;
     if (running >= p.maxParallel) {
       return { ok: false, state: "busy", reason: `${running}/${p.maxParallel} parallel sessions in use` };
@@ -2592,6 +2684,53 @@ var SessionManager = class {
       return { ok: false, state: "throttled", reason: `Spacing starts by ${p.minSpacingSeconds}s`, retryAt: readyAt };
     }
     return { ok: true, state: "ready" };
+  }
+  // ---------------------------------------------------------------- model usage limits
+  blockKey(providerId, model) {
+    return `${providerId}::${model}`;
+  }
+  /** Active block for this model, if any. Expired blocks are dropped lazily. */
+  modelBlock(providerId, model, now = this.clock()) {
+    const key = this.blockKey(providerId, model);
+    const b = this.blocks[key];
+    if (!b)
+      return void 0;
+    if (b.until <= now) {
+      delete this.blocks[key];
+      return void 0;
+    }
+    return b;
+  }
+  blockedModels(providerId, now = this.clock()) {
+    const prefix = `${providerId}::`;
+    return Object.keys(this.blocks).filter((k) => k.startsWith(prefix)).map((k) => ({ model: k.slice(prefix.length), b: this.modelBlock(providerId, k.slice(prefix.length), now) })).filter((x) => !!x.b).map((x) => ({ model: x.model, until: x.b.until, unknown: x.b.unknown }));
+  }
+  /** Block a model until its reset time; with no known reset it is assumed back after `assumeMinutes` and re-probed. */
+  blockModel(providerId, model, resetAt, assumeMinutes = 30) {
+    const now = this.clock();
+    const block = resetAt && resetAt > now ? { until: resetAt, unknown: false } : { until: now + assumeMinutes * 6e4, unknown: true };
+    this.blocks[this.blockKey(providerId, model)] = block;
+    this.persist();
+    return block;
+  }
+  /** A running session reported a usage limit: stop tracking it as running and remember the model is exhausted. */
+  limitHit(id, info) {
+    const s = this.get(id);
+    if (!s || s.status !== "running" && s.status !== "queued")
+      return void 0;
+    const model = info.model || s.model;
+    const block = this.blockModel(s.providerId, model, info.resetAt);
+    s.limit = { model, resetAt: info.resetAt };
+    s.resumeAfter = info.resetAt;
+    this.interrupt(id, "usage-limit", `Usage limit reached${model ? ` on ${model}` : ""}${info.excerpt ? `: ${info.excerpt}` : ""}`);
+    return block;
+  }
+  setAttention(id, text) {
+    const s = this.get(id);
+    if (!s || s.attention === text)
+      return;
+    s.attention = text;
+    this.emit();
   }
   /** How many sessions could start right now without breaking any limit (0 when throttled/busy/cooling). */
   headroom(p, now = this.clock()) {
@@ -2621,6 +2760,7 @@ var SessionManager = class {
       maxSessionsPerWindow: p.maxSessionsPerWindow,
       windowMinutes: p.windowMinutes,
       pct: p.maxSessionsPerWindow > 0 ? Math.min(100, Math.round(recent / p.maxSessionsPerWindow * 100)) : null,
+      blockedModels: this.blockedModels(p.id, now),
       retryAt: check.retryAt,
       cooldownUntil: this.cooldownUntil.get(p.id)
     };
@@ -2643,7 +2783,11 @@ var SessionManager = class {
       ticketTitle: req.ticketTitle,
       boardId: req.boardId,
       status: "queued",
-      queuedAt: now
+      queuedAt: now,
+      agentSessionId: req.agentSessionId,
+      attempt: req.attempt ?? 1,
+      resumedFrom: req.resumedFrom,
+      hidden: req.hidden
     };
     this.sessions.push(session);
     this.payloads.set(session.id, { req });
@@ -2674,7 +2818,7 @@ var SessionManager = class {
     session.note = void 0;
     (this.starts[provider.id] ||= []).push(now);
     this.trimHistory(provider, now);
-    this.store?.save({ starts: this.starts });
+    this.persist();
     this.emit();
     let ok = false;
     try {
@@ -2691,12 +2835,16 @@ var SessionManager = class {
     this.starts[p.id] = (this.starts[p.id] || []).filter((t) => t > keep);
   }
   /** Called by the launcher when the agent process/terminal ends. exitCode may be unknown. */
-  ended(sessionId, exitCode, note) {
+  ended(sessionId, exitCode, note, terminalClosed = false) {
     const s = this.get(sessionId);
     if (!s || s.status !== "running" && s.status !== "queued")
       return;
     const now = this.clock();
     const quick = s.startedAt !== void 0 && now - s.startedAt < QUICK_FAIL_MS;
+    if (exitCode === void 0 && terminalClosed) {
+      this.interrupt(s.id, "user-closed", note || "Terminal closed before the agent finished");
+      return;
+    }
     if (exitCode !== void 0 && exitCode !== 0) {
       this.finish(s, "failed", exitCode, note || `Exited with code ${exitCode}`);
       if (quick)
@@ -2713,6 +2861,50 @@ var SessionManager = class {
     this.quickFails.set(providerId, n);
     const minutes = Math.min(COOLDOWN_MAX_MIN, COOLDOWN_BASE_MIN * 2 ** (n - 1));
     this.cooldownUntil.set(providerId, now + minutes * 6e4);
+  }
+  /** Marks a live session interrupted (resumable). Does not touch the terminal. */
+  interrupt(id, kind, note) {
+    const s = this.get(id);
+    if (!s || s.status !== "running" && s.status !== "queued")
+      return;
+    s.status = "interrupted";
+    s.interruptKind = kind;
+    s.endedAt = this.clock();
+    if (note)
+      s.note = note;
+    this.payloads.delete(s.id);
+    this.emit();
+    void this.pump();
+  }
+  /** Editor is closing: everything still live becomes resumable on the next start. */
+  shutdown() {
+    for (const s of this.sessions.filter((x) => x.status === "running" || x.status === "queued")) {
+      s.status = "interrupted";
+      s.interruptKind = s.startedAt ? "host-closed" : "queued-lost";
+      s.endedAt = this.clock();
+      s.note = "Interrupted: the editor closed while this agent was running";
+    }
+    this.persist();
+  }
+  /** Sessions the user can pick up again: interrupted or failed, and not already resumed. */
+  resumable() {
+    return this.sessions.filter((s) => (s.status === "interrupted" || s.status === "failed") && !s.resumedBy);
+  }
+  markResumed(oldId, newId) {
+    const s = this.get(oldId);
+    if (s) {
+      s.resumedBy = newId;
+      this.emit();
+    }
+  }
+  /** Dismiss an interrupted/failed session ("it was actually done"): hides Resume without running anything. */
+  dismiss(id) {
+    const s = this.get(id);
+    if (s && (s.status === "interrupted" || s.status === "failed")) {
+      s.status = "finished";
+      s.note = (s.note ? s.note + " \xB7 " : "") + "Dismissed";
+      this.emit();
+    }
   }
   finish(s, status, exitCode, note) {
     s.status = status;
@@ -2786,11 +2978,173 @@ var SessionManager = class {
   prune(keepMinutes = 240) {
     const cutoff = this.clock() - keepMinutes * 6e4;
     const before = this.sessions.length;
-    this.sessions = this.sessions.filter((s) => s.status === "running" || s.status === "queued" || (s.endedAt || 0) > cutoff);
+    const keepRecoverable = this.clock() - 7 * 24 * 60 * 6e4;
+    this.sessions = this.sessions.filter((s) => s.status === "running" || s.status === "queued" || (s.endedAt || 0) > cutoff || (s.status === "interrupted" || s.status === "failed") && !s.resumedBy && (s.endedAt || 0) > keepRecoverable);
     if (this.sessions.length !== before)
       this.emit();
   }
 };
+
+// src/fleet/detect.ts
+var fs6 = __toESM(require("fs"));
+var http = __toESM(require("http"));
+var os = __toESM(require("os"));
+var path9 = __toESM(require("path"));
+var import_child_process = require("child_process");
+var EXECUTABLE_NAMES = {
+  "claude-code": ["claude"],
+  devin: ["devin", "devin-desktop"],
+  antigravity: ["agy"],
+  gemini: ["gemini"],
+  codex: ["codex"],
+  aider: ["aider"],
+  "copilot-cli": ["copilot"],
+  cline: ["cline"],
+  ollama: ["ollama"]
+};
+var isWin = () => process.platform === "win32";
+function pathExts() {
+  if (!isWin())
+    return [""];
+  return ["", ...(process.env.PATHEXT || ".EXE;.CMD;.BAT;.COM").split(";").map((e) => e.toLowerCase())];
+}
+function isFile(p) {
+  try {
+    return fs6.statSync(p).isFile();
+  } catch {
+    return false;
+  }
+}
+function extraSearchDirs(env2 = process.env) {
+  const home = env2.USERPROFILE || env2.HOME || os.homedir();
+  const dirs = [];
+  if (isWin()) {
+    const local = env2.LOCALAPPDATA || path9.join(home, "AppData", "Local");
+    const roaming = env2.APPDATA || path9.join(home, "AppData", "Roaming");
+    dirs.push(
+      path9.join(roaming, "npm"),
+      path9.join(local, "Programs", "Ollama"),
+      path9.join(local, "Programs", "Devin", "bin"),
+      path9.join(local, "Programs", "Devin Next", "bin"),
+      path9.join(local, "agy", "bin"),
+      path9.join(local, "Microsoft", "WindowsApps"),
+      path9.join(home, ".local", "bin"),
+      path9.join(home, ".claude", "local"),
+      path9.join(env2.ProgramFiles || "C:\\Program Files", "Ollama"),
+      path9.join(env2.ProgramFiles || "C:\\Program Files", "agy", "bin")
+    );
+    for (const root of [path9.join(local, "fnm_multishells"), env2.FNM_DIR ? path9.join(env2.FNM_DIR, "node-versions") : "", "C:\\fnm\\node-versions"]) {
+      if (!root || !fs6.existsSync(root))
+        continue;
+      try {
+        for (const v of fs6.readdirSync(root))
+          dirs.push(path9.join(root, v, "installation"), path9.join(root, v));
+      } catch {
+      }
+    }
+  } else {
+    dirs.push(
+      path9.join(home, ".local", "bin"),
+      path9.join(home, ".claude", "local"),
+      path9.join(home, ".agy", "bin"),
+      path9.join(home, ".npm-global", "bin"),
+      path9.join(home, ".cargo", "bin"),
+      "/usr/local/bin",
+      "/opt/homebrew/bin",
+      "/usr/bin"
+    );
+  }
+  return dirs;
+}
+function findExecutable(names, env2 = process.env, extraDirs = extraSearchDirs(env2)) {
+  const pathDirs = (env2.PATH || env2.Path || "").split(path9.delimiter).filter(Boolean);
+  const dirs = [...pathDirs, ...extraDirs];
+  const exts = pathExts();
+  for (const name of names) {
+    for (const dir of dirs) {
+      for (const ext of exts) {
+        const candidate = path9.join(dir, name + ext);
+        if (isFile(candidate))
+          return candidate;
+      }
+    }
+  }
+  return void 0;
+}
+function findForKind(kind, env2 = process.env, extraDirs) {
+  const names = EXECUTABLE_NAMES[kind];
+  if (!names)
+    return void 0;
+  if (kind === "antigravity") {
+    for (const key of ["AGY_PATH", "ANTIGRAVITY_PATH"]) {
+      const v = env2[key];
+      if (v && isFile(v))
+        return v;
+    }
+  }
+  return findExecutable(names, env2, extraDirs);
+}
+function parseOllamaList(text) {
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  if (lines.length && /^name\s+/i.test(lines[0]))
+    lines.shift();
+  return lines.map((l) => l.split(/\s+/)[0]).filter(Boolean);
+}
+function httpGetJson(url, timeoutMs) {
+  return new Promise((resolve7, reject) => {
+    const req = http.get(url, { timeout: timeoutMs }, (res) => {
+      let body = "";
+      res.setEncoding("utf8");
+      res.on("data", (d) => body += d);
+      res.on("end", () => {
+        try {
+          resolve7(JSON.parse(body));
+        } catch (e) {
+          reject(e);
+        }
+      });
+    });
+    req.on("timeout", () => req.destroy(new Error("timeout")));
+    req.on("error", reject);
+  });
+}
+async function detectOllamaModels(host = "127.0.0.1:11434", exePath) {
+  try {
+    const data = await httpGetJson(`http://${host}/api/tags`, 1500);
+    const names = (data?.models || []).map((m) => String(m.name || m.model || "")).filter(Boolean);
+    if (names.length)
+      return names;
+  } catch {
+  }
+  const exe = exePath || findExecutable(["ollama"]);
+  if (!exe)
+    return [];
+  return new Promise((resolve7) => {
+    (0, import_child_process.execFile)(exe, ["list"], { timeout: 4e3, windowsHide: true, shell: isWin() && /\.(cmd|bat)$/i.test(exe) }, (err, stdout) => {
+      resolve7(err ? [] : parseOllamaList(String(stdout)));
+    });
+  });
+}
+async function detectAll(env2 = process.env) {
+  const out = [];
+  for (const kind of Object.keys(EXECUTABLE_NAMES)) {
+    const p = findForKind(kind, env2);
+    if (!p)
+      continue;
+    const d = { kind, path: p };
+    if (kind === "ollama")
+      d.models = await detectOllamaModels(void 0, p);
+    out.push(d);
+  }
+  return out;
+}
+async function detectOne(kind, env2 = process.env) {
+  const p = findForKind(kind, env2);
+  const d = { kind, path: p };
+  if (kind === "ollama")
+    d.models = await detectOllamaModels(void 0, p);
+  return d;
+}
 
 // src/fleet/scheduler.ts
 var PRIORITY_RANK = {
@@ -2809,7 +3163,7 @@ function priorityRank(priority) {
   return m ? PRIORITY_RANK[m[1]] : 2;
 }
 function automatableWorkers(providers) {
-  return providers.filter((p) => p.enabled && p.type === "cli" && p.roles.includes("worker"));
+  return providers.filter((p) => p.enabled && p.type === "cli" && p.kind !== "ollama" && p.roles.includes("worker"));
 }
 function modelFor(provider, ticket) {
   const label = (ticket.labels || []).map((l) => l.replace(/[`\s]/g, "")).find((l) => /^model:/i.test(l));
@@ -2820,6 +3174,11 @@ function modelFor(provider, ticket) {
       return hit;
   }
   return provider.defaultModel;
+}
+function availableModel(provider, wanted, sessions, now) {
+  if (!wanted || !sessions.modelBlock(provider.id, wanted, now))
+    return wanted;
+  return provider.models.find((m) => !sessions.modelBlock(provider.id, m, now)) ?? wanted;
 }
 function matchProvider(providers, assignee) {
   if (!assignee)
@@ -2866,7 +3225,7 @@ function planWork(candidates, providers, sessions, opts = {}) {
       boardId: c.boardId,
       providerId: chosen.id,
       providerName: chosen.name,
-      model: modelFor(chosen, t),
+      model: availableModel(chosen, modelFor(chosen, t), sessions, now),
       startsNow,
       reason: startsNow ? reason : `${reason} \u2014 will queue (${sessions.canStart(chosen, now).reason || "at capacity"})`
     });
@@ -2879,6 +3238,162 @@ function pickReviewer(providers, sessions, authorProviderId, now = Date.now()) {
   return scored[0]?.p;
 }
 
+// src/fleet/limits.ts
+var ANSI = /\u001b\[[0-9;?]*[ -/]*[@-~]|\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)|\u001b[()][A-Za-z0-9]|\u001b[=>]/g;
+function stripAnsi(text) {
+  return text.replace(ANSI, "").replace(/\r(?!\n)/g, "\n");
+}
+var LIMIT_RE = new RegExp(
+  [
+    "usage limit",
+    "rate[- ]limit",
+    "quota (?:exceeded|exhausted|reached)",
+    "limit (?:reached|exceeded)",
+    "hit your (?:usage |weekly |daily |5-hour |session )?limit",
+    "out of (?:credits|usage|quota)",
+    "too many requests",
+    "(?:http|status|error|code)\\D{0,12}429",
+    "resource[_ ]exhausted",
+    "insufficient[_ ]quota"
+  ].join("|"),
+  "i"
+);
+function nextClockTime(hour, minute, meridiem, now) {
+  let h = hour;
+  if (meridiem) {
+    const pm = /p/i.test(meridiem);
+    h = h % 12 + (pm ? 12 : 0);
+  }
+  const d = new Date(now);
+  d.setHours(h, minute, 0, 0);
+  if (d.getTime() <= now)
+    d.setDate(d.getDate() + 1);
+  return d.getTime();
+}
+function parseReset(window6, now) {
+  const epoch = window6.match(/limit reached\|(\d{10})/i);
+  if (epoch)
+    return Number(epoch[1]) * 1e3;
+  const phrase = /\b(?:in|after|retry[- ]after:?)\s+(\d[^.\n]{0,40})/gi;
+  let pm;
+  while ((pm = phrase.exec(window6)) !== null) {
+    const p = pm[1];
+    const h = p.match(/(\d+(?:\.\d+)?)\s*(?:h|hrs?|hours?)\b/i);
+    const mi = p.match(/(\d+)\s*(?:m|mins?|minutes?)\b/i);
+    const se = p.match(/(\d+)\s*(?:s|secs?|seconds?)\b/i);
+    const ms = ((h ? Number(h[1]) * 3600 : 0) + (mi ? Number(mi[1]) * 60 : 0) + (se ? Number(se[1]) : 0)) * 1e3;
+    if (ms > 0)
+      return now + ms;
+  }
+  const clock = window6.match(/resets?(?:\s+at)?\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i);
+  if (clock && (clock[3] || clock[2] || Number(clock[1]) > 12)) {
+    return nextClockTime(Number(clock[1]), Number(clock[2] || 0), clock[3], now);
+  }
+  return void 0;
+}
+function detectLimit(text, models = [], now = Date.now()) {
+  const clean = stripAnsi(text);
+  const m = LIMIT_RE.exec(clean);
+  if (!m)
+    return null;
+  const start = Math.max(0, m.index - 120);
+  const around = clean.slice(start, m.index + 260);
+  const lower = around.toLowerCase();
+  const model = [...models].sort((a, b) => b.length - a.length).find((x) => x && lower.includes(x.toLowerCase()));
+  return {
+    resetAt: parseReset(clean.slice(m.index, m.index + 260), now),
+    model,
+    excerpt: clean.slice(Math.max(0, m.index - 20), m.index + 140).replace(/\s+/g, " ").trim()
+  };
+}
+var ATTENTION_RE = [
+  /\(y\/n\)|\[y\/n\]|\[yes\/no\]/i,
+  /do you want to (?:proceed|continue|allow|make this edit|run)/i,
+  /press (?:enter|any key)/i,
+  /waiting for (?:your )?(?:input|approval|confirmation|response)/i,
+  /(?:permission|approval) (?:required|needed)/i,
+  /(?:please )?(?:log ?in|sign ?in|authenticate)\b.*(?:required|first|to continue)/i,
+  /enter (?:a |your )?(?:password|passphrase|token|api key|code)/i,
+  /(?:choose|select) an option/i
+];
+function detectAttention(text) {
+  const lines = stripAnsi(text).split("\n").map((l) => l.trim()).filter(Boolean).slice(-12);
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (ATTENTION_RE.some((re) => re.test(lines[i])))
+      return lines[i].slice(0, 140);
+  }
+  return void 0;
+}
+function parseTierOverrides(text) {
+  const out = {};
+  for (const part of (text || "").split(/[,\n]/)) {
+    const m = part.trim().match(/^(.+?)\s*[=:]\s*([1-5])$/);
+    if (m)
+      out[m[1].trim().toLowerCase()] = Number(m[2]);
+  }
+  return out;
+}
+function modelTier(provider, model) {
+  const name = (model || provider.defaultModel || "").toLowerCase();
+  const over = parseTierOverrides(provider.modelTiers);
+  if (over[name] !== void 0)
+    return over[name];
+  const size = name.match(/(\d+(?:\.\d+)?)b\b/);
+  if (size) {
+    const b = Number(size[1]);
+    return b <= 4 ? 1 : b <= 9 ? 2 : b <= 40 ? 3 : b < 100 ? 4 : 5;
+  }
+  if (/haiku|flash|(?:^|[-_ :])mini|nano|lite|small|instant/.test(name))
+    return 2;
+  if (/fable|opus|gpt-?5|o3|o1|ultra|gemini.*pro|deepseek-r1/.test(name))
+    return 5;
+  if (/sonnet|gpt-?4|codex|codestral|devstral|coder/.test(name))
+    return 4;
+  return 3;
+}
+function requiredTier(ticket) {
+  let req = 2;
+  const rank = priorityRank(ticket.priority);
+  if (rank === 0)
+    req = 4;
+  else if (rank === 1)
+    req = 3;
+  if (/architect|security|migration|refactor/i.test(ticket.type || ""))
+    req = Math.max(req, 4);
+  if (/^(l|xl|large)\b/i.test(ticket.estimate || ""))
+    req += 1;
+  if ((ticket.labels || []).some((l) => /complex|hard/i.test(l)))
+    req = Math.max(req, 4);
+  return Math.min(5, req);
+}
+function pickFallback(providers, sessions, from, ticket, now = Date.now()) {
+  const origin = providers.find((p) => p.id === from.providerId);
+  const originTier = origin ? modelTier(origin, from.model) : 5;
+  const needed = Math.min(requiredTier(ticket), originTier);
+  const role = from.role === "orchestrator" ? "worker" : from.role;
+  const options = [];
+  for (const p of providers) {
+    if (!p.enabled || p.type !== "cli" || p.kind === "ollama" || !p.roles.includes(role))
+      continue;
+    if (sessions.headroom(p, now) <= 0 && p.id !== from.providerId)
+      continue;
+    const models = p.models.length ? p.models : [p.defaultModel];
+    for (const model of models) {
+      if (p.id === from.providerId && model === from.model)
+        continue;
+      if (sessions.modelBlock(p.id, model, now))
+        continue;
+      const tier = modelTier(p, model);
+      if (tier < needed)
+        continue;
+      options.push({ provider: p, model, tier, sameProvider: p.id === from.providerId, pct: sessions.usage(p, now).pct ?? 0 });
+    }
+  }
+  options.sort((a, b) => a.tier - b.tier || Number(b.sameProvider) - Number(a.sameProvider) || a.pct - b.pct);
+  const best = options[0];
+  return best ? { provider: best.provider, model: best.model, tier: best.tier, sameProvider: best.sameProvider } : null;
+}
+
 // src/fleet/fleetController.ts
 var DEFAULT_SETTINGS = {
   autopilot: false,
@@ -2886,19 +3401,38 @@ var DEFAULT_SETTINGS = {
   orchestratorProviderId: "",
   orchestratorModel: "",
   intervalSeconds: 30,
-  maxNewPerTick: 3
+  maxNewPerTick: 3,
+  autoResume: false,
+  maxAutoRetries: 2,
+  autoFailover: true,
+  backgroundTerminals: true,
+  idleMinutes: 10
 };
+var RESUME_TASK = "You were interrupted while working on ticket {ticket_path}: {ticket_title} (network error, crash, or the editor/PC closed). Check the ticket Work Log and the git status/diff to see what is already done, then continue from where you stopped. Do not redo finished work. If everything is already complete, verify it and say so in the Work Log.";
 var REVIEW_TASK = "Code-review the work done for ticket {ticket_path}: {ticket_title}. Check every acceptance criterion, run the tests, and record findings under the ticket Work Log. Do not start new features. If the work passes, say so in the Work Log.";
 var TerminalLauncher = class {
   terminals = /* @__PURE__ */ new Map();
   manager;
+  /** Set while the editor is closing so vanishing terminals are not mistaken for user action. */
+  shuttingDown = false;
+  onLimit;
+  onAttention;
+  modelsFor;
+  lastOutput = /* @__PURE__ */ new Map();
+  lastOutputAt(id) {
+    return this.lastOutput.get(id);
+  }
+  hasTerminal(id) {
+    return this.terminals.has(id);
+  }
   constructor(disposables) {
     disposables.push(
       vscode4.window.onDidCloseTerminal((t) => {
         for (const [id, term] of this.terminals) {
           if (term === t) {
             this.terminals.delete(id);
-            this.manager.ended(id, t.exitStatus?.code, "Terminal closed");
+            if (!this.shuttingDown)
+              this.manager.ended(id, t.exitStatus?.code, "Terminal closed", true);
           }
         }
       })
@@ -2922,32 +3456,62 @@ var TerminalLauncher = class {
       setTimeout(() => this.manager.ended(session.id, 0, "Handed to IDE chat"), 0);
       return true;
     }
-    const base = `Agent: ${session.providerName} \xB7 ${session.ticketId || path9.basename(session.ticketPath)}`;
+    const base = `Agent: ${session.providerName} \xB7 ${session.ticketId || path10.basename(session.ticketPath)}`;
     let name = base;
     let n = 2;
     while (vscode4.window.terminals.some((t) => t.name === name))
       name = `${base} #${n++}`;
-    const terminal = vscode4.window.createTerminal({ name, cwd: payload.cwd });
+    const hidden = !!session.hidden;
+    const terminal = vscode4.window.createTerminal({ name, cwd: payload.cwd, hideFromUser: hidden });
     this.terminals.set(session.id, terminal);
-    terminal.show(true);
+    if (!hidden)
+      terminal.show(true);
     const deadline = Date.now() + 3e3;
     while (!terminal.shellIntegration && Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, 100));
     }
     const si = terminal.shellIntegration;
     if (si && typeof si.executeCommand === "function") {
-      si.executeCommand(payload.command);
+      const exec = si.executeCommand(payload.command);
+      void this.watch(session, exec);
     } else {
       terminal.sendText(payload.command);
     }
     return true;
+  }
+  /** Reads the agent's output (shell integration) to spot usage limits and prompts that need a human. */
+  async watch(session, exec) {
+    if (!exec || typeof exec.read !== "function")
+      return;
+    let buf = "";
+    let limitFired = false;
+    try {
+      for await (const chunk of exec.read()) {
+        this.lastOutput.set(session.id, Date.now());
+        buf = (buf + chunk).slice(-8e3);
+        if (!limitFired) {
+          const models = this.modelsFor?.(session.providerId) || [];
+          const info = detectLimit(buf.slice(-2500), models.length ? models : [session.model]);
+          if (info) {
+            limitFired = true;
+            this.onLimit?.(session, info);
+          }
+        }
+        const attention = detectAttention(buf.slice(-800));
+        if (attention)
+          this.onAttention?.(session, attention);
+        else if (chunk.length > 40)
+          this.onAttention?.(session, void 0);
+      }
+    } catch {
+    }
   }
   show(session) {
     const t = this.terminals.get(session.id);
     if (t)
       t.show(false);
     else
-      vscode4.window.showInformationMessage(`No live terminal for this session (${session.status}).`);
+      vscode4.window.showInformationMessage(`No live terminal for this session (${session.status}). Use Resume to continue it in a new terminal.`);
   }
   kill(session) {
     const t = this.terminals.get(session.id);
@@ -2966,6 +3530,11 @@ var FleetController = class _FleetController {
   briefPath;
   timer;
   reviewed = /* @__PURE__ */ new Set();
+  autoHandled = /* @__PURE__ */ new Set();
+  limitResolved = /* @__PURE__ */ new Set();
+  attentionNotified = /* @__PURE__ */ new Map();
+  resumeTimers = [];
+  launcher;
   changeEmitter = new vscode4.EventEmitter();
   onDidChange = this.changeEmitter.event;
   static get() {
@@ -2979,38 +3548,54 @@ var FleetController = class _FleetController {
   }
   constructor(context) {
     const root = vscode4.workspace.workspaceFolders?.[0]?.uri.fsPath || context.globalStorageUri.fsPath;
-    const dir = path9.join(root, ".agentic-kanban");
-    this.settingsPath = path9.join(dir, "fleet.json");
-    this.briefPath = path9.join(dir, "runtime", "orchestrator-brief.md");
+    const dir = path10.join(root, ".agentic-kanban");
+    this.settingsPath = path10.join(dir, "fleet.json");
+    this.briefPath = path10.join(dir, "runtime", "orchestrator-brief.md");
     this.registry = new ProviderRegistry(root);
     this.settings = this.loadSettings();
     const launcher = new TerminalLauncher(context.subscriptions);
     this.sessions = new SessionManager(
       (id) => this.registry.list().find((p) => p.id === id),
       launcher,
-      new JsonFleetStore(path9.join(dir, "runtime", "fleet-usage.json"))
+      new JsonFleetStore(path10.join(dir, "runtime", "fleet-usage.json"))
     );
     launcher.manager = this.sessions;
+    this.launcher = launcher;
+    launcher.modelsFor = (id) => this.registry.get(id)?.models || [];
+    launcher.onLimit = (s, info) => {
+      void this.handleLimit(s.id, info);
+    };
+    launcher.onAttention = (s, text) => this.handleAttention(s.id, text);
     AgentRunner.launcher = async (req) => {
       const provider = this.registry.get(req.assignee.id);
       if (!provider)
         return AgentRunner.launchDefault(req);
       const board = BoardManager.getInstance().findBoardForTicketPath(req.ticket.path);
-      await this.startSession(provider, req.model || provider.defaultModel, "worker", req.ticket, board?.id || "", req);
+      await this.startSession(provider, req.model || provider.defaultModel, "worker", req.ticket, board?.id || "");
       return true;
     };
     this.sessions.onChange(() => {
       this.maybeAutoReview();
+      this.scheduleAutoResumes();
       this.changeEmitter.fire();
     });
     this.registry.onChange(() => this.changeEmitter.fire());
     this.restartTimer();
-    context.subscriptions.push({ dispose: () => this.timer && clearInterval(this.timer) });
+    context.subscriptions.push({
+      dispose: () => {
+        if (this.timer)
+          clearInterval(this.timer);
+        this.resumeTimers.forEach(clearTimeout);
+        launcher.shuttingDown = true;
+        this.sessions.shutdown();
+      }
+    });
+    setTimeout(() => this.recoverOnStartup(), 3e3);
   }
   // ---------------------------------------------------------------- settings
   loadSettings() {
     try {
-      return { ...DEFAULT_SETTINGS, ...JSON.parse(fs6.readFileSync(this.settingsPath, "utf8")) };
+      return { ...DEFAULT_SETTINGS, ...JSON.parse(fs7.readFileSync(this.settingsPath, "utf8")) };
     } catch {
       return { ...DEFAULT_SETTINGS };
     }
@@ -3021,8 +3606,8 @@ var FleetController = class _FleetController {
     next.maxNewPerTick = Math.min(20, Math.max(1, Math.round(Number(next.maxNewPerTick)) || 3));
     this.settings = next;
     try {
-      fs6.mkdirSync(path9.dirname(this.settingsPath), { recursive: true });
-      fs6.writeFileSync(this.settingsPath, JSON.stringify(next, null, 2), "utf8");
+      fs7.mkdirSync(path10.dirname(this.settingsPath), { recursive: true });
+      fs7.writeFileSync(this.settingsPath, JSON.stringify(next, null, 2), "utf8");
     } catch (e) {
       console.warn("[Agentic Kanban] Could not save fleet settings:", e);
     }
@@ -3043,22 +3628,68 @@ var FleetController = class _FleetController {
       this.registry.seedFromAssignees(b.config.assignees);
     }
   }
+  // ---------------------------------------------------------------- auto-detection
+  /** Finds installed agent CLIs and Ollama models; adds missing providers and fills empty paths. */
+  async autoDetect(addMissing = true) {
+    const found = await detectAll();
+    const before = this.registry.list();
+    const added = addMissing ? this.registry.addDetected(found) : [];
+    let updated = 0;
+    for (const p of before) {
+      const d = found.find((x) => x.kind === p.kind);
+      if (!d)
+        continue;
+      const needsPath = !!d.path && !p.path;
+      const needsModels = !!d.models?.length && JSON.stringify(d.models) !== JSON.stringify(p.models);
+      if (needsPath || needsModels) {
+        this.registry.applyDetection(p.id, d);
+        updated++;
+      }
+    }
+    const names = found.map((d) => d.kind).join(", ") || "nothing";
+    return {
+      added: added.length,
+      updated,
+      summary: `Auto-detect found: ${names}. Added ${added.length} provider(s), updated ${updated}.`
+    };
+  }
+  async detectFor(id) {
+    const p = this.registry.get(id);
+    if (!p)
+      return "Provider not found.";
+    const d = await detectOne(p.kind);
+    if (!d.path && !d.models?.length)
+      return `Could not find ${p.name} on this machine (looked on PATH and common install folders).`;
+    this.registry.applyDetection(p.id, d);
+    return `${p.name}: ${d.path ? `found at ${d.path}` : "no executable found"}${d.models?.length ? `, ${d.models.length} model(s) detected` : ""}.`;
+  }
   // ---------------------------------------------------------------- starting sessions
-  async startSession(provider, model, role, ticket, boardId, prebuilt, task, queueIfBusy = true) {
+  async startSession(provider, model, role, ticket, boardId, prebuilt, task, queueIfBusy = true, extra = {}) {
+    const agentSessionId = extra.agentSessionId || (0, import_crypto.randomUUID)();
+    if (model && this.sessions.modelBlock(provider.id, model)) {
+      const alt = provider.models.find((m) => !this.sessions.modelBlock(provider.id, m));
+      if (!alt) {
+        vscode4.window.showWarningMessage(`${provider.name} \xB7 ${model} is at its usage limit and no other model of this provider is available right now.`);
+        return void 0;
+      }
+      vscode4.window.showInformationMessage(`${model} is at its usage limit; using ${alt} instead.`);
+      model = alt;
+    }
     const board = boardId && BoardManager.getInstance().getBoard(boardId) || BoardManager.getInstance().findBoardForTicketPath(ticket.path);
-    const boardRoot = board?.rootPath || path9.dirname(ticket.path);
+    const boardRoot = board?.rootPath || path10.dirname(ticket.path);
     let payload = prebuilt;
-    if (!payload || task) {
+    if (!payload || task || extra.assignee) {
       if (role !== "worker" && !provider.command.includes("{task}")) {
         vscode4.window.showWarningMessage(
           `${provider.name} uses a custom command without {task}, so it cannot act as ${role}. Add {task} to its command in Agent Providers.`
         );
         return void 0;
       }
-      payload = await AgentRunner.prepareLaunch(ticket, providerToAssignee(provider), boardRoot, board?.config, {
+      payload = await AgentRunner.prepareLaunch(ticket, extra.assignee || providerToAssignee(provider), boardRoot, board?.config, {
         model,
         modelFlag: provider.modelFlag,
-        task
+        task,
+        sessionId: agentSessionId
       }) || void 0;
     }
     if (!payload)
@@ -3072,7 +3703,11 @@ var FleetController = class _FleetController {
       ticketTitle: ticket.title,
       boardId: board?.id || boardId,
       payload,
-      queueIfBusy
+      queueIfBusy,
+      agentSessionId,
+      attempt: extra.attempt,
+      resumedFrom: extra.resumedFrom,
+      hidden: extra.hidden
     });
     if (session.status === "queued") {
       vscode4.window.showInformationMessage(`${provider.name} is at capacity \u2014 "${ticket.title}" queued. ${session.note || ""}`.trim());
@@ -3120,10 +3755,10 @@ var FleetController = class _FleetController {
     return this.registry.list().map((p) => this.sessions.usage(p));
   }
   findTicket(ticketPath) {
-    const key = path9.resolve(ticketPath).toLowerCase();
+    const key = path10.resolve(ticketPath).toLowerCase();
     for (const board of BoardManager.getInstance().getAllBoards()) {
       for (const col of board.columns) {
-        const t = col.tickets.find((x) => path9.resolve(x.path).toLowerCase() === key);
+        const t = col.tickets.find((x) => path10.resolve(x.path).toLowerCase() === key);
         if (t)
           return { ticket: t, board };
       }
@@ -3142,10 +3777,10 @@ var FleetController = class _FleetController {
     if (decision.startsNow) {
       const ongoing = found.board.columns.find((c) => /ongoing|in progress/i.test(c.name));
       if (ongoing && await bm.moveTicket(found.board.id, found.ticket.path, ongoing.name, null)) {
-        ticket = this.findTicket(path9.join(found.board.rootPath, ongoing.name, path9.basename(found.ticket.path)))?.ticket || ticket;
+        ticket = this.findTicket(path10.join(found.board.rootPath, ongoing.name, path10.basename(found.ticket.path)))?.ticket || ticket;
       }
     }
-    return !!await this.startSession(provider, decision.model, "worker", ticket, found.board.id);
+    return !!await this.startSession(provider, decision.model, "worker", ticket, found.board.id, void 0, void 0, true, { hidden: this.settings.backgroundTerminals });
   }
   async runPlan() {
     let started = 0;
@@ -3158,13 +3793,231 @@ var FleetController = class _FleetController {
   async tick() {
     await this.sessions.tick();
     this.sessions.prune();
+    this.checkIdle();
     if (this.settings.autopilot) {
       await this.runPlan();
     }
     this.changeEmitter.fire();
   }
+  // ---------------------------------------------------------------- usage limits & needing a human
+  /**
+   * A model hit its usage limit. Find another model that is free, has capacity and is capable enough for this
+   * ticket and carry on there; otherwise wait for the reset (if the message gave one) or tell the user.
+   */
+  async handleLimit(sessionId, info) {
+    const s = this.sessions.get(sessionId);
+    if (!s || s.status !== "running")
+      return;
+    const model = info.model || s.model;
+    const label = `${s.providerName}${model ? " \xB7 " + model : ""}`;
+    const found = this.findTicket(s.ticketPath) || this.findTicketById(s.ticketId);
+    this.sessions.limitHit(sessionId, info);
+    const cur = this.sessions.get(sessionId);
+    const resetText = info.resetAt ? ` Usage resets around ${new Date(info.resetAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}.` : "";
+    if (this.settings.autoFailover && found && s.role !== "orchestrator") {
+      const fb = pickFallback(this.registry.list(), this.sessions, { providerId: s.providerId, model, role: s.role }, found.ticket);
+      if (fb) {
+        this.limitResolved.add(sessionId);
+        vscode4.window.showInformationMessage(
+          `${label} hit its usage limit. Continuing "${s.ticketTitle}" on ${fb.provider.name} \xB7 ${fb.model || "default"} (capable enough: tier ${fb.tier}).`
+        );
+        this.launcher.kill(cur);
+        await this.resumeSession(sessionId, "resume", { provider: fb.provider, model: fb.model, background: s.hidden });
+        return;
+      }
+    }
+    this.limitResolved.add(sessionId);
+    if (this.settings.autoFailover && info.resetAt) {
+      this.sessions.setAttention(sessionId, void 0);
+      vscode4.window.showInformationMessage(
+        `${label} hit its usage limit and no other model is capable enough right now.${resetText} The orchestrator will continue "${s.ticketTitle}" after the reset.`
+      );
+      this.scheduleAutoResumes();
+      return;
+    }
+    this.escalate(sessionId, `${label} hit its usage limit on "${s.ticketTitle}". ` + (this.settings.autoFailover ? "No other model is capable enough and no reset time was reported." : "Auto-failover is off.") + " Resume it when usage is available, or switch it to another agent.");
+  }
+  /** The orchestrator cannot fix this: flag the session and tell the user how to get into it. */
+  escalate(sessionId, message) {
+    this.sessions.setAttention(sessionId, message);
+    const buttons = this.launcher.hasTerminal(sessionId) ? ["Open terminal", "Open Orchestrator"] : ["Open Orchestrator"];
+    void vscode4.window.showWarningMessage(message, ...buttons).then((pick) => {
+      if (pick === "Open terminal")
+        this.sessions.show(sessionId);
+      else if (pick === "Open Orchestrator")
+        void vscode4.commands.executeCommand("agenticKanban.openOrchestrator");
+    });
+  }
+  handleAttention(sessionId, text) {
+    const s = this.sessions.get(sessionId);
+    if (!s || s.status !== "running")
+      return;
+    this.sessions.setAttention(sessionId, text);
+    if (!text)
+      return;
+    const last = this.attentionNotified.get(sessionId) || 0;
+    if (Date.now() - last < 5 * 6e4)
+      return;
+    this.attentionNotified.set(sessionId, Date.now());
+    void vscode4.window.showWarningMessage(`${s.providerName} needs you on "${s.ticketTitle}": ${text}`, "Open terminal").then((pick) => {
+      if (pick === "Open terminal")
+        this.sessions.show(sessionId);
+    });
+  }
+  checkIdle() {
+    const limitMs = this.settings.idleMinutes * 6e4;
+    if (limitMs <= 0)
+      return;
+    for (const s of this.sessions.list().filter((x) => x.status === "running")) {
+      const last = this.launcher.lastOutputAt(s.id);
+      if (last && Date.now() - last > limitMs && !s.attention) {
+        this.handleAttention(s.id, `No output for ${this.settings.idleMinutes} min \u2014 it may be waiting for you or stuck.`);
+      }
+    }
+  }
+  // ---------------------------------------------------------------- recovery
+  findTicketById(ticketId) {
+    if (!ticketId)
+      return void 0;
+    for (const board of BoardManager.getInstance().getAllBoards()) {
+      for (const col of board.columns) {
+        const t = col.tickets.find((x) => x.id === ticketId);
+        if (t)
+          return { ticket: t, board };
+      }
+    }
+    return void 0;
+  }
+  /**
+   * Continues interrupted/failed work. "resume" keeps the agent's conversation when the provider has a
+   * resumeCommand ({session_id}); otherwise (or for "restart") the agent is re-run and told to check the
+   * ticket Work Log and git state first, so progress on disk is never thrown away.
+   */
+  async resumeSession(id, mode = "resume", opts = {}) {
+    const s = this.sessions.get(id);
+    if (!s || s.resumedBy)
+      return false;
+    const provider = opts.provider || this.registry.get(s.providerId);
+    if (!provider) {
+      vscode4.window.showWarningMessage("That provider no longer exists. Re-create it in Agent Providers to resume.");
+      return false;
+    }
+    if (s.role === "orchestrator") {
+      this.sessions.dismiss(id);
+      return this.askOrchestrator();
+    }
+    const found = this.findTicket(s.ticketPath) || this.findTicketById(s.ticketId);
+    if (!found) {
+      vscode4.window.showWarningMessage(`Ticket "${s.ticketTitle}" was not found on any board (moved or deleted?), so it cannot be resumed.`);
+      return false;
+    }
+    if (s.status === "running") {
+      this.sessions.interrupt(id, "user-closed", "Interrupted by you to resume");
+      this.launcher.kill(s);
+    }
+    const handoff = !!opts.provider && opts.provider.id !== s.providerId;
+    const effective = mode === "resume" && s.startedAt && !handoff ? "resume" : "restart";
+    const agentSessionId = effective === "resume" && s.agentSessionId ? s.agentSessionId : (0, import_crypto.randomUUID)();
+    const base = providerToAssignee(provider);
+    let assignee = base;
+    let task;
+    if (effective === "resume") {
+      task = RESUME_TASK;
+      if (provider.resumeCommand) {
+        assignee = { ...base, agentConfig: { ...base.agentConfig, command: provider.resumeCommand } };
+      }
+    } else if (handoff && s.startedAt) {
+      task = RESUME_TASK;
+    } else if (s.role === "reviewer") {
+      task = REVIEW_TASK;
+    }
+    const next = await this.startSession(provider, opts.model || (handoff ? provider.defaultModel : s.model) || provider.defaultModel, s.role, found.ticket, found.board.id, void 0, task, true, {
+      agentSessionId,
+      attempt: (s.attempt || 1) + 1,
+      resumedFrom: s.id,
+      assignee,
+      hidden: opts.background ?? s.hidden
+    });
+    if (next)
+      this.sessions.markResumed(s.id, next.id);
+    return !!next;
+  }
+  async resumeAll() {
+    let n = 0;
+    for (const s of this.sessions.resumable()) {
+      if (await this.resumeSession(s.id))
+        n++;
+    }
+    return n;
+  }
+  /** Is it safe to resume this one without asking? (crash/PC/editor close, or an error exit — never a user closing the terminal.) */
+  autoResumable(s) {
+    if (!this.settings.autoResume || s.resumedBy || this.autoHandled.has(s.id))
+      return false;
+    if ((s.attempt || 1) > this.settings.maxAutoRetries)
+      return false;
+    const crashed = s.status === "interrupted" && (s.interruptKind === "host-closed" || s.interruptKind === "queued-lost");
+    const errored = s.status === "failed" && s.exitCode !== void 0;
+    if (!crashed && !errored)
+      return false;
+    const found = this.findTicket(s.ticketPath) || this.findTicketById(s.ticketId);
+    return !!found && !/completed|done/i.test(found.ticket.column);
+  }
+  /** Auto-resume with a growing delay so a flaky network is not hammered (and rate limits are respected). */
+  scheduleAutoResumes() {
+    for (const s of this.sessions.resumable()) {
+      if (s.interruptKind === "usage-limit") {
+        if (this.settings.autoFailover && s.resumeAfter && this.limitResolved.has(s.id) && !this.autoHandled.has(s.id)) {
+          this.autoHandled.add(s.id);
+          const wait = Math.max(0, s.resumeAfter + 3e4 - Date.now());
+          this.resumeTimers.push(setTimeout(() => {
+            const cur = this.sessions.get(s.id);
+            if (cur && !cur.resumedBy)
+              void this.resumeSession(s.id, "resume", { background: this.settings.backgroundTerminals });
+          }, wait));
+        }
+        continue;
+      }
+      if (!this.autoResumable(s))
+        continue;
+      this.autoHandled.add(s.id);
+      const delayMs = s.status === "interrupted" ? 2e3 : Math.min(10, 2 * (s.attempt || 1)) * 6e4;
+      const t = setTimeout(() => {
+        const cur = this.sessions.get(s.id);
+        if (cur && !cur.resumedBy)
+          void this.resumeSession(s.id, "resume", { background: this.settings.backgroundTerminals });
+      }, delayMs);
+      this.resumeTimers.push(t);
+    }
+  }
+  /** On editor start: tell the user what was interrupted (and resume it if auto-resume is on). */
+  recoverOnStartup() {
+    for (const s of this.sessions.resumable()) {
+      if (s.interruptKind === "usage-limit")
+        this.limitResolved.add(s.id);
+    }
+    this.scheduleAutoResumes();
+    const pending = this.sessions.resumable().filter((s) => s.status === "interrupted" && s.interruptKind !== "usage-limit");
+    if (!pending.length)
+      return;
+    if (this.settings.autoResume) {
+      this.scheduleAutoResumes();
+      vscode4.window.showInformationMessage(`Resuming ${pending.length} agent session(s) interrupted by the last shutdown.`);
+      return;
+    }
+    void vscode4.window.showWarningMessage(
+      `${pending.length} agent session(s) were interrupted when the editor or PC closed.`,
+      "Resume all",
+      "Open Orchestrator"
+    ).then((pick) => {
+      if (pick === "Resume all")
+        void this.resumeAll();
+      else if (pick === "Open Orchestrator")
+        void vscode4.commands.executeCommand("agenticKanban.openOrchestrator");
+    });
+  }
   // ---------------------------------------------------------------- reviews & orchestrator agent
-  async requestReview(sessionId) {
+  async requestReview(sessionId, background = false) {
     const s = this.sessions.get(sessionId);
     if (!s)
       return false;
@@ -3178,7 +4031,7 @@ var FleetController = class _FleetController {
       vscode4.window.showWarningMessage('No reviewer-capable provider is available. Enable the "reviewer" role on a provider with a {task} command.');
       return false;
     }
-    return !!await this.startSession(reviewer, reviewer.defaultModel, "reviewer", found.ticket, found.board.id, void 0, REVIEW_TASK);
+    return !!await this.startSession(reviewer, reviewer.defaultModel, "reviewer", found.ticket, found.board.id, void 0, REVIEW_TASK, true, { hidden: background });
   }
   maybeAutoReview() {
     if (!this.settings.autoReview)
@@ -3186,7 +4039,7 @@ var FleetController = class _FleetController {
     for (const s of this.sessions.list()) {
       if (s.role === "worker" && s.status === "finished" && !this.reviewed.has(s.id)) {
         this.reviewed.add(s.id);
-        void this.requestReview(s.id);
+        void this.requestReview(s.id, this.settings.backgroundTerminals);
       }
     }
   }
@@ -3230,15 +4083,15 @@ var FleetController = class _FleetController {
     if (!cands.length)
       lines.push("(none)");
     for (const c of cands) {
-      lines.push(`- ${c.ticket.id || path9.basename(c.ticket.path)} \u2014 ${c.ticket.title} [${c.ticket.priority}] (${c.ticket.path}) assignee: ${c.ticket.assignee || "unassigned"}`);
+      lines.push(`- ${c.ticket.id || path10.basename(c.ticket.path)} \u2014 ${c.ticket.title} [${c.ticket.priority}] (${c.ticket.path}) assignee: ${c.ticket.assignee || "unassigned"}`);
     }
-    fs6.mkdirSync(path9.dirname(this.briefPath), { recursive: true });
-    fs6.writeFileSync(this.briefPath, lines.join("\n"), "utf8");
+    fs7.mkdirSync(path10.dirname(this.briefPath), { recursive: true });
+    fs7.writeFileSync(this.briefPath, lines.join("\n"), "utf8");
     const planTicket = {
       id: "ORCHESTRATE",
-      filename: path9.basename(this.briefPath),
+      filename: path10.basename(this.briefPath),
       path: this.briefPath,
-      relativePath: path9.relative(board.rootPath, this.briefPath),
+      relativePath: path10.relative(board.rootPath, this.briefPath),
       column: "Backlog",
       subfolder: null,
       title: "Orchestration planning",
@@ -3395,8 +4248,8 @@ var KanbanWebviewManager = class _KanbanWebviewManager {
         try {
           const board = boardManager.getBoard(message.boardId);
           if (board) {
-            const configPath = path10.join(board.rootPath, "config.md");
-            if (fs7.existsSync(configPath)) {
+            const configPath = path11.join(board.rootPath, "config.md");
+            if (fs8.existsSync(configPath)) {
               const doc = await vscode5.workspace.openTextDocument(vscode5.Uri.file(configPath));
               await vscode5.window.showTextDocument(doc, { viewColumn: vscode5.ViewColumn.Beside });
             } else {
@@ -3474,7 +4327,7 @@ Instructions:
           const allBoards = boardManager.getAllBoards();
           if (t && t.path) {
             const foundBoard = allBoards.find(
-              (b) => path10.resolve(t.path).toLowerCase().startsWith(path10.resolve(b.rootPath).toLowerCase())
+              (b) => path11.resolve(t.path).toLowerCase().startsWith(path11.resolve(b.rootPath).toLowerCase())
             );
             if (foundBoard)
               targetBoard2 = foundBoard;
@@ -3506,7 +4359,7 @@ Instructions:
           const allBoards = boardManager.getAllBoards();
           if (message.ticketPath) {
             const foundBoard = allBoards.find(
-              (b) => path10.resolve(message.ticketPath).toLowerCase().startsWith(path10.resolve(b.rootPath).toLowerCase())
+              (b) => path11.resolve(message.ticketPath).toLowerCase().startsWith(path11.resolve(b.rootPath).toLowerCase())
             );
             if (foundBoard)
               targetBoard2 = foundBoard;
@@ -3538,7 +4391,7 @@ Instructions:
               let ticketObj = null;
               for (const col of reloadedBoard.columns) {
                 const found = col.tickets.find(
-                  (t) => path10.resolve(t.path).toLowerCase() === path10.resolve(message.ticketPath).toLowerCase() || message.ticketId && t.id === message.ticketId || t.filename.toLowerCase() === path10.basename(message.ticketPath).toLowerCase()
+                  (t) => path11.resolve(t.path).toLowerCase() === path11.resolve(message.ticketPath).toLowerCase() || message.ticketId && t.id === message.ticketId || t.filename.toLowerCase() === path11.basename(message.ticketPath).toLowerCase()
                 );
                 if (found) {
                   ticketObj = found;
@@ -3547,7 +4400,7 @@ Instructions:
               }
               if (!ticketObj) {
                 const sourcePath = boardManager.resolveTicketPathOnDisk(targetBoard2, message.ticketPath) || message.ticketPath;
-                const fileContent = await fs7.promises.readFile(sourcePath, "utf8");
+                const fileContent = await fs8.promises.readFile(sourcePath, "utf8");
                 ticketObj = TicketParser.parse(sourcePath, fileContent, targetBoard2.rootPath, "", null);
                 if (ticketObj) {
                   ticketObj.assignee = targetName;
@@ -3655,7 +4508,7 @@ Instructions:
   }
   getHtmlForWebview(webview) {
     let webviewDir = vscode5.Uri.joinPath(this.extensionUri, "dist", "webview");
-    if (!fs7.existsSync(webviewDir.fsPath)) {
+    if (!fs8.existsSync(webviewDir.fsPath)) {
       webviewDir = vscode5.Uri.joinPath(this.extensionUri, "src", "webview");
     }
     const v = Date.now();
@@ -3974,7 +4827,7 @@ Instructions:
 
 // src/fleet/panels.ts
 var vscode6 = __toESM(require("vscode"));
-var fs8 = __toESM(require("fs"));
+var fs9 = __toESM(require("fs"));
 var TITLES = {
   providers: "Agent Providers",
   orchestrator: "Orchestrator"
@@ -4031,6 +4884,16 @@ var FleetPanel = class _FleetPanel {
         case "addProvider":
           fleet.registry.add(m.kindId);
           break;
+        case "detectAll": {
+          const r = await fleet.autoDetect();
+          vscode6.window.showInformationMessage(r.summary);
+          break;
+        }
+        case "detectProvider": {
+          const r = await fleet.detectFor(m.id);
+          vscode6.window.showInformationMessage(r);
+          break;
+        }
         case "duplicateProvider":
           fleet.registry.duplicate(m.id);
           break;
@@ -4068,6 +4931,17 @@ var FleetPanel = class _FleetPanel {
         case "cancelSession":
           fleet.sessions.cancel(m.id);
           break;
+        case "resumeSession":
+          await fleet.resumeSession(m.id, m.mode === "restart" ? "restart" : "resume");
+          break;
+        case "resumeAll": {
+          const n = await fleet.resumeAll();
+          vscode6.window.showInformationMessage(n ? `Resumed ${n} session(s).` : "Nothing to resume.");
+          break;
+        }
+        case "dismissSession":
+          fleet.sessions.dismiss(m.id);
+          break;
         case "markFinished":
           fleet.sessions.markFinished(m.id);
           break;
@@ -4075,7 +4949,7 @@ var FleetPanel = class _FleetPanel {
           await fleet.requestReview(m.id);
           break;
         case "openTicket": {
-          if (m.path && fs8.existsSync(m.path)) {
+          if (m.path && fs9.existsSync(m.path)) {
             const doc = await vscode6.workspace.openTextDocument(vscode6.Uri.file(m.path));
             await vscode6.window.showTextDocument(doc, { viewColumn: vscode6.ViewColumn.Beside });
           }
@@ -4119,7 +4993,7 @@ var FleetPanel = class _FleetPanel {
   html() {
     const webview = this.panel.webview;
     let dir = vscode6.Uri.joinPath(this.extensionUri, "dist", "webview");
-    if (!fs8.existsSync(dir.fsPath))
+    if (!fs9.existsSync(dir.fsPath))
       dir = vscode6.Uri.joinPath(this.extensionUri, "src", "webview");
     const v = Date.now();
     const css = webview.asWebviewUri(vscode6.Uri.joinPath(dir, "fleet.css")).with({ query: `v=${v}` });
@@ -4141,6 +5015,10 @@ async function activate(context) {
   await boardManager.reloadBoards();
   const fleet = FleetController.init(context);
   fleet.seedFromBoards(boardManager.getAllBoards());
+  void fleet.autoDetect(fleet.registry.isEmpty()).then((r) => {
+    if (r.added)
+      vscode7.window.showInformationMessage(r.summary + ' Open "Agents" to review.');
+  }).catch(() => void 0);
   boardManager.setupWatchers(context);
   const treeProvider = new BoardsTreeProvider(boardManager);
   vscode7.window.registerTreeDataProvider("agenticKanban.boardsView", treeProvider);
@@ -4229,10 +5107,10 @@ async function activate(context) {
           return;
         board = pick.board;
       }
-      const configPath = path11.join(board.rootPath, "config.md");
-      if (!fs9.existsSync(configPath)) {
+      const configPath = path12.join(board.rootPath, "config.md");
+      if (!fs10.existsSync(configPath)) {
         const defaultConfig = ConfigParser.generateDefaultConfig(board.name);
-        await fs9.promises.writeFile(configPath, defaultConfig, "utf8");
+        await fs10.promises.writeFile(configPath, defaultConfig, "utf8");
       }
       const doc = await vscode7.workspace.openTextDocument(vscode7.Uri.file(configPath));
       await vscode7.window.showTextDocument(doc);
@@ -4258,29 +5136,29 @@ async function activate(context) {
       const res = await boardManager.generateAgentRules(board.id);
       if (!res)
         return;
-      if (fs9.existsSync(res.targetPath)) {
+      if (fs10.existsSync(res.targetPath)) {
         const choice = await vscode7.window.showQuickPick(
           [
-            { label: "Overwrite", description: `Replace entire ${path11.basename(res.targetPath)}` },
-            { label: "Append", description: `Append Kanban rules to existing ${path11.basename(res.targetPath)}` },
+            { label: "Overwrite", description: `Replace entire ${path12.basename(res.targetPath)}` },
+            { label: "Append", description: `Append Kanban rules to existing ${path12.basename(res.targetPath)}` },
             { label: "Cancel", description: "Keep existing file unchanged" }
           ],
-          { placeHolder: `${path11.basename(res.targetPath)} already exists. What would you like to do?` }
+          { placeHolder: `${path12.basename(res.targetPath)} already exists. What would you like to do?` }
         );
         if (!choice || choice.label === "Cancel")
           return;
         if (choice.label === "Append") {
-          const existing = await fs9.promises.readFile(res.targetPath, "utf8");
-          await fs9.promises.writeFile(res.targetPath, `${existing}
+          const existing = await fs10.promises.readFile(res.targetPath, "utf8");
+          await fs10.promises.writeFile(res.targetPath, `${existing}
 
 ${res.content}`, "utf8");
         } else {
-          await fs9.promises.writeFile(res.targetPath, res.content, "utf8");
+          await fs10.promises.writeFile(res.targetPath, res.content, "utf8");
         }
       } else {
-        await fs9.promises.writeFile(res.targetPath, res.content, "utf8");
+        await fs10.promises.writeFile(res.targetPath, res.content, "utf8");
       }
-      vscode7.window.showInformationMessage(`Agent rules generated at ${path11.basename(res.targetPath)}`);
+      vscode7.window.showInformationMessage(`Agent rules generated at ${path12.basename(res.targetPath)}`);
       const doc = await vscode7.workspace.openTextDocument(vscode7.Uri.file(res.targetPath));
       await vscode7.window.showTextDocument(doc);
     }),
@@ -4305,8 +5183,8 @@ ${res.content}`, "utf8");
       const created = await boardManager.initTemplates(board.id);
       if (created && created.length > 0) {
         vscode7.window.showInformationMessage(`Initialized templates: ${created.join(", ")} in ${board.name}/.templates/`);
-        const firstTemplate = path11.join(board.rootPath, ".templates", created[0]);
-        if (fs9.existsSync(firstTemplate)) {
+        const firstTemplate = path12.join(board.rootPath, ".templates", created[0]);
+        if (fs10.existsSync(firstTemplate)) {
           const doc = await vscode7.workspace.openTextDocument(vscode7.Uri.file(firstTemplate));
           await vscode7.window.showTextDocument(doc);
         }

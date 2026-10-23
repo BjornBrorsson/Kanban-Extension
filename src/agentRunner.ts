@@ -20,6 +20,8 @@ export const DEFAULT_TASK = 'Review requirements and implement ticket {ticket_pa
 export interface FormatOptions {
   /** Instruction text substituted for {task} (defaults to implementing the ticket). */
   task?: string;
+  /** Conversation id for {session_id}; only a UUID-shaped value is accepted. */
+  sessionId?: string;
   model?: string;
   /** e.g. `--model`; used for {model_args} and appended when the template has no model placeholder. */
   modelFlag?: string;
@@ -27,6 +29,7 @@ export interface FormatOptions {
 }
 
 /** Model ids reach a shell unquoted, so only a conservative character set is accepted. */
+export const SESSION_ID_PATTERN = /^[0-9a-fA-F-]{8,64}$/;
 export const MODEL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:\/@+-]*$/;
 
 function getVsCode(): typeof vscodeTypes | undefined {
@@ -167,6 +170,7 @@ export class AgentRunner {
       '{board_root}': esc(boardRoot),
       '{column}': esc(ticket.column),
       '{model}': model,
+      '{session_id}': options.sessionId && SESSION_ID_PATTERN.test(options.sessionId) ? options.sessionId : '',
       '{model_args}': modelArgs,
       '{agy_path}': agyPath,
       '{antigravity_path}': agyPath,
@@ -203,8 +207,17 @@ export class AgentRunner {
     command = command.replace(/\{[a-z_]+\}/g, m => (m in replacements ? replacements[m] : m));
     command = command.replace(/ {2,}/g, ' ').trim();
 
+    // A detected/configured executable path replaces a bare tool name at the start of the command, so the
+    // agent starts even when its folder is missing from the editor's PATH.
+    const exePath = config.path || config.executable;
+    const first = command.match(/^([A-Za-z][\w.-]*)(?=\s|$)/);
+    if (exePath && first && path.basename(exePath).replace(/\.[^.]+$/, '').toLowerCase() === first[1].toLowerCase()) {
+      const quoted = `"${exePath}"`;
+      command = (shell === 'powershell' ? '& ' : '') + quoted + command.slice(first[1].length);
+    }
+
     // On Windows PowerShell, ensure quoted executable path starts with the call operator '&'
-    if (process.platform === 'win32') {
+    if (process.platform === 'win32' && shell === 'powershell') {
       const trimmed = command.trim();
       if (trimmed.startsWith('"') && !trimmed.startsWith('&')) {
         command = '& ' + trimmed;

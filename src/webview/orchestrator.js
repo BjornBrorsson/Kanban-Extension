@@ -41,7 +41,21 @@
     const every = el('input', { type: 'number', min: 10, max: 3600, value: s.intervalSeconds, style: 'width:70px', onchange: () => save({ intervalSeconds: +every.value }) });
     const per = el('input', { type: 'number', min: 1, max: 20, value: s.maxNewPerTick, style: 'width:56px', onchange: () => save({ maxNewPerTick: +per.value }) });
 
+    const resume = el('input', { type: 'checkbox', onchange: () => save({ autoResume: resume.checked }) });
+    resume.checked = s.autoResume;
+    const retries = el('input', { type: 'number', min: 0, max: 10, value: s.maxAutoRetries, style: 'width:56px', onchange: () => save({ maxAutoRetries: +retries.value }) });
+
+    const failover = el('input', { type: 'checkbox', onchange: () => save({ autoFailover: failover.checked }) });
+    failover.checked = s.autoFailover;
+    const bg = el('input', { type: 'checkbox', onchange: () => save({ backgroundTerminals: bg.checked }) });
+    bg.checked = s.backgroundTerminals;
+
     return el('div', {},
+      el('div', { class: 'bar-row' },
+        el('label', { class: 'inline', title: 'When a model hits its usage limit: continue on another capable model, or wait for the reset' }, failover, el('b', { text: 'Usage-limit failover' })),
+        el('label', { class: 'inline', title: 'Automated sessions run in hidden terminals. Open terminal reveals them.' }, bg, 'run automated sessions in background terminals')),
+      el('div', { class: 'bar-row' },
+        el('label', { class: 'inline' }, resume, el('b', { text: 'Auto-resume' }), ' interrupted / failed sessions, up to', retries, 'times')),
       el('div', { class: 'bar-row' },
         el('label', { class: 'inline' }, auto, el('b', { text: 'Autopilot' }), ' start Ready tickets automatically'),
         el('label', { class: 'inline' }, rev, 'auto-request a review when a worker finishes'),
@@ -70,6 +84,7 @@
         el('div', { class: 'meter' }, el('i', { class: pct >= 90 ? 'hot' : pct >= 70 ? 'warn' : '', style: 'width:' + (u.maxParallel ? Math.round(u.running / u.maxParallel * 100) : 0) + '%' })),
         el('div', { class: 'm', text: u.pct === null ? 'No rolling-window cap set' : 'Window ' + u.startsInWindow + '/' + u.maxSessionsPerWindow + ' per ' + u.windowMinutes + 'm (' + pct + '%)' }),
         u.pct === null ? null : el('div', { class: 'meter' }, el('i', { class: pct >= 90 ? 'hot' : pct >= 70 ? 'warn' : '', style: 'width:' + pct + '%' })),
+        (u.blockedModels || []).length ? el('div', { class: 'blocked', text: 'At limit: ' + u.blockedModels.map(b => b.model + (b.unknown ? ' (reset unknown, retrying)' : ' until ' + new Date(b.until).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }))).join(', ') }) : null,
         u.reason && u.state !== 'ready' ? el('div', { class: 'm', text: u.reason + retry }) : null
       );
     });
@@ -90,6 +105,22 @@
     );
   }
 
+  const recoverable = s => (s.status === 'interrupted' || s.status === 'failed') && !s.resumedBy;
+
+  function recoveryBanner(state) {
+    const need = state.sessions.filter(s => s.attention && (s.status === 'running' || recoverable(s)));
+    const n = state.sessions.filter(s => recoverable(s)).length;
+    if (need.length && !n) {
+      return el('div', { class: 'banner' }, el('span', { text: need.length + ' agent' + (need.length === 1 ? '' : 's') + ' need' + (need.length === 1 ? 's' : '') + ' you: ' + need[0].attention }), el('span', { class: 'grow' }),
+        need[0].status === 'running' ? el('button', { class: 'primary', text: 'Open terminal', onclick: () => send('focusSession', { id: need[0].id }) }) : null);
+    }
+    if (!n) return null;
+    return el('div', { class: 'banner' },
+      el('span', { text: n + ' agent session' + (n === 1 ? '' : 's') + ' ' + (n === 1 ? 'was' : 'were') + ' interrupted or failed (network error, crash, or the editor/PC closed).' }),
+      el('span', { class: 'grow' }),
+      el('button', { class: 'primary', text: 'Resume all', onclick: () => send('resumeAll') }));
+  }
+
   function sessionTable(state) {
     if (!state.sessions.length) return el('div', { class: 'empty', text: 'No sessions yet. Assign a ticket to an agent or run the plan.' });
     return el('table', {},
@@ -97,14 +128,20 @@
       el('tbody', {}, state.sessions.map(s => {
         const live = s.status === 'running';
         const since = s.startedAt || s.queuedAt;
-        return el('tr', {},
-          el('td', {}, el('span', { class: 'pill ' + s.status, text: s.status })),
+        return el('tr', { class: s.attention ? 'attention' : '' },
+          el('td', {}, el('span', { class: 'pill ' + s.status, text: s.status }), s.attention ? el('div', {}, el('span', { class: 'pill needs', text: 'needs you', title: s.attention })) : null, s.hidden && live ? el('div', { class: 'note', text: 'background' }) : null),
           el('td', { text: s.providerName + (s.model ? ' · ' + s.model : '') }),
           el('td', { text: s.role }),
           el('td', {}, el('a', { class: 'link', text: (s.ticketId ? s.ticketId + ' — ' : '') + s.ticketTitle, onclick: () => send('openTicket', { path: s.ticketPath }) }),
-            s.note ? el('div', { class: 'note', text: s.note }) : null),
+            s.note ? el('div', { class: 'note', text: s.note }) : null,
+            s.attention ? el('div', { class: 'note', style: 'color:#f85149', text: s.attention }) : null,
+            s.resumeAfter && recoverable(s) ? el('div', { class: 'note', text: 'Auto-continues after ' + new Date(s.resumeAfter).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }) : null),
           el('td', { 'data-since': live ? since : '', text: live ? dur(state.now - since) : (s.endedAt && s.startedAt ? dur(s.endedAt - s.startedAt) : '') }),
           el('td', { class: 'actions' },
+            recoverable(s) ? el('button', { class: 'small primary', text: 'Resume', title: 'Continue the same agent conversation where it left off', onclick: () => send('resumeSession', { id: s.id, mode: 'resume' }) }) : null,
+            recoverable(s) ? el('button', { class: 'small', text: 'Restart', title: 'Start over with a fresh agent conversation', onclick: () => send('resumeSession', { id: s.id, mode: 'restart' }) }) : null,
+            recoverable(s) ? el('button', { class: 'small', text: 'Dismiss', title: 'It was actually finished', onclick: () => send('dismissSession', { id: s.id }) }) : null,
+            live ? el('button', { class: 'small', text: 'Resume', title: 'Hung or lost connection? Stop it and continue the same thread', onclick: () => send('resumeSession', { id: s.id, mode: 'resume' }) }) : null,
             live ? el('button', { class: 'small primary', text: 'Open terminal', onclick: () => send('focusSession', { id: s.id }) }) : null,
             s.role === 'worker' && (live || s.status === 'finished') ? el('button', { class: 'small', text: 'Review', onclick: () => send('requestReview', { id: s.id }) }) : null,
             live ? el('button', { class: 'small', text: 'Mark done', onclick: () => send('markFinished', { id: s.id }) }) : null,
@@ -122,6 +159,7 @@
     root.replaceChildren(
       el('h1', { text: 'Orchestrator' }),
       el('p', { class: 'sub', text: running + ' agent session' + (running === 1 ? '' : 's') + ' running. The orchestrator spreads work across your providers and stays below each one\'s limits so you are not rate-limited.' }),
+      recoveryBanner(state),
       settingsBar(state.settings, state.providers),
       el('h2', { text: 'Provider capacity' }), capacity(state),
       el('div', { class: 'bar-row' }, el('h2', { text: 'Proposed plan', style: 'margin:18px 0 0' }), el('span', { class: 'grow' }),

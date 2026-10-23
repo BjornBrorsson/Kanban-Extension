@@ -23,15 +23,133 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 ));
 
 // test/fleetTests.ts
-var fs3 = __toESM(require("fs"));
+var fs5 = __toESM(require("fs"));
+var os2 = __toESM(require("os"));
+var http2 = __toESM(require("http"));
+var path7 = __toESM(require("path"));
+
+// src/fleet/detect.ts
+var fs = __toESM(require("fs"));
+var http = __toESM(require("http"));
 var os = __toESM(require("os"));
-var path6 = __toESM(require("path"));
+var path = __toESM(require("path"));
+var import_child_process = require("child_process");
+var isWin = () => process.platform === "win32";
+function pathExts() {
+  if (!isWin())
+    return [""];
+  return ["", ...(process.env.PATHEXT || ".EXE;.CMD;.BAT;.COM").split(";").map((e) => e.toLowerCase())];
+}
+function isFile(p) {
+  try {
+    return fs.statSync(p).isFile();
+  } catch {
+    return false;
+  }
+}
+function extraSearchDirs(env = process.env) {
+  const home = env.USERPROFILE || env.HOME || os.homedir();
+  const dirs = [];
+  if (isWin()) {
+    const local = env.LOCALAPPDATA || path.join(home, "AppData", "Local");
+    const roaming = env.APPDATA || path.join(home, "AppData", "Roaming");
+    dirs.push(
+      path.join(roaming, "npm"),
+      path.join(local, "Programs", "Ollama"),
+      path.join(local, "Programs", "Devin", "bin"),
+      path.join(local, "Programs", "Devin Next", "bin"),
+      path.join(local, "agy", "bin"),
+      path.join(local, "Microsoft", "WindowsApps"),
+      path.join(home, ".local", "bin"),
+      path.join(home, ".claude", "local"),
+      path.join(env.ProgramFiles || "C:\\Program Files", "Ollama"),
+      path.join(env.ProgramFiles || "C:\\Program Files", "agy", "bin")
+    );
+    for (const root of [path.join(local, "fnm_multishells"), env.FNM_DIR ? path.join(env.FNM_DIR, "node-versions") : "", "C:\\fnm\\node-versions"]) {
+      if (!root || !fs.existsSync(root))
+        continue;
+      try {
+        for (const v of fs.readdirSync(root))
+          dirs.push(path.join(root, v, "installation"), path.join(root, v));
+      } catch {
+      }
+    }
+  } else {
+    dirs.push(
+      path.join(home, ".local", "bin"),
+      path.join(home, ".claude", "local"),
+      path.join(home, ".agy", "bin"),
+      path.join(home, ".npm-global", "bin"),
+      path.join(home, ".cargo", "bin"),
+      "/usr/local/bin",
+      "/opt/homebrew/bin",
+      "/usr/bin"
+    );
+  }
+  return dirs;
+}
+function findExecutable(names, env = process.env, extraDirs = extraSearchDirs(env)) {
+  const pathDirs = (env.PATH || env.Path || "").split(path.delimiter).filter(Boolean);
+  const dirs = [...pathDirs, ...extraDirs];
+  const exts = pathExts();
+  for (const name of names) {
+    for (const dir of dirs) {
+      for (const ext of exts) {
+        const candidate = path.join(dir, name + ext);
+        if (isFile(candidate))
+          return candidate;
+      }
+    }
+  }
+  return void 0;
+}
+function parseOllamaList(text) {
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  if (lines.length && /^name\s+/i.test(lines[0]))
+    lines.shift();
+  return lines.map((l) => l.split(/\s+/)[0]).filter(Boolean);
+}
+function httpGetJson(url, timeoutMs) {
+  return new Promise((resolve3, reject) => {
+    const req = http.get(url, { timeout: timeoutMs }, (res) => {
+      let body = "";
+      res.setEncoding("utf8");
+      res.on("data", (d) => body += d);
+      res.on("end", () => {
+        try {
+          resolve3(JSON.parse(body));
+        } catch (e) {
+          reject(e);
+        }
+      });
+    });
+    req.on("timeout", () => req.destroy(new Error("timeout")));
+    req.on("error", reject);
+  });
+}
+async function detectOllamaModels(host = "127.0.0.1:11434", exePath) {
+  try {
+    const data = await httpGetJson(`http://${host}/api/tags`, 1500);
+    const names = (data?.models || []).map((m) => String(m.name || m.model || "")).filter(Boolean);
+    if (names.length)
+      return names;
+  } catch {
+  }
+  const exe = exePath || findExecutable(["ollama"]);
+  if (!exe)
+    return [];
+  return new Promise((resolve3) => {
+    (0, import_child_process.execFile)(exe, ["list"], { timeout: 4e3, windowsHide: true, shell: isWin() && /\.(cmd|bat)$/i.test(exe) }, (err, stdout) => {
+      resolve3(err ? [] : parseOllamaList(String(stdout)));
+    });
+  });
+}
 
 // src/pathUtils.ts
-var path = __toESM(require("path"));
+var path2 = __toESM(require("path"));
 var CASE_INSENSITIVE = process.platform === "win32" || process.platform === "darwin";
 function norm(p) {
-  const resolved = path.resolve(p);
+  const resolved = path2.resolve(p);
   return CASE_INSENSITIVE ? resolved.toLowerCase() : resolved;
 }
 function isInside(root, candidate) {
@@ -41,17 +159,17 @@ function isInside(root, candidate) {
   const c = norm(candidate);
   if (c === r)
     return true;
-  const prefix = r.endsWith(path.sep) ? r : r + path.sep;
+  const prefix = r.endsWith(path2.sep) ? r : r + path2.sep;
   return c.startsWith(prefix);
 }
 function safeJoin(root, ...segments) {
-  let current = path.resolve(root);
+  let current = path2.resolve(root);
   for (const seg of segments) {
     if (seg === null || seg === void 0 || seg === "")
       continue;
-    if (path.isAbsolute(seg) || /^[a-zA-Z]:/.test(seg))
+    if (path2.isAbsolute(seg) || /^[a-zA-Z]:/.test(seg))
       return null;
-    current = path.resolve(current, seg);
+    current = path2.resolve(current, seg);
   }
   return isInside(root, current) ? current : null;
 }
@@ -84,8 +202,8 @@ function escapeForDoubleQuotes(value, shell) {
 }
 
 // src/agentRunner.ts
-var path2 = __toESM(require("path"));
-var fs = __toESM(require("fs"));
+var path3 = __toESM(require("path"));
+var fs2 = __toESM(require("fs"));
 
 // src/orchestrator/config/orchestrationConfig.ts
 var OrchestrationConfigParser = class {
@@ -490,6 +608,7 @@ var ConfigParser = class {
 
 // src/agentRunner.ts
 var DEFAULT_TASK = "Review requirements and implement ticket {ticket_path}: {ticket_title}";
+var SESSION_ID_PATTERN = /^[0-9a-fA-F-]{8,64}$/;
 var MODEL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:\/@+-]*$/;
 function getVsCode() {
   try {
@@ -534,27 +653,27 @@ var AgentRunner = class {
     if (process.platform === "win32") {
       const localAppData = process.env.LOCALAPPDATA;
       if (localAppData) {
-        candidates.push(path2.join(localAppData, "agy", "bin", "agy.exe"));
+        candidates.push(path3.join(localAppData, "agy", "bin", "agy.exe"));
       }
       const userProfile = process.env.USERPROFILE;
       if (userProfile) {
-        candidates.push(path2.join(userProfile, "AppData", "Local", "agy", "bin", "agy.exe"));
+        candidates.push(path3.join(userProfile, "AppData", "Local", "agy", "bin", "agy.exe"));
       }
       const programFiles = process.env.ProgramFiles;
       if (programFiles) {
-        candidates.push(path2.join(programFiles, "agy", "bin", "agy.exe"));
+        candidates.push(path3.join(programFiles, "agy", "bin", "agy.exe"));
       }
     } else {
       const home = process.env.HOME;
       if (home) {
-        candidates.push(path2.join(home, ".agy", "bin", "agy"));
-        candidates.push(path2.join(home, ".local", "bin", "agy"));
+        candidates.push(path3.join(home, ".agy", "bin", "agy"));
+        candidates.push(path3.join(home, ".local", "bin", "agy"));
       }
       candidates.push("/usr/local/bin/agy");
       candidates.push("/usr/bin/agy");
     }
     for (const candidate of candidates) {
-      if (candidate && fs.existsSync(candidate)) {
+      if (candidate && fs2.existsSync(candidate)) {
         return candidate;
       }
     }
@@ -571,14 +690,14 @@ var AgentRunner = class {
     const vscode = getVsCode();
     const shell = options.shell || detectShellKind(vscode?.env?.shell);
     const esc = (v) => escapeForDoubleQuotes(v, shell);
-    const workspaceFolder = vscode?.workspace?.workspaceFolders?.[0]?.uri.fsPath || path2.dirname(boardRoot);
+    const workspaceFolder = vscode?.workspace?.workspaceFolders?.[0]?.uri.fsPath || path3.dirname(boardRoot);
     const content = rawTicketContent ?? ticket.summary ?? ticket.title;
     let effectiveBoardConfig = boardConfig;
     if (!effectiveBoardConfig) {
-      const configPath = path2.join(boardRoot, "config.md");
-      if (fs.existsSync(configPath)) {
+      const configPath = path3.join(boardRoot, "config.md");
+      if (fs2.existsSync(configPath)) {
         try {
-          const cfgText = fs.readFileSync(configPath, "utf8");
+          const cfgText = fs2.readFileSync(configPath, "utf8");
           effectiveBoardConfig = ConfigParser.parse(cfgText, "board");
         } catch {
         }
@@ -601,6 +720,7 @@ var AgentRunner = class {
       "{board_root}": esc(boardRoot),
       "{column}": esc(ticket.column),
       "{model}": model,
+      "{session_id}": options.sessionId && SESSION_ID_PATTERN.test(options.sessionId) ? options.sessionId : "",
       "{model_args}": modelArgs,
       "{agy_path}": agyPath,
       "{antigravity_path}": agyPath,
@@ -626,7 +746,13 @@ var AgentRunner = class {
     }
     command = command.replace(/\{[a-z_]+\}/g, (m) => m in replacements ? replacements[m] : m);
     command = command.replace(/ {2,}/g, " ").trim();
-    if (process.platform === "win32") {
+    const exePath = config.path || config.executable;
+    const first = command.match(/^([A-Za-z][\w.-]*)(?=\s|$)/);
+    if (exePath && first && path3.basename(exePath).replace(/\.[^.]+$/, "").toLowerCase() === first[1].toLowerCase()) {
+      const quoted = `"${exePath}"`;
+      command = (shell === "powershell" ? "& " : "") + quoted + command.slice(first[1].length);
+    }
+    if (process.platform === "win32" && shell === "powershell") {
       const trimmed = command.trim();
       if (trimmed.startsWith('"') && !trimmed.startsWith("&")) {
         command = "& " + trimmed;
@@ -642,10 +768,10 @@ var AgentRunner = class {
       return null;
     }
     const config = assignee.agentConfig;
-    const workspaceFolder = vscode?.workspace?.workspaceFolders?.[0]?.uri.fsPath || path2.dirname(boardRoot);
+    const workspaceFolder = vscode?.workspace?.workspaceFolders?.[0]?.uri.fsPath || path3.dirname(boardRoot);
     let ticketContent = "";
     try {
-      ticketContent = await fs.promises.readFile(ticket.path, "utf8");
+      ticketContent = await fs2.promises.readFile(ticket.path, "utf8");
     } catch {
       ticketContent = ticket.summary || ticket.title;
     }
@@ -717,11 +843,11 @@ ${ticket.summary}`;
 };
 
 // src/ticketParser.ts
-var path3 = __toESM(require("path"));
+var path4 = __toESM(require("path"));
 var TicketParser = class {
   static parse(filePath, content, boardRoot, column, subfolder, mtime = Date.now()) {
-    const filename = path3.basename(filePath);
-    const relativePath = path3.relative(boardRoot, filePath).replace(/\\/g, "/");
+    const filename = path4.basename(filePath);
+    const relativePath = path4.relative(boardRoot, filePath).replace(/\\/g, "/");
     const { frontmatter, bodyWithoutFrontmatter } = this.extractFrontmatter(content);
     const tableFields = this.extractMarkdownTable(bodyWithoutFrontmatter);
     const { id, title } = this.extractIdAndTitle(filename, bodyWithoutFrontmatter, frontmatter, tableFields);
@@ -1081,15 +1207,16 @@ var TicketParser = class {
 };
 
 // src/fleet/providers.ts
-var fs2 = __toESM(require("fs"));
-var path4 = __toESM(require("path"));
+var fs3 = __toESM(require("fs"));
+var path5 = __toESM(require("path"));
 var PROVIDER_PRESETS = [
   {
     kind: "claude-code",
     label: "Claude Code",
     type: "cli",
-    command: `claude {model_args} -p "{task}"`,
+    command: `claude {model_args} --session-id {session_id} -p "{task}"`,
     modelFlag: "--model",
+    resumeCommand: `claude {model_args} --resume {session_id} -p "{task}"`,
     models: ["opus", "sonnet", "haiku"],
     defaultModel: "sonnet",
     maxParallel: 3,
@@ -1155,6 +1282,7 @@ var PROVIDER_PRESETS = [
     type: "cli",
     command: 'aider {model_args} --message "Implement ticket requirements in {ticket_path}" "{ticket_path}"',
     modelFlag: "--model",
+    resumeCommand: 'aider {model_args} --restore-chat-history --message "{task}" "{ticket_path}"',
     models: [],
     defaultModel: "",
     maxParallel: 2,
@@ -1187,6 +1315,19 @@ var PROVIDER_PRESETS = [
     maxSessionsPerWindow: 0,
     windowMinutes: 60,
     minSpacingSeconds: 5
+  },
+  {
+    // Local models. `ollama run` answers/chats but cannot edit files; use Aider/Cline pointed at Ollama for coding.
+    kind: "ollama",
+    label: "Ollama (local)",
+    type: "cli",
+    command: 'ollama run {model} "{task}"',
+    models: [],
+    defaultModel: "",
+    maxParallel: 1,
+    maxSessionsPerWindow: 0,
+    windowMinutes: 60,
+    minSpacingSeconds: 0
   },
   {
     kind: "ide-chat",
@@ -1231,6 +1372,7 @@ var LEGACY_ID_TO_KIND = {
   "ide-chat": "ide-chat",
   codex: "codex",
   "codex-cli": "codex",
+  ollama: "ollama",
   "copilot-cli": "copilot-cli",
   "cline-ollama": "cline",
   cline: "cline"
@@ -1257,6 +1399,8 @@ function sanitizeProvider(raw, existingIds = []) {
     enabled: raw?.enabled !== false,
     type: raw?.type === "vscode-command" ? "vscode-command" : raw?.type === "cli" ? "cli" : preset.type,
     command: String(raw?.command ?? preset.command),
+    modelTiers: raw?.modelTiers ? String(raw.modelTiers).slice(0, 400) : void 0,
+    resumeCommand: raw?.resumeCommand !== void 0 ? String(raw.resumeCommand).trim() || void 0 : preset.resumeCommand,
     modelFlag: raw?.modelFlag !== void 0 ? String(raw.modelFlag).trim() || void 0 : preset.modelFlag,
     workingDir: raw?.workingDir ? String(raw.workingDir) : void 0,
     path: raw?.path ? String(raw.path) : void 0,
@@ -1289,7 +1433,7 @@ function createProvider(kind, existing, name) {
     kind,
     name: name || (sameKind ? `${preset.label} ${sameKind + 1}` : preset.label),
     models: preset.models.slice(),
-    roles: kind === "ide-chat" ? ["worker"] : ["worker", "reviewer"]
+    roles: kind === "ide-chat" || kind === "ollama" ? ["worker"] : ["worker", "reviewer"]
   }, ids);
 }
 function providersFromAssignees(assignees, existing = []) {
@@ -1338,10 +1482,18 @@ function providerToAssignee(p) {
     }
   };
 }
+var OLD_CLAUDE_COMMAND = 'claude {model_args} -p "{task}"';
+function migrateProvider(raw) {
+  if (raw?.kind === "claude-code" && raw.command === OLD_CLAUDE_COMMAND) {
+    const preset = getPreset("claude-code");
+    return { ...raw, command: preset.command, resumeCommand: raw.resumeCommand || preset.resumeCommand };
+  }
+  return raw;
+}
 var ProviderRegistry = class {
   constructor(workspaceRoot) {
     this.workspaceRoot = workspaceRoot;
-    this.filePath = path4.join(workspaceRoot, ".agentic-kanban", "providers.json");
+    this.filePath = path5.join(workspaceRoot, ".agentic-kanban", "providers.json");
     this.load();
   }
   providers = [];
@@ -1352,11 +1504,11 @@ var ProviderRegistry = class {
   }
   load() {
     try {
-      const raw = JSON.parse(fs2.readFileSync(this.filePath, "utf8"));
+      const raw = JSON.parse(fs3.readFileSync(this.filePath, "utf8"));
       const list = Array.isArray(raw) ? raw : raw?.providers || [];
       const ids = [];
       this.providers = list.map((r) => {
-        const p = sanitizeProvider(r, ids);
+        const p = sanitizeProvider(migrateProvider(r), ids);
         ids.push(p.id);
         return p;
       });
@@ -1417,6 +1569,35 @@ var ProviderRegistry = class {
     }
     return false;
   }
+  /** Applies a detection result to one provider: fills a missing path, and refreshes models for Ollama. */
+  applyDetection(id, d) {
+    const p = this.providers.find((x) => x.id === id);
+    if (!p)
+      return void 0;
+    const next = { ...p };
+    if (d.path && !p.path)
+      next.path = d.path;
+    if (d.models && d.models.length) {
+      next.models = d.models;
+      if (!d.models.includes(p.defaultModel))
+        next.defaultModel = d.models[0];
+    }
+    return this.upsert(next);
+  }
+  /** Adds a provider for every detected tool that has none yet. Returns the new providers. */
+  addDetected(found) {
+    const added = [];
+    for (const d of found) {
+      if (this.providers.some((p2) => p2.kind === d.kind))
+        continue;
+      const p = createProvider(d.kind, this.providers);
+      this.providers.push(p);
+      added.push(this.applyDetection(p.id, d) || p);
+    }
+    if (added.length)
+      this.save();
+    return added;
+  }
   seedFromAssignees(assignees) {
     const added = providersFromAssignees(assignees, this.providers);
     if (added.length) {
@@ -1426,20 +1607,47 @@ var ProviderRegistry = class {
     return added.length;
   }
   save() {
-    fs2.mkdirSync(path4.dirname(this.filePath), { recursive: true });
+    fs3.mkdirSync(path5.dirname(this.filePath), { recursive: true });
     const tmp = `${this.filePath}.tmp`;
-    fs2.writeFileSync(tmp, JSON.stringify({ version: 1, providers: this.providers }, null, 2), "utf8");
-    fs2.renameSync(tmp, this.filePath);
+    fs3.writeFileSync(tmp, JSON.stringify({ version: 1, providers: this.providers }, null, 2), "utf8");
+    fs3.renameSync(tmp, this.filePath);
     this.listeners.forEach((fn) => fn());
   }
 };
 
 // src/fleet/sessions.ts
-var path5 = __toESM(require("path"));
+var fs4 = __toESM(require("fs"));
+var path6 = __toESM(require("path"));
 var QUICK_FAIL_MS = 2e4;
 var COOLDOWN_BASE_MIN = 5;
 var COOLDOWN_MAX_MIN = 30;
 var DEFAULT_SESSION_TIMEOUT_MIN = 180;
+var JsonFleetStore = class {
+  constructor(file) {
+    this.file = file;
+  }
+  load() {
+    try {
+      const raw = JSON.parse(fs4.readFileSync(this.file, "utf8"));
+      return {
+        starts: raw?.starts && typeof raw.starts === "object" ? raw.starts : {},
+        sessions: Array.isArray(raw?.sessions) ? raw.sessions : [],
+        blocks: raw?.blocks && typeof raw.blocks === "object" ? raw.blocks : {}
+      };
+    } catch {
+      return { starts: {}, sessions: [] };
+    }
+  }
+  save(data) {
+    try {
+      fs4.mkdirSync(path6.dirname(this.file), { recursive: true });
+      const tmp = this.file + ".tmp";
+      fs4.writeFileSync(tmp, JSON.stringify(data), "utf8");
+      fs4.renameSync(tmp, this.file);
+    } catch {
+    }
+  }
+};
 var SessionManager = class {
   constructor(getProvider, launcher, store, clock = Date.now, sessionTimeoutMinutes = DEFAULT_SESSION_TIMEOUT_MIN) {
     this.getProvider = getProvider;
@@ -1447,19 +1655,37 @@ var SessionManager = class {
     this.store = store;
     this.clock = clock;
     this.sessionTimeoutMinutes = sessionTimeoutMinutes;
-    this.starts = store ? store.load().starts : {};
+    const saved = store ? store.load() : { starts: {}, sessions: [] };
+    this.starts = saved.starts;
+    this.blocks = saved.blocks || {};
+    for (const s of saved.sessions || []) {
+      if (s.status === "running" || s.status === "queued") {
+        s.interruptKind = s.status === "queued" ? "queued-lost" : "host-closed";
+        s.note = s.status === "queued" ? "Was queued when the editor closed" : "Interrupted: the editor or PC closed while this agent was running";
+        s.status = "interrupted";
+        s.endedAt = this.clock();
+      }
+      this.sessions.push(s);
+    }
+    if (saved.sessions?.some((x) => x.status === "interrupted"))
+      this.persist();
   }
   sessions = [];
   payloads = /* @__PURE__ */ new Map();
   starts;
+  blocks = {};
   cooldownUntil = /* @__PURE__ */ new Map();
   quickFails = /* @__PURE__ */ new Map();
   listeners = [];
   seq = 0;
+  persist() {
+    this.store?.save({ starts: this.starts, sessions: this.sessions, blocks: this.blocks });
+  }
   onChange(fn) {
     this.listeners.push(fn);
   }
   emit() {
+    this.persist();
     this.listeners.forEach((fn) => {
       try {
         fn();
@@ -1477,8 +1703,8 @@ var SessionManager = class {
     return this.sessions.filter((s) => s.status === "running" || s.status === "queued");
   }
   activeForTicket(ticketPath) {
-    const key = path5.resolve(ticketPath).toLowerCase();
-    return this.active().find((s) => path5.resolve(s.ticketPath).toLowerCase() === key);
+    const key = path6.resolve(ticketPath).toLowerCase();
+    return this.active().find((s) => path6.resolve(s.ticketPath).toLowerCase() === key);
   }
   startsInWindow(p, now) {
     const since = now - p.windowMinutes * 6e4;
@@ -1491,6 +1717,10 @@ var SessionManager = class {
     const cd = this.cooldownUntil.get(p.id) || 0;
     if (cd > now) {
       return { ok: false, state: "cooldown", reason: "Cooling down after a failed start (possible rate limit)", retryAt: cd };
+    }
+    if (p.models.length && p.models.every((m) => this.modelBlock(p.id, m, now))) {
+      const untils = p.models.map((m) => this.modelBlock(p.id, m, now).until);
+      return { ok: false, state: "throttled", reason: "Every model is at its usage limit", retryAt: Math.min(...untils) };
     }
     const running = this.sessions.filter((s) => s.providerId === p.id && s.status === "running").length;
     if (running >= p.maxParallel) {
@@ -1515,6 +1745,53 @@ var SessionManager = class {
       return { ok: false, state: "throttled", reason: `Spacing starts by ${p.minSpacingSeconds}s`, retryAt: readyAt };
     }
     return { ok: true, state: "ready" };
+  }
+  // ---------------------------------------------------------------- model usage limits
+  blockKey(providerId, model) {
+    return `${providerId}::${model}`;
+  }
+  /** Active block for this model, if any. Expired blocks are dropped lazily. */
+  modelBlock(providerId, model, now = this.clock()) {
+    const key = this.blockKey(providerId, model);
+    const b = this.blocks[key];
+    if (!b)
+      return void 0;
+    if (b.until <= now) {
+      delete this.blocks[key];
+      return void 0;
+    }
+    return b;
+  }
+  blockedModels(providerId, now = this.clock()) {
+    const prefix = `${providerId}::`;
+    return Object.keys(this.blocks).filter((k) => k.startsWith(prefix)).map((k) => ({ model: k.slice(prefix.length), b: this.modelBlock(providerId, k.slice(prefix.length), now) })).filter((x) => !!x.b).map((x) => ({ model: x.model, until: x.b.until, unknown: x.b.unknown }));
+  }
+  /** Block a model until its reset time; with no known reset it is assumed back after `assumeMinutes` and re-probed. */
+  blockModel(providerId, model, resetAt, assumeMinutes = 30) {
+    const now = this.clock();
+    const block = resetAt && resetAt > now ? { until: resetAt, unknown: false } : { until: now + assumeMinutes * 6e4, unknown: true };
+    this.blocks[this.blockKey(providerId, model)] = block;
+    this.persist();
+    return block;
+  }
+  /** A running session reported a usage limit: stop tracking it as running and remember the model is exhausted. */
+  limitHit(id, info) {
+    const s = this.get(id);
+    if (!s || s.status !== "running" && s.status !== "queued")
+      return void 0;
+    const model = info.model || s.model;
+    const block = this.blockModel(s.providerId, model, info.resetAt);
+    s.limit = { model, resetAt: info.resetAt };
+    s.resumeAfter = info.resetAt;
+    this.interrupt(id, "usage-limit", `Usage limit reached${model ? ` on ${model}` : ""}${info.excerpt ? `: ${info.excerpt}` : ""}`);
+    return block;
+  }
+  setAttention(id, text) {
+    const s = this.get(id);
+    if (!s || s.attention === text)
+      return;
+    s.attention = text;
+    this.emit();
   }
   /** How many sessions could start right now without breaking any limit (0 when throttled/busy/cooling). */
   headroom(p, now = this.clock()) {
@@ -1544,6 +1821,7 @@ var SessionManager = class {
       maxSessionsPerWindow: p.maxSessionsPerWindow,
       windowMinutes: p.windowMinutes,
       pct: p.maxSessionsPerWindow > 0 ? Math.min(100, Math.round(recent / p.maxSessionsPerWindow * 100)) : null,
+      blockedModels: this.blockedModels(p.id, now),
       retryAt: check2.retryAt,
       cooldownUntil: this.cooldownUntil.get(p.id)
     };
@@ -1566,7 +1844,11 @@ var SessionManager = class {
       ticketTitle: req.ticketTitle,
       boardId: req.boardId,
       status: "queued",
-      queuedAt: now
+      queuedAt: now,
+      agentSessionId: req.agentSessionId,
+      attempt: req.attempt ?? 1,
+      resumedFrom: req.resumedFrom,
+      hidden: req.hidden
     };
     this.sessions.push(session);
     this.payloads.set(session.id, { req });
@@ -1597,7 +1879,7 @@ var SessionManager = class {
     session.note = void 0;
     (this.starts[provider.id] ||= []).push(now);
     this.trimHistory(provider, now);
-    this.store?.save({ starts: this.starts });
+    this.persist();
     this.emit();
     let ok = false;
     try {
@@ -1614,12 +1896,16 @@ var SessionManager = class {
     this.starts[p.id] = (this.starts[p.id] || []).filter((t) => t > keep);
   }
   /** Called by the launcher when the agent process/terminal ends. exitCode may be unknown. */
-  ended(sessionId, exitCode, note) {
+  ended(sessionId, exitCode, note, terminalClosed = false) {
     const s = this.get(sessionId);
     if (!s || s.status !== "running" && s.status !== "queued")
       return;
     const now = this.clock();
     const quick = s.startedAt !== void 0 && now - s.startedAt < QUICK_FAIL_MS;
+    if (exitCode === void 0 && terminalClosed) {
+      this.interrupt(s.id, "user-closed", note || "Terminal closed before the agent finished");
+      return;
+    }
     if (exitCode !== void 0 && exitCode !== 0) {
       this.finish(s, "failed", exitCode, note || `Exited with code ${exitCode}`);
       if (quick)
@@ -1636,6 +1922,50 @@ var SessionManager = class {
     this.quickFails.set(providerId, n);
     const minutes = Math.min(COOLDOWN_MAX_MIN, COOLDOWN_BASE_MIN * 2 ** (n - 1));
     this.cooldownUntil.set(providerId, now + minutes * 6e4);
+  }
+  /** Marks a live session interrupted (resumable). Does not touch the terminal. */
+  interrupt(id, kind, note) {
+    const s = this.get(id);
+    if (!s || s.status !== "running" && s.status !== "queued")
+      return;
+    s.status = "interrupted";
+    s.interruptKind = kind;
+    s.endedAt = this.clock();
+    if (note)
+      s.note = note;
+    this.payloads.delete(s.id);
+    this.emit();
+    void this.pump();
+  }
+  /** Editor is closing: everything still live becomes resumable on the next start. */
+  shutdown() {
+    for (const s of this.sessions.filter((x) => x.status === "running" || x.status === "queued")) {
+      s.status = "interrupted";
+      s.interruptKind = s.startedAt ? "host-closed" : "queued-lost";
+      s.endedAt = this.clock();
+      s.note = "Interrupted: the editor closed while this agent was running";
+    }
+    this.persist();
+  }
+  /** Sessions the user can pick up again: interrupted or failed, and not already resumed. */
+  resumable() {
+    return this.sessions.filter((s) => (s.status === "interrupted" || s.status === "failed") && !s.resumedBy);
+  }
+  markResumed(oldId, newId) {
+    const s = this.get(oldId);
+    if (s) {
+      s.resumedBy = newId;
+      this.emit();
+    }
+  }
+  /** Dismiss an interrupted/failed session ("it was actually done"): hides Resume without running anything. */
+  dismiss(id) {
+    const s = this.get(id);
+    if (s && (s.status === "interrupted" || s.status === "failed")) {
+      s.status = "finished";
+      s.note = (s.note ? s.note + " \xB7 " : "") + "Dismissed";
+      this.emit();
+    }
   }
   finish(s, status, exitCode, note) {
     s.status = status;
@@ -1709,7 +2039,8 @@ var SessionManager = class {
   prune(keepMinutes = 240) {
     const cutoff = this.clock() - keepMinutes * 6e4;
     const before = this.sessions.length;
-    this.sessions = this.sessions.filter((s) => s.status === "running" || s.status === "queued" || (s.endedAt || 0) > cutoff);
+    const keepRecoverable = this.clock() - 7 * 24 * 60 * 6e4;
+    this.sessions = this.sessions.filter((s) => s.status === "running" || s.status === "queued" || (s.endedAt || 0) > cutoff || (s.status === "interrupted" || s.status === "failed") && !s.resumedBy && (s.endedAt || 0) > keepRecoverable);
     if (this.sessions.length !== before)
       this.emit();
   }
@@ -1732,7 +2063,7 @@ function priorityRank(priority) {
   return m ? PRIORITY_RANK[m[1]] : 2;
 }
 function automatableWorkers(providers) {
-  return providers.filter((p) => p.enabled && p.type === "cli" && p.roles.includes("worker"));
+  return providers.filter((p) => p.enabled && p.type === "cli" && p.kind !== "ollama" && p.roles.includes("worker"));
 }
 function modelFor(provider, ticket) {
   const label = (ticket.labels || []).map((l) => l.replace(/[`\s]/g, "")).find((l) => /^model:/i.test(l));
@@ -1743,6 +2074,11 @@ function modelFor(provider, ticket) {
       return hit;
   }
   return provider.defaultModel;
+}
+function availableModel(provider, wanted, sessions, now) {
+  if (!wanted || !sessions.modelBlock(provider.id, wanted, now))
+    return wanted;
+  return provider.models.find((m) => !sessions.modelBlock(provider.id, m, now)) ?? wanted;
 }
 function matchProvider(providers, assignee) {
   if (!assignee)
@@ -1789,7 +2125,7 @@ function planWork(candidates, providers, sessions, opts = {}) {
       boardId: c.boardId,
       providerId: chosen.id,
       providerName: chosen.name,
-      model: modelFor(chosen, t),
+      model: availableModel(chosen, modelFor(chosen, t), sessions, now),
       startsNow,
       reason: startsNow ? reason : `${reason} \u2014 will queue (${sessions.canStart(chosen, now).reason || "at capacity"})`
     });
@@ -1800,6 +2136,162 @@ function pickReviewer(providers, sessions, authorProviderId, now = Date.now()) {
   const reviewers = providers.filter((p) => p.enabled && p.type === "cli" && p.roles.includes("reviewer"));
   const scored = reviewers.map((p) => ({ p, free: sessions.headroom(p, now), other: p.id !== authorProviderId ? 1 : 0, pct: sessions.usage(p, now).pct ?? 0 })).sort((a, b) => (b.free > 0 ? 1 : 0) - (a.free > 0 ? 1 : 0) || b.other - a.other || a.pct - b.pct);
   return scored[0]?.p;
+}
+
+// src/fleet/limits.ts
+var ANSI = /\u001b\[[0-9;?]*[ -/]*[@-~]|\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)|\u001b[()][A-Za-z0-9]|\u001b[=>]/g;
+function stripAnsi(text) {
+  return text.replace(ANSI, "").replace(/\r(?!\n)/g, "\n");
+}
+var LIMIT_RE = new RegExp(
+  [
+    "usage limit",
+    "rate[- ]limit",
+    "quota (?:exceeded|exhausted|reached)",
+    "limit (?:reached|exceeded)",
+    "hit your (?:usage |weekly |daily |5-hour |session )?limit",
+    "out of (?:credits|usage|quota)",
+    "too many requests",
+    "(?:http|status|error|code)\\D{0,12}429",
+    "resource[_ ]exhausted",
+    "insufficient[_ ]quota"
+  ].join("|"),
+  "i"
+);
+function nextClockTime(hour, minute, meridiem, now) {
+  let h = hour;
+  if (meridiem) {
+    const pm = /p/i.test(meridiem);
+    h = h % 12 + (pm ? 12 : 0);
+  }
+  const d = new Date(now);
+  d.setHours(h, minute, 0, 0);
+  if (d.getTime() <= now)
+    d.setDate(d.getDate() + 1);
+  return d.getTime();
+}
+function parseReset(window, now) {
+  const epoch = window.match(/limit reached\|(\d{10})/i);
+  if (epoch)
+    return Number(epoch[1]) * 1e3;
+  const phrase = /\b(?:in|after|retry[- ]after:?)\s+(\d[^.\n]{0,40})/gi;
+  let pm;
+  while ((pm = phrase.exec(window)) !== null) {
+    const p = pm[1];
+    const h = p.match(/(\d+(?:\.\d+)?)\s*(?:h|hrs?|hours?)\b/i);
+    const mi = p.match(/(\d+)\s*(?:m|mins?|minutes?)\b/i);
+    const se = p.match(/(\d+)\s*(?:s|secs?|seconds?)\b/i);
+    const ms = ((h ? Number(h[1]) * 3600 : 0) + (mi ? Number(mi[1]) * 60 : 0) + (se ? Number(se[1]) : 0)) * 1e3;
+    if (ms > 0)
+      return now + ms;
+  }
+  const clock = window.match(/resets?(?:\s+at)?\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i);
+  if (clock && (clock[3] || clock[2] || Number(clock[1]) > 12)) {
+    return nextClockTime(Number(clock[1]), Number(clock[2] || 0), clock[3], now);
+  }
+  return void 0;
+}
+function detectLimit(text, models = [], now = Date.now()) {
+  const clean = stripAnsi(text);
+  const m = LIMIT_RE.exec(clean);
+  if (!m)
+    return null;
+  const start = Math.max(0, m.index - 120);
+  const around = clean.slice(start, m.index + 260);
+  const lower = around.toLowerCase();
+  const model = [...models].sort((a, b) => b.length - a.length).find((x) => x && lower.includes(x.toLowerCase()));
+  return {
+    resetAt: parseReset(clean.slice(m.index, m.index + 260), now),
+    model,
+    excerpt: clean.slice(Math.max(0, m.index - 20), m.index + 140).replace(/\s+/g, " ").trim()
+  };
+}
+var ATTENTION_RE = [
+  /\(y\/n\)|\[y\/n\]|\[yes\/no\]/i,
+  /do you want to (?:proceed|continue|allow|make this edit|run)/i,
+  /press (?:enter|any key)/i,
+  /waiting for (?:your )?(?:input|approval|confirmation|response)/i,
+  /(?:permission|approval) (?:required|needed)/i,
+  /(?:please )?(?:log ?in|sign ?in|authenticate)\b.*(?:required|first|to continue)/i,
+  /enter (?:a |your )?(?:password|passphrase|token|api key|code)/i,
+  /(?:choose|select) an option/i
+];
+function detectAttention(text) {
+  const lines = stripAnsi(text).split("\n").map((l) => l.trim()).filter(Boolean).slice(-12);
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (ATTENTION_RE.some((re) => re.test(lines[i])))
+      return lines[i].slice(0, 140);
+  }
+  return void 0;
+}
+function parseTierOverrides(text) {
+  const out = {};
+  for (const part of (text || "").split(/[,\n]/)) {
+    const m = part.trim().match(/^(.+?)\s*[=:]\s*([1-5])$/);
+    if (m)
+      out[m[1].trim().toLowerCase()] = Number(m[2]);
+  }
+  return out;
+}
+function modelTier(provider, model) {
+  const name = (model || provider.defaultModel || "").toLowerCase();
+  const over = parseTierOverrides(provider.modelTiers);
+  if (over[name] !== void 0)
+    return over[name];
+  const size = name.match(/(\d+(?:\.\d+)?)b\b/);
+  if (size) {
+    const b = Number(size[1]);
+    return b <= 4 ? 1 : b <= 9 ? 2 : b <= 40 ? 3 : b < 100 ? 4 : 5;
+  }
+  if (/haiku|flash|(?:^|[-_ :])mini|nano|lite|small|instant/.test(name))
+    return 2;
+  if (/fable|opus|gpt-?5|o3|o1|ultra|gemini.*pro|deepseek-r1/.test(name))
+    return 5;
+  if (/sonnet|gpt-?4|codex|codestral|devstral|coder/.test(name))
+    return 4;
+  return 3;
+}
+function requiredTier(ticket) {
+  let req = 2;
+  const rank = priorityRank(ticket.priority);
+  if (rank === 0)
+    req = 4;
+  else if (rank === 1)
+    req = 3;
+  if (/architect|security|migration|refactor/i.test(ticket.type || ""))
+    req = Math.max(req, 4);
+  if (/^(l|xl|large)\b/i.test(ticket.estimate || ""))
+    req += 1;
+  if ((ticket.labels || []).some((l) => /complex|hard/i.test(l)))
+    req = Math.max(req, 4);
+  return Math.min(5, req);
+}
+function pickFallback(providers, sessions, from, ticket, now = Date.now()) {
+  const origin = providers.find((p) => p.id === from.providerId);
+  const originTier = origin ? modelTier(origin, from.model) : 5;
+  const needed = Math.min(requiredTier(ticket), originTier);
+  const role = from.role === "orchestrator" ? "worker" : from.role;
+  const options = [];
+  for (const p of providers) {
+    if (!p.enabled || p.type !== "cli" || p.kind === "ollama" || !p.roles.includes(role))
+      continue;
+    if (sessions.headroom(p, now) <= 0 && p.id !== from.providerId)
+      continue;
+    const models = p.models.length ? p.models : [p.defaultModel];
+    for (const model of models) {
+      if (p.id === from.providerId && model === from.model)
+        continue;
+      if (sessions.modelBlock(p.id, model, now))
+        continue;
+      const tier = modelTier(p, model);
+      if (tier < needed)
+        continue;
+      options.push({ provider: p, model, tier, sameProvider: p.id === from.providerId, pct: sessions.usage(p, now).pct ?? 0 });
+    }
+  }
+  options.sort((a, b) => a.tier - b.tier || Number(b.sameProvider) - Number(a.sameProvider) || a.pct - b.pct);
+  const best = options[0];
+  return best ? { provider: best.provider, model: best.model, tier: best.tier, sameProvider: best.sameProvider } : null;
 }
 
 // test/fleetTests.ts
@@ -1816,7 +2308,7 @@ function mkTicket(over = {}) {
   return {
     id: "T-1",
     filename: "t-1.md",
-    path: path6.join(os.tmpdir(), "Tickets", "Backlog", "Ready", "t-1.md"),
+    path: path7.join(os2.tmpdir(), "Tickets", "Backlog", "Ready", "t-1.md"),
     relativePath: "Backlog/Ready/t-1.md",
     column: "Backlog",
     subfolder: "Ready",
@@ -1855,10 +2347,10 @@ var FakeLauncher = class {
 };
 async function main() {
   console.log("\n--- pathUtils ---");
-  const root = path6.join(os.tmpdir(), "board");
-  check(isInside(root, path6.join(root, "Backlog", "a.md")), "child path is inside");
+  const root = path7.join(os2.tmpdir(), "board");
+  check(isInside(root, path7.join(root, "Backlog", "a.md")), "child path is inside");
   check(!isInside(root, root + "2"), "sibling with shared prefix is NOT inside");
-  check(safeJoin(root, "Backlog", "Ready") === path6.join(root, "Backlog", "Ready"), "safeJoin accepts normal names");
+  check(safeJoin(root, "Backlog", "Ready") === path7.join(root, "Backlog", "Ready"), "safeJoin accepts normal names");
   check(safeJoin(root, "..", "x") === null, "safeJoin rejects ..");
   check(safeJoin(root, "Backlog", "../../etc") === null, "safeJoin rejects nested traversal");
   check(safeJoin(root, "C:\\Windows") === null && safeJoin(root, "/etc") === null, "safeJoin rejects absolute segments");
@@ -1879,7 +2371,7 @@ async function main() {
     agentConfig: { type: "cli", command: 'claude {model_args} -p "{task}" # {ticket_title}' }
   };
   const evilTicket = mkTicket({ title: 'Fix $(calc) "now" {model}', id: "E-1" });
-  const cmd = AgentRunner.formatCliCommand(evilTicket, agent, os.tmpdir(), void 0, "body", {
+  const cmd = AgentRunner.formatCliCommand(evilTicket, agent, os2.tmpdir(), void 0, "body", {
     shell: "powershell",
     model: "opus",
     modelFlag: "--model"
@@ -1887,7 +2379,7 @@ async function main() {
   check(cmd.startsWith('claude --model opus -p "'), "model_args expands to --model opus");
   check(cmd.includes("`$(calc)") && cmd.includes('`"now`"'), "ticket title is escaped inside the command");
   check(cmd.includes("{model}"), "placeholder-looking text in a ticket stays literal (single pass)");
-  const badModel = AgentRunner.formatCliCommand(mkTicket(), agent, os.tmpdir(), void 0, "b", {
+  const badModel = AgentRunner.formatCliCommand(mkTicket(), agent, os2.tmpdir(), void 0, "b", {
     shell: "posix",
     model: "opus; rm -rf ~",
     modelFlag: "--model"
@@ -1898,7 +2390,7 @@ async function main() {
     name: "X",
     type: "agent",
     agentConfig: { type: "cli", command: 'mytool "{ticket_title}"' }
-  }, os.tmpdir(), void 0, "b", { shell: "posix", model: "big", modelFlag: "-m" });
+  }, os2.tmpdir(), void 0, "b", { shell: "posix", model: "big", modelFlag: "-m" });
   check(appended.endsWith("-m big"), "model flag is appended when the template has no placeholder");
   console.log("\n--- ticket parser: replacement specials ---");
   const md = "# T\n\n| Field | Value |\n|---|---|\n| **Status** | Backlog | extra |\n| **Assignee** | Bob |\n";
@@ -1907,7 +2399,7 @@ async function main() {
   const as = TicketParser.updateTicketAssignee(md, "Dev$`in");
   check(as.includes("| **Assignee** | Dev$`in |"), "assignee keeps $-patterns literal");
   console.log("\n--- providers ---");
-  const tmp = fs3.mkdtempSync(path6.join(os.tmpdir(), "fleet-"));
+  const tmp = fs5.mkdtempSync(path7.join(os2.tmpdir(), "fleet-"));
   const reg = new ProviderRegistry(tmp);
   const d1 = reg.add("devin", "Devin (work)");
   const d2 = reg.add("devin", "Devin (personal)");
@@ -1917,7 +2409,7 @@ async function main() {
   check(new ProviderRegistry(tmp).list().length === 2, "registry persists to disk");
   const weird = sanitizeProvider({ kind: "claude-code", name: "  ", maxParallel: 999, safetyMarginPct: 99, models: ["a", "b"], defaultModel: "zzz" });
   check(weird.maxParallel === 32 && weird.safetyMarginPct === 50 && weird.defaultModel === "a", "sanitize clamps limits and fixes default model");
-  const seeded = new ProviderRegistry(fs3.mkdtempSync(path6.join(os.tmpdir(), "fleet-")));
+  const seeded = new ProviderRegistry(fs5.mkdtempSync(path7.join(os2.tmpdir(), "fleet-")));
   check(seeded.seedFromAssignees([agent, { id: "bj", name: "Bj", type: "human" }]) === 1 && seeded.list()[0].kind === "claude-code", "legacy agents are imported, humans ignored");
   check(providerToAssignee(d1).id === d1.id && providerToAssignee(d1).type === "agent", "provider converts to an assignee");
   console.log("\n--- sessions: parallel, window, spacing, cooldown ---");
@@ -1936,7 +2428,7 @@ async function main() {
     provider: p,
     model: "m",
     role: "worker",
-    ticketPath: path6.join(tmp, `t${n}.md`),
+    ticketPath: path7.join(tmp, `t${n}.md`),
     ticketId: `T${n}`,
     ticketTitle: `T${n}`,
     boardId: "b",
@@ -1989,11 +2481,11 @@ async function main() {
   provs2.p1 = p1;
   provs2.p2 = p2;
   const cands = [
-    { ticket: mkTicket({ id: "L", path: path6.join(tmp, "l.md"), priority: "Low", mtime: 1 }), boardId: "b", boardRoot: tmp },
-    { ticket: mkTicket({ id: "H", path: path6.join(tmp, "h.md"), priority: "P0", mtime: 2, labels: ["model:opus"] }), boardId: "b", boardRoot: tmp },
-    { ticket: mkTicket({ id: "D", path: path6.join(tmp, "d.md"), priority: "P0", unresolvedDependencies: ["X"] }), boardId: "b", boardRoot: tmp },
-    { ticket: mkTicket({ id: "N", path: path6.join(tmp, "n.md"), priority: "P1", assignee: "Bj\xF6rn" }), boardId: "b", boardRoot: tmp },
-    { ticket: mkTicket({ id: "A", path: path6.join(tmp, "a.md"), priority: "P2", assignee: "Gemini" }), boardId: "b", boardRoot: tmp }
+    { ticket: mkTicket({ id: "L", path: path7.join(tmp, "l.md"), priority: "Low", mtime: 1 }), boardId: "b", boardRoot: tmp },
+    { ticket: mkTicket({ id: "H", path: path7.join(tmp, "h.md"), priority: "P0", mtime: 2, labels: ["model:opus"] }), boardId: "b", boardRoot: tmp },
+    { ticket: mkTicket({ id: "D", path: path7.join(tmp, "d.md"), priority: "P0", unresolvedDependencies: ["X"] }), boardId: "b", boardRoot: tmp },
+    { ticket: mkTicket({ id: "N", path: path7.join(tmp, "n.md"), priority: "P1", assignee: "Bj\xF6rn" }), boardId: "b", boardRoot: tmp },
+    { ticket: mkTicket({ id: "A", path: path7.join(tmp, "a.md"), priority: "P2", assignee: "Gemini" }), boardId: "b", boardRoot: tmp }
   ];
   const plan = planWork(cands, [p1, p2], sm2, { now: now2 });
   const byId = Object.fromEntries(plan.map((d) => [d.ticketId, d]));
@@ -2006,7 +2498,125 @@ async function main() {
   check(plan.some((d) => d.ticketId === "L") === false || byId.L.startsNow === false, "overflow work is marked as queued, not started");
   const rev = pickReviewer([{ ...p1, roles: ["worker", "reviewer"] }, { ...p2, roles: ["worker", "reviewer"] }], sm2, "p1", now2);
   check(rev?.id === "p2", "reviewer prefers a different provider than the author");
-  fs3.rmSync(tmp, { recursive: true, force: true });
+  console.log("\n--- auto-detect & ollama ---");
+  const bin = fs5.mkdtempSync(path7.join(os2.tmpdir(), "bin-"));
+  const exeName = process.platform === "win32" ? "claude.cmd" : "claude";
+  fs5.writeFileSync(path7.join(bin, exeName), process.platform === "win32" ? "@echo off\r\n" : "#!/bin/sh\n");
+  const fakeEnv = { PATH: "", PATHEXT: ".CMD;.EXE" };
+  check(findExecutable(["claude"], fakeEnv, [bin]) === path7.join(bin, exeName), "findExecutable finds a CLI in an extra install folder");
+  check(findExecutable(["claude"], { ...fakeEnv, PATH: bin }, []) === path7.join(bin, exeName), "findExecutable finds a CLI on PATH");
+  check(findExecutable(["definitely-not-installed-xyz"], fakeEnv, [bin]) === void 0, "missing tools return undefined");
+  check(JSON.stringify(parseOllamaList("NAME  ID  SIZE  MODIFIED\nllama3.2:3b  abc  2 GB  1 day ago\nqwen2.5-coder:7b  def  4 GB  2 days ago\n")) === '["llama3.2:3b","qwen2.5-coder:7b"]', "parses `ollama list` output");
+  const srv = http2.createServer((req2, res) => {
+    res.setHeader("content-type", "application/json");
+    res.end(JSON.stringify({ models: [{ name: "llama3.2:3b" }, { name: "codestral:22b" }] }));
+  });
+  await new Promise((r) => srv.listen(0, "127.0.0.1", () => r()));
+  const port = srv.address().port;
+  const models = await detectOllamaModels(`127.0.0.1:${port}`);
+  srv.close();
+  check(models.length === 2 && models[0] === "llama3.2:3b", "detects models from the Ollama HTTP API");
+  check((await detectOllamaModels("127.0.0.1:1", path7.join(bin, "nonexistent"))).length === 0, "unreachable Ollama yields an empty list, not an error");
+  const oreg = new ProviderRegistry(fs5.mkdtempSync(path7.join(os2.tmpdir(), "fleet-")));
+  const addedP = oreg.addDetected([{ kind: "ollama", path: path7.join(bin, "ollama.exe"), models: ["llama3.2:3b", "codestral:22b"] }, { kind: "claude-code", path: path7.join(bin, exeName) }]);
+  const oll = addedP.find((p) => p.kind === "ollama");
+  check(addedP.length === 2 && oll.models.length === 2 && oll.defaultModel === "llama3.2:3b" && oll.path.includes("ollama"), "addDetected creates providers with path and detected models");
+  check(oreg.addDetected([{ kind: "ollama", path: "x" }]).length === 0, "addDetected does not duplicate an existing kind");
+  const keepPath = oreg.applyDetection(oll.id, { kind: "ollama", path: "other", models: ["phi4:14b"] });
+  check(keepPath.path === oll.path && keepPath.defaultModel === "phi4:14b", "applyDetection keeps an existing path and fixes the default model");
+  const ollCmd = AgentRunner.formatCliCommand(mkTicket({ title: "Say hi" }), providerToAssignee({ ...oll, path: void 0 }), os2.tmpdir(), void 0, "b", { shell: "posix", model: "llama3.2:3b", modelFlag: oll.modelFlag });
+  check(ollCmd.startsWith('ollama run llama3.2:3b "'), 'ollama preset builds `ollama run <model> "<task>"`');
+  const viaPath = AgentRunner.formatCliCommand(mkTicket(), providerToAssignee({ ...oll, path: "C:/Tools/ollama.exe" }), os2.tmpdir(), void 0, "b", { shell: "powershell", model: "m" });
+  check(viaPath.startsWith('& "C:/Tools/ollama.exe" run m'), "a detected path replaces the bare tool name (PATH-independent)");
+  const noSwap = AgentRunner.formatCliCommand(mkTicket(), { id: "x", name: "X", type: "agent", agentConfig: { type: "cli", command: 'othertool "{ticket_title}"', path: "C:/Tools/ollama.exe" } }, os2.tmpdir(), void 0, "b", { shell: "posix" });
+  check(noSwap.startsWith("othertool "), "path is only substituted when it matches the command's tool name");
+  const sm3 = new SessionManager(() => void 0, new FakeLauncher(), void 0, () => 1);
+  check(planWork([{ ticket: mkTicket({ path: path7.join(tmp, "o.md") }), boardId: "b", boardRoot: tmp }], [oll], sm3, { now: 1 }).length === 0, "autopilot never hands tickets to answer-only Ollama");
+  console.log("\n--- recovery: persisted sessions survive a restart ---");
+  const storeFile = path7.join(tmp, "fleet-usage.json");
+  let t0 = 1e7;
+  const rp = { ...createProvider("claude-code", []), id: "rp", name: "RP", maxParallel: 3, maxSessionsPerWindow: 0, minSpacingSeconds: 0, models: ["opus", "sonnet", "haiku"], defaultModel: "opus" };
+  const rmap = { rp };
+  const smA = new SessionManager((id) => rmap[id], new FakeLauncher(), new JsonFleetStore(storeFile), () => t0);
+  const run1 = await smA.request({ provider: rp, model: "opus", role: "worker", ticketPath: path7.join(tmp, "r1.md"), ticketId: "R1", ticketTitle: "R1", boardId: "b", payload: {}, agentSessionId: "aaaaaaaa-1111-2222-3333-444444444444", hidden: true });
+  const queuedOnly = await smA.request({ provider: { ...rp, maxParallel: 1 }, model: "opus", role: "worker", ticketPath: path7.join(tmp, "r2.md"), ticketId: "R2", ticketTitle: "R2", boardId: "b", payload: {} });
+  check(run1.status === "running" && queuedOnly.status === "queued", 'one session running, one queued before the "crash"');
+  t0 += 5 * 6e4;
+  const smB = new SessionManager((id) => rmap[id], new FakeLauncher(), new JsonFleetStore(storeFile), () => t0);
+  const back = smB.get(run1.id);
+  check(back.status === "interrupted" && back.interruptKind === "host-closed", "a session that was running comes back as interrupted (host-closed)");
+  check(back.agentSessionId === "aaaaaaaa-1111-2222-3333-444444444444" && back.hidden === true, "its agent conversation id and background flag survive");
+  check(smB.get(queuedOnly.id).interruptKind === "queued-lost", "a queued session is kept as interrupted too");
+  check(smB.resumable().length === 2 && smB.active().length === 0, 'both are resumable and nothing is falsely "running"');
+  smB.markResumed(run1.id, "new");
+  check(smB.resumable().length === 1, "once resumed, a session stops offering Resume");
+  smB.dismiss(queuedOnly.id);
+  check(smB.get(queuedOnly.id).status === "finished" && smB.resumable().length === 0, "Dismiss removes it from the recovery list");
+  const fresh = await smB.request({ provider: rp, model: "sonnet", role: "worker", ticketPath: path7.join(tmp, "r3.md"), ticketId: "R3", ticketTitle: "R3", boardId: "b", payload: {} });
+  smB.ended(fresh.id, void 0, void 0, true);
+  check(smB.get(fresh.id).status === "interrupted" && smB.get(fresh.id).interruptKind === "user-closed", 'a terminal closed without an exit code is "interrupted", never "finished"');
+  const fresh2 = await smB.request({ provider: rp, model: "sonnet", role: "worker", ticketPath: path7.join(tmp, "r4.md"), ticketId: "R4", ticketTitle: "R4", boardId: "b", payload: {} });
+  smB.shutdown();
+  check(smB.get(fresh2.id).interruptKind === "host-closed", "shutdown() marks live sessions host-closed");
+  check(new SessionManager((id) => rmap[id], new FakeLauncher(), new JsonFleetStore(storeFile), () => t0).get(fresh2.id).status === "interrupted", "shutdown state is persisted");
+  console.log("\n--- usage limits: detection ---");
+  const NOW = new Date(2026, 9, 23, 14, 0, 0).getTime();
+  const esc27 = String.fromCharCode(27);
+  const l1 = detectLimit("Claude AI usage limit reached|1760000000", ["opus"], NOW);
+  check(!!l1 && l1.resetAt === 176e10, "parses the epoch reset time Claude Code prints");
+  const l2 = detectLimit("You've hit your limit for Opus - resets 7pm (Europe/Stockholm)", ["opus", "sonnet"], NOW);
+  check(!!l2 && l2.model === "opus" && new Date(l2.resetAt).getHours() === 19 && l2.resetAt > NOW, 'parses "resets 7pm" to the next 19:00 and finds the model');
+  const l3 = detectLimit("Error: rate limit exceeded, try again in 2 hours 30 minutes", [], NOW);
+  check(!!l3 && l3.resetAt === NOW + 150 * 6e4, 'parses relative "in 2 hours 30 minutes"');
+  const l4 = detectLimit("HTTP error 429 Too Many Requests", [], NOW);
+  check(!!l4 && l4.resetAt === void 0, "detects a limit with no reset time");
+  const l5 = detectLimit(esc27 + "[31mQuota exceeded" + esc27 + "[0m for gemini-2.5-pro. Retry after 90s", ["gemini-2.5-pro"], NOW);
+  check(!!l5 && l5.model === "gemini-2.5-pro" && l5.resetAt === NOW + 9e4, 'strips ANSI colour codes and reads "retry after 90s"');
+  check(detectLimit("Compiled 429 files, no rate problems at all, all good", [], NOW) === null, "ordinary output (even containing 429) is not a limit");
+  check(!!detectAttention("Do you want to proceed? (y/n)") && !!detectAttention("Press Enter to continue") && detectAttention("Reading src/index.ts") === void 0, "detects prompts that need a human");
+  console.log("\n--- usage limits: block, fallback, wait ---");
+  const fclock = () => t0;
+  const claude = { ...createProvider("claude-code", []), id: "cc", name: "Claude", maxParallel: 2, maxSessionsPerWindow: 0, minSpacingSeconds: 0, models: ["opus", "sonnet", "haiku"], defaultModel: "opus" };
+  const gem = { ...createProvider("gemini", [{ id: "cc" }]), id: "gm", name: "Gemini", maxParallel: 2, maxSessionsPerWindow: 0, minSpacingSeconds: 0, models: ["gemini-2.5-pro", "gemini-2.5-flash"], defaultModel: "gemini-2.5-pro" };
+  const olla = { ...createProvider("ollama", []), id: "ol", name: "Ollama", models: ["llama3.2:3b"], defaultModel: "llama3.2:3b" };
+  const pm = { cc: claude, gm: gem, ol: olla };
+  const sm5 = new SessionManager((id) => pm[id], new FakeLauncher(), void 0, fclock);
+  const lim = await sm5.request({ provider: claude, model: "opus", role: "worker", ticketPath: path7.join(tmp, "l1.md"), ticketId: "L1", ticketTitle: "L1", boardId: "b", payload: {} });
+  const resetAt = t0 + 90 * 6e4;
+  sm5.limitHit(lim.id, { model: "opus", resetAt });
+  check(sm5.get(lim.id).status === "interrupted" && sm5.get(lim.id).interruptKind === "usage-limit" && sm5.get(lim.id).resumeAfter === resetAt, "limitHit interrupts the session and records the reset time");
+  check(!!sm5.modelBlock("cc", "opus") && !sm5.modelBlock("cc", "sonnet"), "only the limited model is blocked");
+  check(sm5.usage(claude).blockedModels.length === 1, "usage lists the blocked model");
+  check(sm5.canStart(claude).ok, "the provider itself stays usable through its other models");
+  check(modelTier(claude, "opus") === 5 && modelTier(claude, "sonnet") === 4 && modelTier(claude, "haiku") === 2, "tier heuristics: opus 5, sonnet 4, haiku 2");
+  check(modelTier(olla, "llama3.2:3b") === 1 && modelTier(olla, "qwen2.5-coder:32b") === 3, "tier heuristics use parameter count for local models");
+  check(modelTier({ ...claude, modelTiers: "haiku=3" }, "haiku") === 3, "per-provider tier overrides win");
+  const hard = mkTicket({ priority: "P0", type: "Architecture" });
+  const easy = mkTicket({ priority: "Low" });
+  check(requiredTier(hard) === 4 && requiredTier(easy) === 2, "critical/architecture tickets need tier 4, easy ones tier 2");
+  const fbEasy = pickFallback([claude, gem, olla], sm5, { providerId: "cc", model: "opus", role: "worker" }, easy, t0);
+  check(fbEasy.provider.id === "cc" && fbEasy.model === "haiku", "easy ticket: the weakest capable model (haiku) takes over, saving stronger ones");
+  const fbHard = pickFallback([claude, gem, olla], sm5, { providerId: "cc", model: "opus", role: "worker" }, hard, t0);
+  check(fbHard.tier >= 4 && fbHard.model === "sonnet", "hard ticket: sonnet (tier 4) is capable enough and takes over");
+  sm5.blockModel("cc", "sonnet", resetAt);
+  const fbHard2 = pickFallback([claude, gem, olla], sm5, { providerId: "cc", model: "opus", role: "worker" }, hard, t0);
+  check(fbHard2.provider.id === "gm" && fbHard2.model === "gemini-2.5-pro", "with sonnet also limited, another provider takes over");
+  sm5.blockModel("gm", "gemini-2.5-pro", resetAt);
+  check(pickFallback([claude, gem, olla], sm5, { providerId: "cc", model: "opus", role: "worker" }, hard, t0) === null, "no capable model left: no fallback (small local models never qualify)");
+  check(pickFallback([claude, gem], new SessionManager((id) => pm[id], new FakeLauncher(), void 0, fclock), { providerId: "cc", model: "haiku", role: "worker" }, hard, t0).tier >= 2, "a weak origin model only needs an equal-tier replacement");
+  sm5.blockModel("cc", "haiku", resetAt);
+  check(sm5.canStart(claude).state === "throttled" && sm5.canStart(claude).retryAt === resetAt, "when every model is limited the provider reports throttled with the reset time");
+  t0 = resetAt + 1e3;
+  check(sm5.canStart(claude).ok && sm5.blockedModels("cc").length === 0, "blocks expire at the reset time");
+  const unk = sm5.blockModel("gm", "gemini-2.5-flash");
+  check(unk.unknown === true && unk.until === t0 + 30 * 6e4, "an unknown reset is assumed ~30 min and re-probed");
+  const planModel = planWork([{ ticket: mkTicket({ path: path7.join(tmp, "pm.md") }), boardId: "b", boardRoot: tmp }], [claude], (() => {
+    const m = new SessionManager((id) => pm[id], new FakeLauncher(), void 0, fclock);
+    m.blockModel("cc", "opus", t0 + 6e4);
+    return m;
+  })(), { now: t0 });
+  check(planModel.length === 1 && planModel[0].model !== "opus", "the planner avoids a model that is at its limit");
+  fs5.rmSync(tmp, { recursive: true, force: true });
   if (failures) {
     console.error(`
 ${failures} fleet check(s) FAILED`);

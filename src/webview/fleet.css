@@ -29,6 +29,11 @@ label.inline { flex-direction: row; align-items: center; gap: 6px; font-size: 13
 .pill.ready, .pill.running, .pill.finished { background: rgba(63,185,80,.18); color: #3fb950; }
 .pill.busy, .pill.queued { background: rgba(88,166,255,.18); color: #58a6ff; }
 .pill.throttled, .pill.cooldown { background: rgba(210,153,34,.2); color: #d29922; }
+.pill.interrupted { background: rgba(210,153,34,.2); color: #d29922; }
+.pill.needs { background: rgba(248,81,73,.2); color: #f85149; }
+tr.attention td { background: rgba(248,81,73,.07); }
+.blocked { font-size: 11px; color: #d29922; margin-top: 3px; }
+.banner { display: flex; gap: 12px; align-items: center; padding: 10px 14px; margin: 12px 0; border-radius: 8px; border: 1px solid #d29922; background: rgba(210,153,34,.12); }
 .pill.disabled, .pill.cancelled { background: rgba(139,148,158,.2); color: #8b949e; }
 .pill.failed { background: rgba(248,81,73,.18); color: #f85149; }
 .meter { height: 7px; border-radius: 4px; background: var(--vscode-input-background); overflow: hidden; margin: 4px 0 2px; }

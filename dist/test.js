@@ -931,6 +931,7 @@ function escapeForDoubleQuotes(value, shell) {
 
 // src/agentRunner.ts
 var DEFAULT_TASK = "Review requirements and implement ticket {ticket_path}: {ticket_title}";
+var SESSION_ID_PATTERN = /^[0-9a-fA-F-]{8,64}$/;
 var MODEL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:\/@+-]*$/;
 function getVsCode() {
   try {
@@ -1042,6 +1043,7 @@ var AgentRunner = class {
       "{board_root}": esc(boardRoot),
       "{column}": esc(ticket.column),
       "{model}": model,
+      "{session_id}": options.sessionId && SESSION_ID_PATTERN.test(options.sessionId) ? options.sessionId : "",
       "{model_args}": modelArgs,
       "{agy_path}": agyPath,
       "{antigravity_path}": agyPath,
@@ -1067,7 +1069,13 @@ var AgentRunner = class {
     }
     command = command.replace(/\{[a-z_]+\}/g, (m) => m in replacements ? replacements[m] : m);
     command = command.replace(/ {2,}/g, " ").trim();
-    if (process.platform === "win32") {
+    const exePath = config.path || config.executable;
+    const first = command.match(/^([A-Za-z][\w.-]*)(?=\s|$)/);
+    if (exePath && first && path3.basename(exePath).replace(/\.[^.]+$/, "").toLowerCase() === first[1].toLowerCase()) {
+      const quoted = `"${exePath}"`;
+      command = (shell === "powershell" ? "& " : "") + quoted + command.slice(first[1].length);
+    }
+    if (process.platform === "win32" && shell === "powershell") {
       const trimmed = command.trim();
       if (trimmed.startsWith('"') && !trimmed.startsWith("&")) {
         command = "& " + trimmed;

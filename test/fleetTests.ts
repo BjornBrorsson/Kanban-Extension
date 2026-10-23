@@ -1,13 +1,16 @@
 import * as fs from 'fs';
 import * as os from 'os';
+import * as http from 'http';
 import * as path from 'path';
+import { findExecutable, parseOllamaList, detectOllamaModels } from '../src/fleet/detect';
 import { isInside, safeJoin, slugify } from '../src/pathUtils';
 import { escapeForDoubleQuotes, detectShellKind } from '../src/shellEscape';
 import { AgentRunner } from '../src/agentRunner';
 import { TicketParser } from '../src/ticketParser';
 import { Assignee, Ticket } from '../src/types';
 import { ProviderRegistry, createProvider, providerToAssignee, sanitizeProvider, AgentProvider } from '../src/fleet/providers';
-import { SessionLauncher, SessionManager, Session } from '../src/fleet/sessions';
+import { SessionLauncher, SessionManager, Session, JsonFleetStore } from '../src/fleet/sessions';
+import { detectLimit, detectAttention, modelTier, requiredTier, pickFallback } from '../src/fleet/limits';
 import { modelFor, pickReviewer, planWork, priorityRank } from '../src/fleet/scheduler';
 
 let failures = 0;
@@ -179,6 +182,131 @@ async function main() {
   check(plan.some(d => d.ticketId === 'L') === false || byId.L.startsNow === false, 'overflow work is marked as queued, not started');
   const rev = pickReviewer([{ ...p1, roles: ['worker', 'reviewer'] }, { ...p2, roles: ['worker', 'reviewer'] }], sm2, 'p1', now2);
   check(rev?.id === 'p2', 'reviewer prefers a different provider than the author');
+
+  console.log('\n--- auto-detect & ollama ---');
+  const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'bin-'));
+  const exeName = process.platform === 'win32' ? 'claude.cmd' : 'claude';
+  fs.writeFileSync(path.join(bin, exeName), process.platform === 'win32' ? '@echo off\r\n' : '#!/bin/sh\n');
+  const fakeEnv = { PATH: '', PATHEXT: '.CMD;.EXE' } as NodeJS.ProcessEnv;
+  check(findExecutable(['claude'], fakeEnv, [bin]) === path.join(bin, exeName), 'findExecutable finds a CLI in an extra install folder');
+  check(findExecutable(['claude'], { ...fakeEnv, PATH: bin }, []) === path.join(bin, exeName), 'findExecutable finds a CLI on PATH');
+  check(findExecutable(['definitely-not-installed-xyz'], fakeEnv, [bin]) === undefined, 'missing tools return undefined');
+  check(JSON.stringify(parseOllamaList('NAME  ID  SIZE  MODIFIED\nllama3.2:3b  abc  2 GB  1 day ago\nqwen2.5-coder:7b  def  4 GB  2 days ago\n')) === '["llama3.2:3b","qwen2.5-coder:7b"]', 'parses `ollama list` output');
+
+  const srv = http.createServer((req, res) => {
+    res.setHeader('content-type', 'application/json');
+    res.end(JSON.stringify({ models: [{ name: 'llama3.2:3b' }, { name: 'codestral:22b' }] }));
+  });
+  await new Promise<void>(r => srv.listen(0, '127.0.0.1', () => r()));
+  const port = (srv.address() as any).port;
+  const models = await detectOllamaModels(`127.0.0.1:${port}`);
+  srv.close();
+  check(models.length === 2 && models[0] === 'llama3.2:3b', 'detects models from the Ollama HTTP API');
+  check((await detectOllamaModels('127.0.0.1:1', path.join(bin, 'nonexistent'))).length === 0, 'unreachable Ollama yields an empty list, not an error');
+
+  const oreg = new ProviderRegistry(fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-')));
+  const addedP = oreg.addDetected([{ kind: 'ollama', path: path.join(bin, 'ollama.exe'), models: ['llama3.2:3b', 'codestral:22b'] }, { kind: 'claude-code', path: path.join(bin, exeName) }]);
+  const oll = addedP.find(p => p.kind === 'ollama')!;
+  check(addedP.length === 2 && oll.models.length === 2 && oll.defaultModel === 'llama3.2:3b' && oll.path!.includes('ollama'), 'addDetected creates providers with path and detected models');
+  check(oreg.addDetected([{ kind: 'ollama', path: 'x' }]).length === 0, 'addDetected does not duplicate an existing kind');
+  const keepPath = oreg.applyDetection(oll.id, { kind: 'ollama', path: 'other', models: ['phi4:14b'] })!;
+  check(keepPath.path === oll.path && keepPath.defaultModel === 'phi4:14b', 'applyDetection keeps an existing path and fixes the default model');
+
+  const ollCmd = AgentRunner.formatCliCommand(mkTicket({ title: 'Say hi' }), providerToAssignee({ ...oll, path: undefined }), os.tmpdir(), undefined, 'b', { shell: 'posix', model: 'llama3.2:3b', modelFlag: oll.modelFlag });
+  check(ollCmd.startsWith('ollama run llama3.2:3b "'), 'ollama preset builds `ollama run <model> "<task>"`');
+  const viaPath = AgentRunner.formatCliCommand(mkTicket(), providerToAssignee({ ...oll, path: 'C:/Tools/ollama.exe' }), os.tmpdir(), undefined, 'b', { shell: 'powershell', model: 'm' });
+  check(viaPath.startsWith('& "C:/Tools/ollama.exe" run m'), 'a detected path replaces the bare tool name (PATH-independent)');
+  const noSwap = AgentRunner.formatCliCommand(mkTicket(), { id: 'x', name: 'X', type: 'agent', agentConfig: { type: 'cli', command: 'othertool "{ticket_title}"', path: 'C:/Tools/ollama.exe' } }, os.tmpdir(), undefined, 'b', { shell: 'posix' });
+  check(noSwap.startsWith('othertool '), 'path is only substituted when it matches the command\'s tool name');
+  const sm3 = new SessionManager(() => undefined, new FakeLauncher(), undefined, () => 1);
+  check(planWork([{ ticket: mkTicket({ path: path.join(tmp, 'o.md') }), boardId: 'b', boardRoot: tmp }], [oll], sm3, { now: 1 }).length === 0, 'autopilot never hands tickets to answer-only Ollama');
+
+  console.log('\n--- recovery: persisted sessions survive a restart ---');
+  const storeFile = path.join(tmp, 'fleet-usage.json');
+  let t0 = 10_000_000;
+  const rp: AgentProvider = { ...createProvider('claude-code', []), id: 'rp', name: 'RP', maxParallel: 3, maxSessionsPerWindow: 0, minSpacingSeconds: 0, models: ['opus', 'sonnet', 'haiku'], defaultModel: 'opus' } as AgentProvider;
+  const rmap: Record<string, AgentProvider> = { rp };
+  const smA = new SessionManager(id => rmap[id], new FakeLauncher(), new JsonFleetStore(storeFile), () => t0);
+  const run1 = await smA.request({ provider: rp, model: 'opus', role: 'worker', ticketPath: path.join(tmp, 'r1.md'), ticketId: 'R1', ticketTitle: 'R1', boardId: 'b', payload: {}, agentSessionId: 'aaaaaaaa-1111-2222-3333-444444444444', hidden: true });
+  const queuedOnly = await smA.request({ provider: { ...rp, maxParallel: 1 }, model: 'opus', role: 'worker', ticketPath: path.join(tmp, 'r2.md'), ticketId: 'R2', ticketTitle: 'R2', boardId: 'b', payload: {} });
+  check(run1.status === 'running' && queuedOnly.status === 'queued', 'one session running, one queued before the "crash"');
+  // simulate PC/editor dying: a brand-new manager reads the same store without any shutdown call
+  t0 += 5 * 60_000;
+  const smB = new SessionManager(id => rmap[id], new FakeLauncher(), new JsonFleetStore(storeFile), () => t0);
+  const back = smB.get(run1.id)!;
+  check(back.status === 'interrupted' && back.interruptKind === 'host-closed', 'a session that was running comes back as interrupted (host-closed)');
+  check(back.agentSessionId === 'aaaaaaaa-1111-2222-3333-444444444444' && back.hidden === true, 'its agent conversation id and background flag survive');
+  check(smB.get(queuedOnly.id)!.interruptKind === 'queued-lost', 'a queued session is kept as interrupted too');
+  check(smB.resumable().length === 2 && smB.active().length === 0, 'both are resumable and nothing is falsely "running"');
+  smB.markResumed(run1.id, 'new');
+  check(smB.resumable().length === 1, 'once resumed, a session stops offering Resume');
+  smB.dismiss(queuedOnly.id);
+  check(smB.get(queuedOnly.id)!.status === 'finished' && smB.resumable().length === 0, 'Dismiss removes it from the recovery list');
+  const fresh = await smB.request({ provider: rp, model: 'sonnet', role: 'worker', ticketPath: path.join(tmp, 'r3.md'), ticketId: 'R3', ticketTitle: 'R3', boardId: 'b', payload: {} });
+  smB.ended(fresh.id, undefined, undefined, true);
+  check(smB.get(fresh.id)!.status === 'interrupted' && smB.get(fresh.id)!.interruptKind === 'user-closed', 'a terminal closed without an exit code is "interrupted", never "finished"');
+  const fresh2 = await smB.request({ provider: rp, model: 'sonnet', role: 'worker', ticketPath: path.join(tmp, 'r4.md'), ticketId: 'R4', ticketTitle: 'R4', boardId: 'b', payload: {} });
+  smB.shutdown();
+  check(smB.get(fresh2.id)!.interruptKind === 'host-closed', 'shutdown() marks live sessions host-closed');
+  check(new SessionManager(id => rmap[id], new FakeLauncher(), new JsonFleetStore(storeFile), () => t0).get(fresh2.id)!.status === 'interrupted', 'shutdown state is persisted');
+
+  console.log('\n--- usage limits: detection ---');
+  const NOW = new Date(2026, 9, 23, 14, 0, 0).getTime();
+  const esc27 = String.fromCharCode(27);
+  const l1 = detectLimit('Claude AI usage limit reached|1760000000', ['opus'], NOW);
+  check(!!l1 && l1.resetAt === 1760000000000, 'parses the epoch reset time Claude Code prints');
+  const l2 = detectLimit("You've hit your limit for Opus - resets 7pm (Europe/Stockholm)", ['opus', 'sonnet'], NOW);
+  check(!!l2 && l2.model === 'opus' && new Date(l2.resetAt!).getHours() === 19 && l2.resetAt! > NOW, 'parses "resets 7pm" to the next 19:00 and finds the model');
+  const l3 = detectLimit('Error: rate limit exceeded, try again in 2 hours 30 minutes', [], NOW);
+  check(!!l3 && l3.resetAt === NOW + 150 * 60_000, 'parses relative "in 2 hours 30 minutes"');
+  const l4 = detectLimit('HTTP error 429 Too Many Requests', [], NOW);
+  check(!!l4 && l4.resetAt === undefined, 'detects a limit with no reset time');
+  const l5 = detectLimit(esc27 + '[31mQuota exceeded' + esc27 + '[0m for gemini-2.5-pro. Retry after 90s', ['gemini-2.5-pro'], NOW);
+  check(!!l5 && l5.model === 'gemini-2.5-pro' && l5.resetAt === NOW + 90_000, 'strips ANSI colour codes and reads "retry after 90s"');
+  check(detectLimit('Compiled 429 files, no rate problems at all, all good', [], NOW) === null, 'ordinary output (even containing 429) is not a limit');
+  check(!!detectAttention('Do you want to proceed? (y/n)') && !!detectAttention('Press Enter to continue') && detectAttention('Reading src/index.ts') === undefined, 'detects prompts that need a human');
+
+  console.log('\n--- usage limits: block, fallback, wait ---');
+  const fclock = () => t0;
+  const claude: AgentProvider = { ...createProvider('claude-code', []), id: 'cc', name: 'Claude', maxParallel: 2, maxSessionsPerWindow: 0, minSpacingSeconds: 0, models: ['opus', 'sonnet', 'haiku'], defaultModel: 'opus' } as AgentProvider;
+  const gem: AgentProvider = { ...createProvider('gemini', [{ id: 'cc' } as any]), id: 'gm', name: 'Gemini', maxParallel: 2, maxSessionsPerWindow: 0, minSpacingSeconds: 0, models: ['gemini-2.5-pro', 'gemini-2.5-flash'], defaultModel: 'gemini-2.5-pro' } as AgentProvider;
+  const olla: AgentProvider = { ...createProvider('ollama', []), id: 'ol', name: 'Ollama', models: ['llama3.2:3b'], defaultModel: 'llama3.2:3b' } as AgentProvider;
+  const pm: Record<string, AgentProvider> = { cc: claude, gm: gem, ol: olla };
+  const sm5 = new SessionManager(id => pm[id], new FakeLauncher(), undefined, fclock);
+  const lim = await sm5.request({ provider: claude, model: 'opus', role: 'worker', ticketPath: path.join(tmp, 'l1.md'), ticketId: 'L1', ticketTitle: 'L1', boardId: 'b', payload: {} });
+  const resetAt = t0 + 90 * 60_000;
+  sm5.limitHit(lim.id, { model: 'opus', resetAt });
+  check(sm5.get(lim.id)!.status === 'interrupted' && sm5.get(lim.id)!.interruptKind === 'usage-limit' && sm5.get(lim.id)!.resumeAfter === resetAt, 'limitHit interrupts the session and records the reset time');
+  check(!!sm5.modelBlock('cc', 'opus') && !sm5.modelBlock('cc', 'sonnet'), 'only the limited model is blocked');
+  check(sm5.usage(claude).blockedModels.length === 1, 'usage lists the blocked model');
+  check(sm5.canStart(claude).ok, 'the provider itself stays usable through its other models');
+
+  check(modelTier(claude, 'opus') === 5 && modelTier(claude, 'sonnet') === 4 && modelTier(claude, 'haiku') === 2, 'tier heuristics: opus 5, sonnet 4, haiku 2');
+  check(modelTier(olla, 'llama3.2:3b') === 1 && modelTier(olla, 'qwen2.5-coder:32b') === 3, 'tier heuristics use parameter count for local models');
+  check(modelTier({ ...claude, modelTiers: 'haiku=3' } as AgentProvider, 'haiku') === 3, 'per-provider tier overrides win');
+  const hard = mkTicket({ priority: 'P0', type: 'Architecture' });
+  const easy = mkTicket({ priority: 'Low' });
+  check(requiredTier(hard) === 4 && requiredTier(easy) === 2, 'critical/architecture tickets need tier 4, easy ones tier 2');
+
+  const fbEasy = pickFallback([claude, gem, olla], sm5, { providerId: 'cc', model: 'opus', role: 'worker' }, easy, t0)!;
+  check(fbEasy.provider.id === 'cc' && fbEasy.model === 'haiku', 'easy ticket: the weakest capable model (haiku) takes over, saving stronger ones');
+  const fbHard = pickFallback([claude, gem, olla], sm5, { providerId: 'cc', model: 'opus', role: 'worker' }, hard, t0)!;
+  check(fbHard.tier >= 4 && fbHard.model === 'sonnet', 'hard ticket: sonnet (tier 4) is capable enough and takes over');
+  sm5.blockModel('cc', 'sonnet', resetAt);
+  const fbHard2 = pickFallback([claude, gem, olla], sm5, { providerId: 'cc', model: 'opus', role: 'worker' }, hard, t0)!;
+  check(fbHard2.provider.id === 'gm' && fbHard2.model === 'gemini-2.5-pro', 'with sonnet also limited, another provider takes over');
+  sm5.blockModel('gm', 'gemini-2.5-pro', resetAt);
+  check(pickFallback([claude, gem, olla], sm5, { providerId: 'cc', model: 'opus', role: 'worker' }, hard, t0) === null, 'no capable model left: no fallback (small local models never qualify)');
+  check(pickFallback([claude, gem], new SessionManager(id => pm[id], new FakeLauncher(), undefined, fclock), { providerId: 'cc', model: 'haiku', role: 'worker' }, hard, t0)!.tier >= 2, 'a weak origin model only needs an equal-tier replacement');
+
+  sm5.blockModel('cc', 'haiku', resetAt);
+  check(sm5.canStart(claude).state === 'throttled' && sm5.canStart(claude).retryAt === resetAt, 'when every model is limited the provider reports throttled with the reset time');
+  t0 = resetAt + 1000;
+  check(sm5.canStart(claude).ok && sm5.blockedModels('cc').length === 0, 'blocks expire at the reset time');
+  const unk = sm5.blockModel('gm', 'gemini-2.5-flash');
+  check(unk.unknown === true && unk.until === t0 + 30 * 60_000, 'an unknown reset is assumed ~30 min and re-probed');
+  const planModel = planWork([{ ticket: mkTicket({ path: path.join(tmp, 'pm.md') }), boardId: 'b', boardRoot: tmp }], [claude], (() => { const m = new SessionManager(id => pm[id], new FakeLauncher(), undefined, fclock); m.blockModel('cc', 'opus', t0 + 60_000); return m; })(), { now: t0 });
+  check(planModel.length === 1 && planModel[0].model !== 'opus', 'the planner avoids a model that is at its limit');
 
   fs.rmSync(tmp, { recursive: true, force: true });
   if (failures) {

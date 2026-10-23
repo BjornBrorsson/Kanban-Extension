@@ -19,6 +19,11 @@ export async function activate(context: vscode.ExtensionContext) {
   // Agent providers, session tracking and the orchestrator. Legacy config.md agents are imported once.
   const fleet = FleetController.init(context);
   fleet.seedFromBoards(boardManager.getAllBoards());
+  // First run: find installed agent CLIs and local models so the Agents screen is not empty.
+  // (Providers you deleted are not re-added later: after first run only empty paths/models are filled.)
+  void fleet.autoDetect(fleet.registry.isEmpty()).then(r => {
+    if (r.added) vscode.window.showInformationMessage(r.summary + ' Open "Agents" to review.');
+  }).catch(() => undefined);
 
   // 2. Setup filesystem watcher for markdown files
   boardManager.setupWatchers(context);

@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { Assignee } from '../types';
+import type { Detection } from './detect';
 
 export type ProviderKind =
   | 'claude-code'
@@ -11,6 +12,7 @@ export type ProviderKind =
   | 'aider'
   | 'copilot-cli'
   | 'cline'
+  | 'ollama'
   | 'ide-chat'
   | 'custom';
 
@@ -27,6 +29,13 @@ export interface AgentProvider {
   type: 'cli' | 'vscode-command';
   /** Command template. Placeholders: {task} {ticket_path} {ticket_title} {model} {model_args} ... ({task} = implement/review/plan instruction) */
   command: string;
+  /**
+   * Optional command used to continue an interrupted conversation (placeholders as above plus {session_id}).
+   * Without it, a resume re-runs `command` with a recovery prompt that tells the agent to check the ticket and git state.
+   */
+  resumeCommand?: string;
+  /** Optional capability overrides for failover, e.g. "opus=5, sonnet=4, haiku=2" (1 = small, 5 = frontier). */
+  modelTiers?: string;
   /** Flag used to build {model_args}; if the template uses neither {model} nor {model_args}, it is appended. */
   modelFlag?: string;
   workingDir?: string;
@@ -51,6 +60,7 @@ export interface ProviderPreset {
   label: string;
   type: 'cli' | 'vscode-command';
   command: string;
+  resumeCommand?: string;
   modelFlag?: string;
   models: string[];
   defaultModel: string;
@@ -64,7 +74,8 @@ export interface ProviderPreset {
 export const PROVIDER_PRESETS: ProviderPreset[] = [
   {
     kind: 'claude-code', label: 'Claude Code', type: 'cli',
-    command: `claude {model_args} -p "{task}"`, modelFlag: '--model',
+    command: `claude {model_args} --session-id {session_id} -p "{task}"`, modelFlag: '--model',
+    resumeCommand: `claude {model_args} --resume {session_id} -p "{task}"`,
     models: ['opus', 'sonnet', 'haiku'], defaultModel: 'sonnet',
     maxParallel: 3, maxSessionsPerWindow: 40, windowMinutes: 300, minSpacingSeconds: 10
   },
@@ -95,6 +106,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
   {
     kind: 'aider', label: 'Aider', type: 'cli',
     command: 'aider {model_args} --message "Implement ticket requirements in {ticket_path}" "{ticket_path}"', modelFlag: '--model',
+    resumeCommand: 'aider {model_args} --restore-chat-history --message "{task}" "{ticket_path}"',
     models: [], defaultModel: '',
     maxParallel: 2, maxSessionsPerWindow: 0, windowMinutes: 60, minSpacingSeconds: 5
   },
@@ -109,6 +121,13 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     command: `cline {model_args} "{task}"`, modelFlag: '-m',
     models: [], defaultModel: '',
     maxParallel: 2, maxSessionsPerWindow: 0, windowMinutes: 60, minSpacingSeconds: 5
+  },
+  {
+    // Local models. `ollama run` answers/chats but cannot edit files; use Aider/Cline pointed at Ollama for coding.
+    kind: 'ollama', label: 'Ollama (local)', type: 'cli',
+    command: 'ollama run {model} "{task}"',
+    models: [], defaultModel: '',
+    maxParallel: 1, maxSessionsPerWindow: 0, windowMinutes: 60, minSpacingSeconds: 0
   },
   {
     kind: 'ide-chat', label: 'IDE Chat (Copilot / Cursor / Antigravity)', type: 'vscode-command',
@@ -136,6 +155,7 @@ const LEGACY_ID_TO_KIND: Record<string, ProviderKind> = {
   aider: 'aider',
   'ide-chat': 'ide-chat',
   codex: 'codex', 'codex-cli': 'codex',
+  ollama: 'ollama',
   'copilot-cli': 'copilot-cli',
   'cline-ollama': 'cline', cline: 'cline'
 };
@@ -166,6 +186,8 @@ export function sanitizeProvider(raw: any, existingIds: string[] = []): AgentPro
     enabled: raw?.enabled !== false,
     type: raw?.type === 'vscode-command' ? 'vscode-command' : (raw?.type === 'cli' ? 'cli' : preset.type),
     command: String(raw?.command ?? preset.command),
+    modelTiers: raw?.modelTiers ? String(raw.modelTiers).slice(0, 400) : undefined,
+    resumeCommand: raw?.resumeCommand !== undefined ? (String(raw.resumeCommand).trim() || undefined) : preset.resumeCommand,
     modelFlag: raw?.modelFlag !== undefined ? String(raw.modelFlag).trim() || undefined : preset.modelFlag,
     workingDir: raw?.workingDir ? String(raw.workingDir) : undefined,
     path: raw?.path ? String(raw.path) : undefined,
@@ -198,7 +220,7 @@ export function createProvider(kind: ProviderKind, existing: AgentProvider[], na
     kind,
     name: name || (sameKind ? `${preset.label} ${sameKind + 1}` : preset.label),
     models: preset.models.slice(),
-    roles: kind === 'ide-chat' ? ['worker'] : ['worker', 'reviewer']
+    roles: kind === 'ide-chat' || kind === 'ollama' ? ['worker'] : ['worker', 'reviewer']
   }, ids);
 }
 
@@ -249,6 +271,17 @@ export function providerToAssignee(p: AgentProvider): Assignee {
   };
 }
 
+const OLD_CLAUDE_COMMAND = 'claude {model_args} -p "{task}"';
+
+/** Upgrades providers saved by earlier versions (e.g. adds resumable Claude Code sessions). */
+export function migrateProvider(raw: any): any {
+  if (raw?.kind === 'claude-code' && raw.command === OLD_CLAUDE_COMMAND) {
+    const preset = getPreset('claude-code');
+    return { ...raw, command: preset.command, resumeCommand: raw.resumeCommand || preset.resumeCommand };
+  }
+  return raw;
+}
+
 /** Persists providers in `<root>/.agentic-kanban/providers.json`. */
 export class ProviderRegistry {
   private providers: AgentProvider[] = [];
@@ -268,7 +301,7 @@ export class ProviderRegistry {
       const list: any[] = Array.isArray(raw) ? raw : raw?.providers || [];
       const ids: string[] = [];
       this.providers = list.map(r => {
-        const p = sanitizeProvider(r, ids);
+        const p = sanitizeProvider(migrateProvider(r), ids);
         ids.push(p.id);
         return p;
       });
@@ -324,6 +357,32 @@ export class ProviderRegistry {
     this.providers = this.providers.filter(p => p.id !== id);
     if (this.providers.length !== before) { this.save(); return true; }
     return false;
+  }
+
+  /** Applies a detection result to one provider: fills a missing path, and refreshes models for Ollama. */
+  public applyDetection(id: string, d: Detection): AgentProvider | undefined {
+    const p = this.providers.find(x => x.id === id);
+    if (!p) return undefined;
+    const next: any = { ...p };
+    if (d.path && !p.path) next.path = d.path;
+    if (d.models && d.models.length) {
+      next.models = d.models;
+      if (!d.models.includes(p.defaultModel)) next.defaultModel = d.models[0];
+    }
+    return this.upsert(next);
+  }
+
+  /** Adds a provider for every detected tool that has none yet. Returns the new providers. */
+  public addDetected(found: Detection[]): AgentProvider[] {
+    const added: AgentProvider[] = [];
+    for (const d of found) {
+      if (this.providers.some(p => p.kind === d.kind)) continue;
+      const p = createProvider(d.kind, this.providers);
+      this.providers.push(p);
+      added.push(this.applyDetection(p.id, d) || p);
+    }
+    if (added.length) this.save();
+    return added;
   }
 
   public seedFromAssignees(assignees: Assignee[]): number {

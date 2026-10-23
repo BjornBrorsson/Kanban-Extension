@@ -36,9 +36,9 @@ export function priorityRank(priority: string | undefined): number {
   return m ? PRIORITY_RANK[m[1]] : 2;
 }
 
-/** Providers the scheduler may drive on its own: CLI agents that are enabled and allowed to work. */
+/** Providers the scheduler may drive on its own: CLI agents that are enabled and allowed to work (Ollama only answers, it cannot edit files). */
 export function automatableWorkers(providers: AgentProvider[]): AgentProvider[] {
-  return providers.filter(p => p.enabled && p.type === 'cli' && p.roles.includes('worker'));
+  return providers.filter(p => p.enabled && p.type === 'cli' && p.kind !== 'ollama' && p.roles.includes('worker'));
 }
 
 /** `model:opus` label on a ticket overrides the provider default (if the provider lists that model). */
@@ -50,6 +50,12 @@ export function modelFor(provider: AgentProvider, ticket: Ticket): string {
     if (hit) return hit;
   }
   return provider.defaultModel;
+}
+
+/** If the wanted model is at its usage limit, use another model of the same provider that is not. */
+export function availableModel(provider: AgentProvider, wanted: string, sessions: SessionManager, now: number): string {
+  if (!wanted || !sessions.modelBlock(provider.id, wanted, now)) return wanted;
+  return provider.models.find(m => !sessions.modelBlock(provider.id, m, now)) ?? wanted;
 }
 
 export function matchProvider(providers: AgentProvider[], assignee: string | null | undefined): AgentProvider | undefined {
@@ -112,7 +118,7 @@ export function planWork(
       boardId: c.boardId,
       providerId: chosen.id,
       providerName: chosen.name,
-      model: modelFor(chosen, t),
+      model: availableModel(chosen, modelFor(chosen, t), sessions, now),
       startsNow,
       reason: startsNow ? reason : `${reason} — will queue (${sessions.canStart(chosen, now).reason || 'at capacity'})`
     });

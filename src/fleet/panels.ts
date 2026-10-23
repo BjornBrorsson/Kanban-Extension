@@ -69,6 +69,16 @@ export class FleetPanel {
         case 'addProvider':
           fleet.registry.add(m.kindId as ProviderKind);
           break;
+        case 'detectAll': {
+          const r = await fleet.autoDetect();
+          vscode.window.showInformationMessage(r.summary);
+          break;
+        }
+        case 'detectProvider': {
+          const r = await fleet.detectFor(m.id);
+          vscode.window.showInformationMessage(r);
+          break;
+        }
         case 'duplicateProvider':
           fleet.registry.duplicate(m.id);
           break;
@@ -103,6 +113,17 @@ export class FleetPanel {
           break;
         case 'cancelSession':
           fleet.sessions.cancel(m.id);
+          break;
+        case 'resumeSession':
+          await fleet.resumeSession(m.id, m.mode === 'restart' ? 'restart' : 'resume');
+          break;
+        case 'resumeAll': {
+          const n = await fleet.resumeAll();
+          vscode.window.showInformationMessage(n ? `Resumed ${n} session(s).` : 'Nothing to resume.');
+          break;
+        }
+        case 'dismissSession':
+          fleet.sessions.dismiss(m.id);
           break;
         case 'markFinished':
           fleet.sessions.markFinished(m.id);
