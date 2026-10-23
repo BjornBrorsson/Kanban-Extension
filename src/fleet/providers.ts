@@ -35,6 +35,10 @@ export interface AgentProvider {
    * Without it, a resume re-runs `command` with a recovery prompt that tells the agent to check the ticket and git state.
    */
   resumeCommand?: string;
+  /** How the agent decides tool permissions when nobody can answer prompts (unattended -p runs), e.g. devin: smart. '' = the agent's default. */
+  permissionMode: string;
+  /** CLI flag for that (e.g. --permission-mode). */
+  permissionFlag?: string;
   /** Flag added to the command for sessions in a workspace you marked trusted (e.g. devin: --respect-workspace-trust false). */
   trustFlag?: string;
   /** Default reasoning level ('' = the model's own default). The orchestrator moves up or down from here per task. */
@@ -81,6 +85,7 @@ export interface ProviderPreset {
   modelFlag?: string;
   effortFlag?: string;
   trustFlag?: string;
+  permissionFlag?: string;
   models: string[];
   defaultModel: string;
   maxParallel: number;
@@ -100,7 +105,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
   },
   {
     kind: 'devin', label: 'Devin', type: 'cli',
-    command: `devin {model_args} -p "{task}"`, modelFlag: '--model', trustFlag: '--respect-workspace-trust false',
+    command: `devin {model_args} -p "{task}"`, modelFlag: '--model', trustFlag: '--respect-workspace-trust false', permissionFlag: '--permission-mode',
     models: [], defaultModel: '',
     maxParallel: 2, maxSessionsPerWindow: 0, windowMinutes: 60, minSpacingSeconds: 30
   },
@@ -215,6 +220,8 @@ export function sanitizeProvider(raw: any, existingIds: string[] = []): AgentPro
     type: raw?.type === 'vscode-command' ? 'vscode-command' : (raw?.type === 'cli' ? 'cli' : preset.type),
     command: String(raw?.command ?? preset.command),
     defaultReasoning: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'].includes(String(raw?.defaultReasoning)) ? String(raw.defaultReasoning) : '',
+    permissionMode: /^[a-z][a-z-]{0,20}$/.test(String(raw?.permissionMode || '')) ? String(raw.permissionMode) : '',
+    permissionFlag: raw?.permissionFlag !== undefined ? (String(raw.permissionFlag).trim() || undefined) : getPreset(kind).permissionFlag,
     trustFlag: raw?.trustFlag !== undefined ? (String(raw.trustFlag).trim() || undefined) : getPreset(kind).trustFlag,
     effortFlag: raw?.effortFlag !== undefined ? (String(raw.effortFlag).trim() || undefined) : getPreset(kind).effortFlag,
     pinnedModels: Array.isArray(raw?.pinnedModels) ? raw.pinnedModels.map((m: any) => String(m).trim()).filter(Boolean) : [],

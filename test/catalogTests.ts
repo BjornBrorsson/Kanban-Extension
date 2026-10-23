@@ -294,6 +294,30 @@ async function main() {
   const otherFusion = combos.find(c => c.outPerM !== undefined && c.outPerM !== 20 && c.outPerM !== undefined)!;
   check(fCat.pricingFor('devin', otherFusion.id)?.outPerM === otherFusion.outPerM, 'each fusion id is priced by its own listing, not the family average');
 
+  console.log('\n--- capability floor and model labels (the ATF run) ---');
+  const mk2 = (id: string, pr?: { in: number; out: number }) => ({ id, pricing: pr ? { inPerM: pr.in, outPerM: pr.out, source: 'listed' as const } : undefined });
+  const tierRaw: RawFile = { providerId: 'dv', providerName: 'Devin', kind: 'devin', fetchedAt: 1, source: 'command', command: '', ok: true, models: [
+    { ...mk2('gpt-6-luna-medium', { in: 0.1, out: 0.5 }), family: 'gpt-6-luna' }, { ...mk2('claude-haiku-5-5-medium', { in: 0.1, out: 0.5 }), family: 'claude-haiku-5.5' },
+    { ...mk2('claude-sonnet-5-5-medium', { in: 2, out: 10 }), family: 'claude-sonnet-5.5' }, { ...mk2('claude-opus-5-5-medium', { in: 4, out: 20 }), family: 'claude-opus-5.5' },
+    { id: 'swe-2-medium', family: 'swe-2', pricing: { free: true, source: 'listed' } }] };
+  const tierCat = curate([tierRaw]);
+  const tierOf = (id: string) => tierCat.models.find(m => m.id === id)!.tier;
+  check(tierOf('gpt-6-luna-medium') === 2 && tierOf('claude-haiku-5-5-medium') === 2, 'cheap "new generation" models (GPT-6 Luna, Haiku) are fast-tier, not strong');
+  check(tierOf('claude-sonnet-5-5-medium') === 4 && tierOf('claude-opus-5-5-medium') === 5 && tierOf('swe-2-medium') === 3, 'sonnet 4, opus 5, free SWE-2 3');
+  const tProv: AgentProvider = { ...createProvider('devin', []), id: 'dv', name: 'Devin', agentic: true, maxParallel: 5, minSpacingSeconds: 0, maxSessionsPerWindow: 0, defaultReasoning: '' } as AgentProvider;
+  const tIdx = new CatalogIndex(tierCat);
+  const tSm = new SessionManager(() => tProv, new NullLauncher(), storeWith({}), () => clockNow);
+  const plain = mkTicket({ priority: 'Normal', estimate: 'M' });
+  const openFloor = rankOptions(plain, [tProv], tSm, { catalog: tIdx, speed: new SpeedBook(), now: clockNow, minTier: 1 });
+  check(openFloor.some(o => o.tier === 2), 'with no floor a tier-2 model can be picked for an ordinary ticket');
+  const floored = rankOptions(plain, [tProv], tSm, { catalog: tIdx, speed: new SpeedBook(), now: clockNow, minTier: 3 });
+  check(floored.length > 0 && floored.every(o => o.tier >= 3), 'a minimum tier of 3 keeps Haiku / Luna out of ordinary tickets');
+  check(floored.some(o => o.model.startsWith('swe-2')), 'free SWE-2 stays eligible at tier 3');
+  const labelled = rankOptions(mkTicket({ labels: ['model:opus'] }), [tProv], tSm, { catalog: tIdx, speed: new SpeedBook(), now: clockNow, minTier: 3 });
+  check(labelled.length > 0 && labelled.every(o => /opus/.test(o.model)), 'a model:opus label restricts the choice to Opus');
+  const unknownLabel = rankOptions(mkTicket({ labels: ['model:nonexistent'] }), [tProv], tSm, { catalog: tIdx, speed: new SpeedBook(), now: clockNow, minTier: 3 });
+  check(unknownLabel.length > 1, 'a label matching no model is ignored instead of blocking the ticket');
+
   fs.rmSync(tmp, { recursive: true, force: true });
   if (failures) { console.error(`\n${failures} catalog check(s) FAILED`); process.exit(1); }
   console.log('\n=== All catalog tests passed ===');

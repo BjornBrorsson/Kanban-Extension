@@ -41,6 +41,8 @@
     const every = el('input', { type: 'number', min: 10, max: 3600, value: s.intervalSeconds, style: 'width:70px', onchange: () => save({ intervalSeconds: +every.value }) });
     const per = el('input', { type: 'number', min: 1, max: 20, value: s.maxNewPerTick, style: 'width:56px', onchange: () => save({ maxNewPerTick: +per.value }) });
 
+    const tierSel = el('select', { onchange: () => save({ minTier: +tierSel.value }), title: 'Models weaker than this are never picked automatically (1 small - 5 frontier)' },
+      [[1, '1 any'], [2, '2 fast'], [3, '3 balanced'], [4, '4 strong'], [5, '5 frontier']].map(([v, t]) => el('option', { value: v, text: t, selected: v === (s.minTier || 3) })));
     const resume = el('input', { type: 'checkbox', onchange: () => save({ autoResume: resume.checked }) });
     resume.checked = s.autoResume;
     const retries = el('input', { type: 'number', min: 0, max: 10, value: s.maxAutoRetries, style: 'width:56px', onchange: () => save({ maxAutoRetries: +retries.value }) });
@@ -53,7 +55,7 @@
     bg.checked = s.backgroundTerminals;
 
     return el('div', {},
-      el('div', { class: 'bar-row' }, el('label', { class: 'inline' }, el('b', { text: 'Optimise for' }), objSel,
+      el('div', { class: 'bar-row' }, el('label', { class: 'inline' }, el('b', { text: 'Minimum model tier' }), tierSel), el('label', { class: 'inline' }, el('b', { text: 'Optimise for' }), objSel,
         el('span', { class: 'note', text: 'predicted time + cost + how scarce each provider\'s quota is' }))),
       el('div', { class: 'bar-row' },
         el('label', { class: 'inline', title: 'When a model hits its usage limit: continue on another capable model, or wait for the reset' }, failover, el('b', { text: 'Usage-limit failover' })),
@@ -146,6 +148,9 @@
           el('td', {}, el('a', { class: 'link', text: (s.ticketId ? s.ticketId + ' — ' : '') + s.ticketTitle, onclick: () => send('openTicket', { path: s.ticketPath }) }),
             s.note ? el('div', { class: 'note', text: s.note }) : null,
             s.attention ? el('div', { class: 'note', style: 'color:#f85149', text: s.attention }) : null,
+            s.outcome ? el('details', {}, el('summary', { class: 'note', text: 'Result' }), el('div', { class: 'note', text: s.outcome }),
+              s.changedFiles && s.changedFiles.length ? el('div', { class: 'note', text: 'Files touched: ' + s.changedFiles.slice(0, 8).join(', ') + (s.changedFiles.length > 8 ? ' (+' + (s.changedFiles.length - 8) + ' more)' : '') }) : null,
+              s.logFile ? el('a', { class: 'link', text: 'Open full output', onclick: () => send('openFile', { path: s.logFile }) }) : null) : null,
             s.resumeAfter && recoverable(s) ? el('div', { class: 'note', text: 'Auto-continues after ' + new Date(s.resumeAfter).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }) : null),
           el('td', { 'data-since': live ? since : '', text: live ? dur(state.now - since) : (s.endedAt && s.startedAt ? dur(s.endedAt - s.startedAt) : '') }),
           el('td', { class: 'actions' },

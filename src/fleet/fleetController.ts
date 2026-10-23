@@ -9,7 +9,8 @@ import { AgentProvider, ProviderRegistry, ProviderRole, providerToAssignee } fro
 import { JsonFleetStore, ProviderUsage, Session, SessionLauncher, SessionManager } from './sessions';
 import { detectAll, detectOne } from './detect';
 import { claim, findMessageBoard, readClaims, release } from './messageBoard';
-import { FatalInfo, LimitInfo, detectAttention, detectFatal, detectLimit, pickFallback } from './limits';
+import { FatalInfo, LimitInfo, countPermissionDenials, detectAttention, detectFatal, detectLimit, pickFallback, stripAnsi } from './limits';
+import { appendWorkLog, changedSince, formatWorkLogEntry, gitStatusSet, summarizeOutput, writeSessionLog } from './outcome';
 import { findForKind } from './detect';
 import { addCopilotTrustedFolder, copilotTrusts, isTrusted, removeCopilotTrustedFolder } from './trust';
 import { CatalogIndex, CatalogStore, FusionCombo, fusionCombos, parseImportedList, providerPatches } from './catalog';
@@ -40,6 +41,8 @@ export interface FleetSettings {
   objective: Objective;
   /** How many versions of each model family stay visible after curating the catalog. */
   keepModelVersions: number;
+  /** Never pick a model weaker than this (1 small - 5 frontier) for automatic assignments. */
+  minTier: number;
   /** Workspace folders you marked trusted: agents started in them skip their own trust prompt where they support it. */
   trustedWorkspaces: string[];
 }
@@ -58,6 +61,7 @@ const DEFAULT_SETTINGS: FleetSettings = {
   idleMinutes: 10,
   objective: 'balanced',
   keepModelVersions: 2,
+  minTier: 3,
   trustedWorkspaces: []
 };
 
@@ -79,6 +83,10 @@ class TerminalLauncher implements SessionLauncher {
   public onLimit?: (s: Session, info: LimitInfo) => void;
   public onAttention?: (s: Session, text: string | undefined) => void;
   public onFatal?: (s: Session, info: FatalInfo) => void;
+  public onDenied?: (s: Session, count: number) => void;
+  public onStart?: (s: Session, cwd: string | undefined) => void;
+  /** Called when the agent's output stream ends, with everything it printed (ANSI stripped, capped). */
+  public onOutput?: (s: Session, text: string) => void;
   public modelsFor?: (providerId: string) => string[];
   private lastOutput = new Map<string, number>();
 
@@ -112,6 +120,7 @@ class TerminalLauncher implements SessionLauncher {
   }
 
   public async launch(session: Session, payload: LaunchRequest): Promise<boolean> {
+    this.onStart?.(session, payload.cwd);
     if (payload.kind === 'vscode-command') {
       await AgentRunner.launchDefault(payload);
       // An IDE chat has no process we can watch: free the slot right away.
@@ -151,10 +160,17 @@ class TerminalLauncher implements SessionLauncher {
     let buf = '';
     let limitFired = false;
     let fatalFired = false;
+    let deniedNotified = false;
+    let full = '';
     try {
       for await (const chunk of exec.read() as AsyncIterable<string>) {
         this.lastOutput.set(session.id, Date.now());
         buf = (buf + chunk).slice(-8000);
+        full = (full + stripAnsi(chunk)).slice(-400_000);
+        if (!deniedNotified) {
+          const n = countPermissionDenials(full);
+          if (n >= 2) { deniedNotified = true; this.onDenied?.(session, n); }
+        }
         if (!limitFired) {
           const models = this.modelsFor?.(session.providerId) || [];
           const info = detectLimit(buf.slice(-2500), models.length ? models : [session.model]);
@@ -169,6 +185,7 @@ class TerminalLauncher implements SessionLauncher {
         else if (chunk.length > 40) this.onAttention?.(session, undefined);
       }
     } catch { /* terminal closed mid-stream */ }
+    this.onOutput?.(session, full);
   }
 
   public show(session: Session): void {
@@ -290,6 +307,9 @@ export class FleetController {
     launcher.onLimit = (s, info) => { void this.handleLimit(s.id, info); };
     launcher.onAttention = (s, text) => this.handleAttention(s.id, text);
     launcher.onFatal = (s, info) => { void this.handleFatal(s.id, info); };
+    launcher.onDenied = (s, n) => { void this.handleDenied(s.id, n); };
+    launcher.onStart = (s, cwd) => this.noteSessionStart(s.id, cwd);
+    launcher.onOutput = (s, text) => { void this.handleOutput(s.id, text); };
 
     // Everything that starts an agent (card buttons, assign menu) now goes through the session manager.
     AgentRunner.launcher = async (req: LaunchRequest) => {
@@ -304,6 +324,7 @@ export class FleetController {
     this.sessions.onChange(() => {
       this.syncClaims();
       this.learnSpeeds();
+      this.scheduleWorkLog();
       this.maybeAutoReview();
       this.scheduleAutoResumes();
       this.changeEmitter.fire();
@@ -446,6 +467,8 @@ export class FleetController {
       payload = (await AgentRunner.prepareLaunch(ticket, extra.assignee || providerToAssignee(provider), boardRoot, board?.config, {
         model,
         modelFlag: provider.modelFlag,
+        permissionMode: provider.permissionMode,
+        permissionFlag: provider.permissionFlag,
         trustedRoots: this.settings.trustedWorkspaces,
         trustFlag: provider.trustFlag,
         effort: resolved.effort,
@@ -527,7 +550,7 @@ export class FleetController {
   }
 
   private optimizerBase(): OptimizerContext {
-    return { catalog: this.catalog, speed: this.speed, bench: this.catalogStore.loadBench(), objective: this.settings.objective };
+    return { catalog: this.catalog, speed: this.speed, bench: this.catalogStore.loadBench(), objective: this.settings.objective, minTier: this.settings.minTier };
   }
 
   /** Feeds finished sessions into the speed book so duration predictions improve with use. */
@@ -759,6 +782,98 @@ export class FleetController {
     this.escalate(sessionId, `${label} hit its usage limit on "${s.ticketTitle}". ` +
       (this.settings.autoFailover ? 'No other model is capable enough and no reset time was reported.' : 'Auto-failover is off.') +
       ' Resume it when usage is available, or switch it to another agent.');
+  }
+
+  // ---------------------------------------------------------------- outcomes & Work Log
+
+  private gitBefore = new Map<string, Set<string> | undefined>();
+  private outputs = new Map<string, string>();
+  private workLogTimers = new Set<string>();
+  private deniedNotified = new Set<string>();
+
+  /** Remember the repo state when a session starts, so the end-of-session summary can list what changed. */
+  public noteSessionStart(sessionId: string, cwd: string | undefined): void {
+    void gitStatusSet(cwd).then(set => this.gitBefore.set(sessionId, set));
+  }
+
+  /** The agent's output stream ended: keep the full text, save a log, remember the closing message. */
+  private async handleOutput(sessionId: string, text: string): Promise<void> {
+    const s = this.sessions.get(sessionId);
+    if (!s) return;
+    this.outputs.set(sessionId, text);
+    const dir = path.join(path.dirname(this.settingsPath), 'runtime', 'sessions');
+    let logFile: string | undefined;
+    try {
+      logFile = writeSessionLog(dir, sessionId, `${s.providerName} \u00b7 ${s.model} (${s.role}) \u2014 ${s.ticketId}: ${s.ticketTitle}`, text);
+    } catch { /* log is best-effort */ }
+    this.sessions.setOutcome(sessionId, { summary: summarizeOutput(text), logFile });
+    void this.writeWorkLog(sessionId);
+  }
+
+  /** After a session ends, append its outcome to the ticket Work Log even if the agent never wrote one itself. */
+  private scheduleWorkLog(): void {
+    for (const s of this.sessions.list()) {
+      if (s.workLogged || this.workLogTimers.has(s.id)) continue;
+      if (!['finished', 'failed', 'interrupted', 'cancelled'].includes(s.status)) continue;
+      this.workLogTimers.add(s.id);
+      // the output stream usually finishes within a moment of the process ending
+      setTimeout(() => { void this.writeWorkLog(s.id); }, 2500);
+    }
+  }
+
+  private async writeWorkLog(sessionId: string): Promise<void> {
+    const s = this.sessions.get(sessionId);
+    if (!s || s.workLogged || !['finished', 'failed', 'interrupted', 'cancelled'].includes(s.status)) return;
+    if (s.role === 'orchestrator' || s.status === 'cancelled') { this.sessions.markWorkLogged(sessionId); return; }
+    const found = this.findTicket(s.ticketPath) || this.findTicketById(s.ticketId);
+    if (!found) return;
+    this.sessions.markWorkLogged(sessionId);
+    const after = await gitStatusSet(s.cwd);
+    const files = changedSince(this.gitBefore.get(sessionId), after).filter(f => !/\.agentic-kanban[\\/]/.test(f));
+    this.gitBefore.delete(sessionId);
+    this.sessions.setOutcome(sessionId, { files });
+    const root = path.dirname(this.settingsPath);
+    const entry = formatWorkLogEntry({
+      at: new Date(),
+      provider: s.providerName,
+      model: s.model,
+      reasoning: s.reasoning,
+      role: s.role,
+      status: s.status,
+      minutes: s.startedAt && s.endedAt ? (s.endedAt - s.startedAt) / 60_000 : undefined,
+      exitCode: s.exitCode,
+      summary: s.outcome || '',
+      files,
+      logFile: s.logFile ? path.relative(path.dirname(root), s.logFile).replace(/\\/g, '/') : undefined,
+      note: s.status !== 'finished' ? s.note : undefined
+    });
+    appendWorkLog(found.ticket.path, entry);
+  }
+
+  /** The agent keeps getting tool calls refused because nobody can approve them (unattended mode). */
+  public async handleDenied(sessionId: string, count: number): Promise<void> {
+    const s = this.sessions.get(sessionId);
+    if (!s || this.deniedNotified.has(s.providerId)) return;
+    const provider = this.registry.get(s.providerId);
+    if (!provider) return;
+    this.deniedNotified.add(s.providerId);
+    this.sessions.setAttention(sessionId, `${count} tool calls were denied: nobody can approve prompts in unattended mode, so the agent can only read.`);
+    const canFix = !!provider.permissionFlag && provider.permissionMode !== 'smart';
+    const pick = await vscode.window.showWarningMessage(
+      `${provider.name} had ${count} tool calls denied in session "${s.ticketTitle}": unattended runs cannot answer permission prompts, so edits and commands are refused.`,
+      ...(canFix ? ['Use "smart" permission mode', 'Open Agents'] : ['Open Agents'])
+    );
+    if (pick === 'Open Agents') void vscode.commands.executeCommand('agenticKanban.openProviders');
+    else if (pick && canFix) {
+      const ok = await vscode.window.showWarningMessage(
+        `Set ${provider.name} to --permission-mode smart? It auto-approves read-only tools and workspace edits, and auto-runs actions a fast model judges safe. Destructive commands can still be refused. Applies to new sessions.`,
+        { modal: true }, 'Set smart mode'
+      );
+      if (ok) {
+        this.registry.upsert({ ...provider, permissionMode: 'smart' });
+        vscode.window.showInformationMessage(`${provider.name} will use --permission-mode smart for new sessions.`);
+      }
+    }
   }
 
   /**

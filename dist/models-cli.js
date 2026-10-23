@@ -63,6 +63,7 @@ var PROVIDER_PRESETS = [
     command: `devin {model_args} -p "{task}"`,
     modelFlag: "--model",
     trustFlag: "--respect-workspace-trust false",
+    permissionFlag: "--permission-mode",
     models: [],
     defaultModel: "",
     maxParallel: 2,
@@ -251,6 +252,8 @@ function sanitizeProvider(raw, existingIds = []) {
     type: raw?.type === "vscode-command" ? "vscode-command" : raw?.type === "cli" ? "cli" : preset.type,
     command: String(raw?.command ?? preset.command),
     defaultReasoning: ["none", "minimal", "low", "medium", "high", "xhigh", "max"].includes(String(raw?.defaultReasoning)) ? String(raw.defaultReasoning) : "",
+    permissionMode: /^[a-z][a-z-]{0,20}$/.test(String(raw?.permissionMode || "")) ? String(raw.permissionMode) : "",
+    permissionFlag: raw?.permissionFlag !== void 0 ? String(raw.permissionFlag).trim() || void 0 : getPreset(kind).permissionFlag,
     trustFlag: raw?.trustFlag !== void 0 ? String(raw.trustFlag).trim() || void 0 : getPreset(kind).trustFlag,
     effortFlag: raw?.effortFlag !== void 0 ? String(raw.effortFlag).trim() || void 0 : getPreset(kind).effortFlag,
     pinnedModels: Array.isArray(raw?.pinnedModels) ? raw.pinnedModels.map((m) => String(m).trim()).filter(Boolean) : [],
@@ -967,7 +970,7 @@ function tierFromName(name, sizeB) {
     return b <= 4 ? 1 : b <= 9 ? 2 : b <= 40 ? 3 : b < 100 ? 4 : 5;
   if (/haiku|flash|(?:^|[-_ :])mini|nano|lite|small|instant/.test(n))
     return 2;
-  if (/fable|opus|gpt-?[5-9]|o3|o1|ultra|argon|gemini.*pro|deepseek-r1|astra|max/.test(n))
+  if (/fable|opus|o3|o1|ultra|argon|gemini.*pro|deepseek-r1|astra/.test(n))
     return 5;
   if (/sonnet|gpt-?4|codex|codestral|devstral|coder|sol\b|pro\b/.test(n))
     return 4;
@@ -976,7 +979,7 @@ function tierFromName(name, sizeB) {
 function priceTier(p) {
   if (!p || p.free || p.outPerM === void 0)
     return void 0;
-  return p.outPerM <= 2 ? 2 : p.outPerM <= 8 ? 3 : p.outPerM <= 25 ? 4 : 5;
+  return p.outPerM <= 1.5 ? 2 : p.outPerM <= 4 ? 3 : p.outPerM <= 12 ? 4 : 5;
 }
 var ESTIMATED_OUT_PER_M = { 1: 0, 2: 1.5, 3: 6, 4: 15, 5: 30 };
 function estimatePricing(tier, local) {
@@ -1031,8 +1034,8 @@ function curate(raws, opts = {}) {
       let pricing = repItem.raw.pricing;
       if (ovKey)
         pricing = { ...pricing || {}, ...overrides[ovKey], source: "override" };
-      const pTier = priceTier(pricing);
-      const tier = local ? nameTier : pTier ? Math.max(1, Math.min(5, Math.round((nameTier * 2 + pTier) / 3))) : nameTier;
+      const pTier = pricing && pricing.source !== "estimated" ? priceTier(pricing) : void 0;
+      const tier = local ? nameTier : pTier ? Math.max(1, Math.min(5, Math.round((nameTier + pTier * 2) / 3))) : nameTier;
       if (!pricing)
         pricing = estimatePricing(tier, local);
       entries.push({

@@ -81,6 +81,11 @@ export function detectLimit(text: string, models: string[] = [], now: number = D
   };
 }
 
+/** How many tool calls the agent had refused because nobody could approve them (unattended -p mode). */
+export function countPermissionDenials(text: string): number {
+  return (stripAnsi(text).match(/permission denied because no interactive user response|no one to approve|denied,? no (?:one|user) to approve/gi) || []).length;
+}
+
 export type FatalKind = 'workspace-trust' | 'auth' | 'missing-cli';
 
 export interface FatalInfo { kind: FatalKind; message: string; excerpt: string }

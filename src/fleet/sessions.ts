@@ -36,6 +36,12 @@ export interface Session {
   hidden?: boolean;
   /** The agent appears to be waiting for the user (permission prompt, login, question...). */
   attention?: string;
+  /** What the agent said at the end (last lines of its output) and where the full output was saved. */
+  outcome?: string;
+  logFile?: string;
+  changedFiles?: string[];
+  /** True once the outcome was written to the ticket's Work Log. */
+  workLogged?: boolean;
   /** Working directory the agent was started in (needed to trust or inspect it). */
   cwd?: string;
   /** Reasoning level the run was started with ('' = model default). */
@@ -342,6 +348,20 @@ export class SessionManager {
     s.resumeAfter = info.resetAt;
     this.interrupt(id, 'usage-limit', `Usage limit reached${model ? ` on ${model}` : ''}${info.excerpt ? `: ${info.excerpt}` : ''}`);
     return block;
+  }
+
+  public setOutcome(id: string, outcome: { summary?: string; logFile?: string; files?: string[] }): void {
+    const s = this.get(id);
+    if (!s) return;
+    if (outcome.summary !== undefined) s.outcome = outcome.summary;
+    if (outcome.logFile) s.logFile = outcome.logFile;
+    if (outcome.files) s.changedFiles = outcome.files;
+    this.emit();
+  }
+
+  public markWorkLogged(id: string): void {
+    const s = this.get(id);
+    if (s) { s.workLogged = true; this.emit(); }
   }
 
   public setAttention(id: string, text?: string): void {

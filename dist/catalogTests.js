@@ -485,7 +485,7 @@ function tierFromName(name, sizeB) {
     return b <= 4 ? 1 : b <= 9 ? 2 : b <= 40 ? 3 : b < 100 ? 4 : 5;
   if (/haiku|flash|(?:^|[-_ :])mini|nano|lite|small|instant/.test(n))
     return 2;
-  if (/fable|opus|gpt-?[5-9]|o3|o1|ultra|argon|gemini.*pro|deepseek-r1|astra|max/.test(n))
+  if (/fable|opus|o3|o1|ultra|argon|gemini.*pro|deepseek-r1|astra/.test(n))
     return 5;
   if (/sonnet|gpt-?4|codex|codestral|devstral|coder|sol\b|pro\b/.test(n))
     return 4;
@@ -494,7 +494,7 @@ function tierFromName(name, sizeB) {
 function priceTier(p) {
   if (!p || p.free || p.outPerM === void 0)
     return void 0;
-  return p.outPerM <= 2 ? 2 : p.outPerM <= 8 ? 3 : p.outPerM <= 25 ? 4 : 5;
+  return p.outPerM <= 1.5 ? 2 : p.outPerM <= 4 ? 3 : p.outPerM <= 12 ? 4 : 5;
 }
 var ESTIMATED_OUT_PER_M = { 1: 0, 2: 1.5, 3: 6, 4: 15, 5: 30 };
 function estimatePricing(tier, local) {
@@ -549,8 +549,8 @@ function curate(raws, opts = {}) {
       let pricing = repItem.raw.pricing;
       if (ovKey)
         pricing = { ...pricing || {}, ...overrides[ovKey], source: "override" };
-      const pTier = priceTier(pricing);
-      const tier = local ? nameTier : pTier ? Math.max(1, Math.min(5, Math.round((nameTier * 2 + pTier) / 3))) : nameTier;
+      const pTier = pricing && pricing.source !== "estimated" ? priceTier(pricing) : void 0;
+      const tier = local ? nameTier : pTier ? Math.max(1, Math.min(5, Math.round((nameTier + pTier * 2) / 3))) : nameTier;
       if (!pricing)
         pricing = estimatePricing(tier, local);
       entries.push({
@@ -862,6 +862,7 @@ var PROVIDER_PRESETS = [
     command: `devin {model_args} -p "{task}"`,
     modelFlag: "--model",
     trustFlag: "--respect-workspace-trust false",
+    permissionFlag: "--permission-mode",
     models: [],
     defaultModel: "",
     maxParallel: 2,
@@ -1031,6 +1032,8 @@ function sanitizeProvider(raw, existingIds = []) {
     type: raw?.type === "vscode-command" ? "vscode-command" : raw?.type === "cli" ? "cli" : preset.type,
     command: String(raw?.command ?? preset.command),
     defaultReasoning: ["none", "minimal", "low", "medium", "high", "xhigh", "max"].includes(String(raw?.defaultReasoning)) ? String(raw.defaultReasoning) : "",
+    permissionMode: /^[a-z][a-z-]{0,20}$/.test(String(raw?.permissionMode || "")) ? String(raw.permissionMode) : "",
+    permissionFlag: raw?.permissionFlag !== void 0 ? String(raw.permissionFlag).trim() || void 0 : getPreset(kind).permissionFlag,
     trustFlag: raw?.trustFlag !== void 0 ? String(raw.trustFlag).trim() || void 0 : getPreset(kind).trustFlag,
     effortFlag: raw?.effortFlag !== void 0 ? String(raw.effortFlag).trim() || void 0 : getPreset(kind).effortFlag,
     pinnedModels: Array.isArray(raw?.pinnedModels) ? raw.pinnedModels.map((m) => String(m).trim()).filter(Boolean) : [],
@@ -1310,6 +1313,25 @@ var SessionManager = class {
     s.resumeAfter = info.resetAt;
     this.interrupt(id, "usage-limit", `Usage limit reached${model ? ` on ${model}` : ""}${info.excerpt ? `: ${info.excerpt}` : ""}`);
     return block;
+  }
+  setOutcome(id, outcome) {
+    const s = this.get(id);
+    if (!s)
+      return;
+    if (outcome.summary !== void 0)
+      s.outcome = outcome.summary;
+    if (outcome.logFile)
+      s.logFile = outcome.logFile;
+    if (outcome.files)
+      s.changedFiles = outcome.files;
+    this.emit();
+  }
+  markWorkLogged(id) {
+    const s = this.get(id);
+    if (s) {
+      s.workLogged = true;
+      this.emit();
+    }
   }
   setAttention(id, text) {
     const s = this.get(id);
@@ -1918,11 +1940,15 @@ function rankOptions(ticket, providers, sessions, ctx, restrictTo) {
   const now = ctx.now ?? Date.now();
   const w = { ...OBJECTIVES[ctx.objective || "balanced"], ...ctx.weights || {} };
   const points = ticketPoints(ticket);
-  const needed = requiredTier(ticket);
+  const needed = Math.max(requiredTier(ticket), ctx.minTier || 0);
+  const modelLabel = (ticket.labels || []).map((l) => l.replace(/[`\s]/g, "")).find((l) => /^model:/i.test(l));
+  const modelWanted = modelLabel ? modelLabel.slice(modelLabel.indexOf(":") + 1).toLowerCase() : "";
   const options = [];
   for (const p of restrictTo ? [restrictTo] : providers) {
     const pressure = quotaPressure(p, sessions, now);
-    for (const model of candidateModels(p, ctx.catalog)) {
+    const allModels = candidateModels(p, ctx.catalog);
+    const labelled = modelWanted ? allModels.filter((m) => m.toLowerCase().includes(modelWanted)) : [];
+    for (const model of labelled.length ? labelled : modelWanted && restrictTo === void 0 && providers.some((q) => candidateModels(q, ctx.catalog).some((m) => m.toLowerCase().includes(modelWanted))) ? [] : allModels) {
       if (sessions.modelBlock(p.id, model, now))
         continue;
       const entry = ctx.catalog.get(p.id, model);
@@ -2562,6 +2588,9 @@ var AgentRunner = class {
     if (modelArgs && !command.includes("{model_args}") && !command.includes("{model}")) {
       command = `${command.trimEnd()} ${modelArgs}`;
     }
+    if (options.permissionMode && options.permissionFlag && /^[a-z][a-z-]{0,20}$/.test(options.permissionMode) && /^[\w =.-]+$/.test(options.permissionFlag) && !command.includes(options.permissionFlag)) {
+      command = `${command.trimEnd()} ${options.permissionFlag} ${options.permissionMode}`;
+    }
     if (options.trusted && options.trustFlag && /^[\w =.-]+$/.test(options.trustFlag) && !command.includes(options.trustFlag)) {
       command = `${command.trimEnd()} ${options.trustFlag}`;
     }
@@ -2976,6 +3005,32 @@ async function main() {
   check(fCat.get("devin", pick.id) !== void 0, "a pinned fusion id is recognised by the catalog");
   const otherFusion = combos.find((c2) => c2.outPerM !== void 0 && c2.outPerM !== 20 && c2.outPerM !== void 0);
   check(fCat.pricingFor("devin", otherFusion.id)?.outPerM === otherFusion.outPerM, "each fusion id is priced by its own listing, not the family average");
+  console.log("\n--- capability floor and model labels (the ATF run) ---");
+  const mk2 = (id, pr) => ({ id, pricing: pr ? { inPerM: pr.in, outPerM: pr.out, source: "listed" } : void 0 });
+  const tierRaw = { providerId: "dv", providerName: "Devin", kind: "devin", fetchedAt: 1, source: "command", command: "", ok: true, models: [
+    { ...mk2("gpt-6-luna-medium", { in: 0.1, out: 0.5 }), family: "gpt-6-luna" },
+    { ...mk2("claude-haiku-5-5-medium", { in: 0.1, out: 0.5 }), family: "claude-haiku-5.5" },
+    { ...mk2("claude-sonnet-5-5-medium", { in: 2, out: 10 }), family: "claude-sonnet-5.5" },
+    { ...mk2("claude-opus-5-5-medium", { in: 4, out: 20 }), family: "claude-opus-5.5" },
+    { id: "swe-2-medium", family: "swe-2", pricing: { free: true, source: "listed" } }
+  ] };
+  const tierCat = curate([tierRaw]);
+  const tierOf = (id) => tierCat.models.find((m) => m.id === id).tier;
+  check(tierOf("gpt-6-luna-medium") === 2 && tierOf("claude-haiku-5-5-medium") === 2, 'cheap "new generation" models (GPT-6 Luna, Haiku) are fast-tier, not strong');
+  check(tierOf("claude-sonnet-5-5-medium") === 4 && tierOf("claude-opus-5-5-medium") === 5 && tierOf("swe-2-medium") === 3, "sonnet 4, opus 5, free SWE-2 3");
+  const tProv = { ...createProvider("devin", []), id: "dv", name: "Devin", agentic: true, maxParallel: 5, minSpacingSeconds: 0, maxSessionsPerWindow: 0, defaultReasoning: "" };
+  const tIdx = new CatalogIndex(tierCat);
+  const tSm = new SessionManager(() => tProv, new NullLauncher(), storeWith({}), () => clockNow);
+  const plain = mkTicket({ priority: "Normal", estimate: "M" });
+  const openFloor = rankOptions(plain, [tProv], tSm, { catalog: tIdx, speed: new SpeedBook(), now: clockNow, minTier: 1 });
+  check(openFloor.some((o) => o.tier === 2), "with no floor a tier-2 model can be picked for an ordinary ticket");
+  const floored = rankOptions(plain, [tProv], tSm, { catalog: tIdx, speed: new SpeedBook(), now: clockNow, minTier: 3 });
+  check(floored.length > 0 && floored.every((o) => o.tier >= 3), "a minimum tier of 3 keeps Haiku / Luna out of ordinary tickets");
+  check(floored.some((o) => o.model.startsWith("swe-2")), "free SWE-2 stays eligible at tier 3");
+  const labelled = rankOptions(mkTicket({ labels: ["model:opus"] }), [tProv], tSm, { catalog: tIdx, speed: new SpeedBook(), now: clockNow, minTier: 3 });
+  check(labelled.length > 0 && labelled.every((o) => /opus/.test(o.model)), "a model:opus label restricts the choice to Opus");
+  const unknownLabel = rankOptions(mkTicket({ labels: ["model:nonexistent"] }), [tProv], tSm, { catalog: tIdx, speed: new SpeedBook(), now: clockNow, minTier: 3 });
+  check(unknownLabel.length > 1, "a label matching no model is ignored instead of blocking the ticket");
   fs4.rmSync(tmp, { recursive: true, force: true });
   if (failures) {
     console.error(`

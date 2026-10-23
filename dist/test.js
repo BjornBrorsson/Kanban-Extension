@@ -1093,6 +1093,9 @@ var AgentRunner = class {
     if (modelArgs && !command.includes("{model_args}") && !command.includes("{model}")) {
       command = `${command.trimEnd()} ${modelArgs}`;
     }
+    if (options.permissionMode && options.permissionFlag && /^[a-z][a-z-]{0,20}$/.test(options.permissionMode) && /^[\w =.-]+$/.test(options.permissionFlag) && !command.includes(options.permissionFlag)) {
+      command = `${command.trimEnd()} ${options.permissionFlag} ${options.permissionMode}`;
+    }
     if (options.trusted && options.trustFlag && /^[\w =.-]+$/.test(options.trustFlag) && !command.includes(options.trustFlag)) {
       command = `${command.trimEnd()} ${options.trustFlag}`;
     }

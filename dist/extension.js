@@ -35,8 +35,8 @@ __export(extension_exports, {
 });
 module.exports = __toCommonJS(extension_exports);
 var vscode7 = __toESM(require("vscode"));
-var path16 = __toESM(require("path"));
-var fs14 = __toESM(require("fs"));
+var path17 = __toESM(require("path"));
+var fs15 = __toESM(require("fs"));
 
 // src/boardManager.ts
 var vscode2 = __toESM(require("vscode"));
@@ -1775,8 +1775,8 @@ var TreeItemNode = class extends vscode3.TreeItem {
 
 // src/webviewPanel.ts
 var vscode5 = __toESM(require("vscode"));
-var path15 = __toESM(require("path"));
-var fs12 = __toESM(require("fs"));
+var path16 = __toESM(require("path"));
+var fs13 = __toESM(require("fs"));
 
 // src/agentRunner.ts
 var path6 = __toESM(require("path"));
@@ -2008,6 +2008,9 @@ var AgentRunner = class {
     if (modelArgs && !command.includes("{model_args}") && !command.includes("{model}")) {
       command = `${command.trimEnd()} ${modelArgs}`;
     }
+    if (options.permissionMode && options.permissionFlag && /^[a-z][a-z-]{0,20}$/.test(options.permissionMode) && /^[\w =.-]+$/.test(options.permissionFlag) && !command.includes(options.permissionFlag)) {
+      command = `${command.trimEnd()} ${options.permissionFlag} ${options.permissionMode}`;
+    }
     if (options.trusted && options.trustFlag && /^[\w =.-]+$/.test(options.trustFlag) && !command.includes(options.trustFlag)) {
       command = `${command.trimEnd()} ${options.trustFlag}`;
     }
@@ -2213,8 +2216,8 @@ var PromptFormatter = class {
 
 // src/fleet/fleetController.ts
 var vscode4 = __toESM(require("vscode"));
-var fs11 = __toESM(require("fs"));
-var path14 = __toESM(require("path"));
+var fs12 = __toESM(require("fs"));
+var path15 = __toESM(require("path"));
 var import_crypto = require("crypto");
 
 // src/fleet/providers.ts
@@ -2242,6 +2245,7 @@ var PROVIDER_PRESETS = [
     command: `devin {model_args} -p "{task}"`,
     modelFlag: "--model",
     trustFlag: "--respect-workspace-trust false",
+    permissionFlag: "--permission-mode",
     models: [],
     defaultModel: "",
     maxParallel: 2,
@@ -2430,6 +2434,8 @@ function sanitizeProvider(raw, existingIds = []) {
     type: raw?.type === "vscode-command" ? "vscode-command" : raw?.type === "cli" ? "cli" : preset.type,
     command: String(raw?.command ?? preset.command),
     defaultReasoning: ["none", "minimal", "low", "medium", "high", "xhigh", "max"].includes(String(raw?.defaultReasoning)) ? String(raw.defaultReasoning) : "",
+    permissionMode: /^[a-z][a-z-]{0,20}$/.test(String(raw?.permissionMode || "")) ? String(raw.permissionMode) : "",
+    permissionFlag: raw?.permissionFlag !== void 0 ? String(raw.permissionFlag).trim() || void 0 : getPreset(kind).permissionFlag,
     trustFlag: raw?.trustFlag !== void 0 ? String(raw.trustFlag).trim() || void 0 : getPreset(kind).trustFlag,
     effortFlag: raw?.effortFlag !== void 0 ? String(raw.effortFlag).trim() || void 0 : getPreset(kind).effortFlag,
     pinnedModels: Array.isArray(raw?.pinnedModels) ? raw.pinnedModels.map((m) => String(m).trim()).filter(Boolean) : [],
@@ -2915,6 +2921,25 @@ var SessionManager = class {
     s.resumeAfter = info.resetAt;
     this.interrupt(id, "usage-limit", `Usage limit reached${model ? ` on ${model}` : ""}${info.excerpt ? `: ${info.excerpt}` : ""}`);
     return block;
+  }
+  setOutcome(id, outcome) {
+    const s = this.get(id);
+    if (!s)
+      return;
+    if (outcome.summary !== void 0)
+      s.outcome = outcome.summary;
+    if (outcome.logFile)
+      s.logFile = outcome.logFile;
+    if (outcome.files)
+      s.changedFiles = outcome.files;
+    this.emit();
+  }
+  markWorkLogged(id) {
+    const s = this.get(id);
+    if (s) {
+      s.workLogged = true;
+      this.emit();
+    }
   }
   setAttention(id, text) {
     const s = this.get(id);
@@ -3938,7 +3963,7 @@ function tierFromName(name, sizeB) {
     return b <= 4 ? 1 : b <= 9 ? 2 : b <= 40 ? 3 : b < 100 ? 4 : 5;
   if (/haiku|flash|(?:^|[-_ :])mini|nano|lite|small|instant/.test(n))
     return 2;
-  if (/fable|opus|gpt-?[5-9]|o3|o1|ultra|argon|gemini.*pro|deepseek-r1|astra|max/.test(n))
+  if (/fable|opus|o3|o1|ultra|argon|gemini.*pro|deepseek-r1|astra/.test(n))
     return 5;
   if (/sonnet|gpt-?4|codex|codestral|devstral|coder|sol\b|pro\b/.test(n))
     return 4;
@@ -3947,7 +3972,7 @@ function tierFromName(name, sizeB) {
 function priceTier(p) {
   if (!p || p.free || p.outPerM === void 0)
     return void 0;
-  return p.outPerM <= 2 ? 2 : p.outPerM <= 8 ? 3 : p.outPerM <= 25 ? 4 : 5;
+  return p.outPerM <= 1.5 ? 2 : p.outPerM <= 4 ? 3 : p.outPerM <= 12 ? 4 : 5;
 }
 var ESTIMATED_OUT_PER_M = { 1: 0, 2: 1.5, 3: 6, 4: 15, 5: 30 };
 function estimatePricing(tier, local) {
@@ -4002,8 +4027,8 @@ function curate(raws, opts = {}) {
       let pricing = repItem.raw.pricing;
       if (ovKey)
         pricing = { ...pricing || {}, ...overrides[ovKey], source: "override" };
-      const pTier = priceTier(pricing);
-      const tier = local ? nameTier : pTier ? Math.max(1, Math.min(5, Math.round((nameTier * 2 + pTier) / 3))) : nameTier;
+      const pTier = pricing && pricing.source !== "estimated" ? priceTier(pricing) : void 0;
+      const tier = local ? nameTier : pTier ? Math.max(1, Math.min(5, Math.round((nameTier + pTier * 2) / 3))) : nameTier;
       if (!pricing)
         pricing = estimatePricing(tier, local);
       entries.push({
@@ -4472,11 +4497,15 @@ function rankOptions(ticket, providers, sessions, ctx, restrictTo) {
   const now = ctx.now ?? Date.now();
   const w = { ...OBJECTIVES[ctx.objective || "balanced"], ...ctx.weights || {} };
   const points = ticketPoints(ticket);
-  const needed = requiredTier(ticket);
+  const needed = Math.max(requiredTier(ticket), ctx.minTier || 0);
+  const modelLabel = (ticket.labels || []).map((l) => l.replace(/[`\s]/g, "")).find((l) => /^model:/i.test(l));
+  const modelWanted = modelLabel ? modelLabel.slice(modelLabel.indexOf(":") + 1).toLowerCase() : "";
   const options = [];
   for (const p of restrictTo ? [restrictTo] : providers) {
     const pressure = quotaPressure(p, sessions, now);
-    for (const model of candidateModels(p, ctx.catalog)) {
+    const allModels = candidateModels(p, ctx.catalog);
+    const labelled = modelWanted ? allModels.filter((m) => m.toLowerCase().includes(modelWanted)) : [];
+    for (const model of labelled.length ? labelled : modelWanted && restrictTo === void 0 && providers.some((q) => candidateModels(q, ctx.catalog).some((m) => m.toLowerCase().includes(modelWanted))) ? [] : allModels) {
       if (sessions.modelBlock(p.id, model, now))
         continue;
       const entry = ctx.catalog.get(p.id, model);
@@ -4713,6 +4742,9 @@ function detectLimit(text, models = [], now = Date.now()) {
     excerpt: clean2.slice(Math.max(0, m.index - 20), m.index + 140).replace(/\s+/g, " ").trim()
   };
 }
+function countPermissionDenials(text) {
+  return (stripAnsi(text).match(/permission denied because no interactive user response|no one to approve|denied,? no (?:one|user) to approve/gi) || []).length;
+}
 function detectFatal(text) {
   const clean2 = stripAnsi(text);
   const rules = [
@@ -4827,6 +4859,96 @@ function pickFallback(providers, sessions, from, ticket, now = Date.now()) {
   return best ? { provider: best.provider, model: best.model, tier: best.tier, sameProvider: best.sameProvider } : null;
 }
 
+// src/fleet/outcome.ts
+var fs11 = __toESM(require("fs"));
+var path14 = __toESM(require("path"));
+var import_child_process3 = require("child_process");
+function summarizeOutput(text, maxChars = 700) {
+  const lines = text.split(/\r?\n/).map((l) => l.replace(/\s+$/, "")).filter((l) => l.trim().length > 0 && !/^[\s─━═\-=_*│|>╭╰╮╯┌└┐┘]+$/.test(l));
+  if (!lines.length)
+    return "";
+  const picked = [];
+  let used = 0;
+  for (let i = lines.length - 1; i >= 0 && picked.length < 14; i--) {
+    const l = lines[i].trim();
+    if (used + l.length > maxChars && picked.length)
+      break;
+    picked.unshift(l.length > maxChars ? l.slice(0, maxChars) : l);
+    used += l.length + 1;
+  }
+  return picked.join(" ").replace(/\s+/g, " ").trim();
+}
+function gitStatusSet(cwd, timeoutMs = 4e3) {
+  return new Promise((resolve9) => {
+    if (!cwd)
+      return resolve9(void 0);
+    (0, import_child_process3.execFile)("git", ["status", "--porcelain"], { cwd, timeout: timeoutMs, windowsHide: true, maxBuffer: 4 * 1024 * 1024 }, (err, stdout) => {
+      if (err)
+        return resolve9(void 0);
+      resolve9(new Set(String(stdout).split(/\r?\n/).filter(Boolean).map((l) => l.trim())));
+    });
+  });
+}
+function changedSince(before, after) {
+  if (!after)
+    return [];
+  return [...after].filter((l) => !before || !before.has(l)).map((l) => l.replace(/^\S+\s+/, ""));
+}
+var pad = (n) => String(n).padStart(2, "0");
+function formatWorkLogEntry(i) {
+  const stamp2 = `${i.at.getFullYear()}-${pad(i.at.getMonth() + 1)}-${pad(i.at.getDate())} ${pad(i.at.getHours())}:${pad(i.at.getMinutes())}`;
+  const dur = i.minutes !== void 0 ? ` in ${i.minutes < 1 ? "<1" : Math.round(i.minutes)} min` : "";
+  const model = `${i.model || "default model"}${i.reasoning ? ` (${i.reasoning})` : ""}`;
+  const lines = [`- **${stamp2}**: [Orchestrator] ${i.provider} \xB7 ${model} (${i.role}) ${i.status}${dur}${i.exitCode !== void 0 && i.exitCode !== 0 ? `, exit code ${i.exitCode}` : ""}.`];
+  if (i.note)
+    lines.push(`  - Note: ${i.note.replace(/\s+/g, " ").slice(0, 300)}`);
+  lines.push(`  - Result: ${i.summary || "(no output captured \u2014 terminal shell integration was not available)"}`);
+  if (i.files.length) {
+    const shown = i.files.slice(0, 8).join(", ");
+    lines.push(`  - Files touched in the workspace during the session: ${shown}${i.files.length > 8 ? ` (+${i.files.length - 8} more)` : ""}`);
+  }
+  if (i.logFile)
+    lines.push(`  - Full output: ${i.logFile}`);
+  return lines;
+}
+function appendWorkLog(ticketPath, entry) {
+  let text;
+  try {
+    text = fs11.readFileSync(ticketPath, "utf8");
+  } catch {
+    return false;
+  }
+  const eol = text.includes("\r\n") ? "\r\n" : "\n";
+  const body = text.replace(/\r\n/g, "\n");
+  const head = /^##\s+Work Log\s*$/im.exec(body);
+  const block = entry.join("\n");
+  let out;
+  if (head) {
+    const from = head.index + head[0].length;
+    const next = /^##\s+\S/m.exec(body.slice(from));
+    const end = next ? from + next.index : body.length;
+    const section = body.slice(from, end).replace(/\s+$/, "");
+    out = body.slice(0, from) + section + "\n" + block + "\n" + (next ? "\n" : "") + body.slice(end);
+  } else {
+    out = body.replace(/\s+$/, "") + "\n\n## Work Log\n" + block + "\n";
+  }
+  try {
+    fs11.writeFileSync(ticketPath, eol === "\r\n" ? out.replace(/\n/g, "\r\n") : out, "utf8");
+    return true;
+  } catch {
+    return false;
+  }
+}
+function writeSessionLog(dir, sessionId, header, output) {
+  fs11.mkdirSync(dir, { recursive: true });
+  const file = path14.join(dir, `${sessionId}.log`);
+  fs11.writeFileSync(file, `${header}
+
+${output}
+`, "utf8");
+  return file;
+}
+
 // src/fleet/fleetController.ts
 var DEFAULT_SETTINGS = {
   autopilot: false,
@@ -4842,6 +4964,7 @@ var DEFAULT_SETTINGS = {
   idleMinutes: 10,
   objective: "balanced",
   keepModelVersions: 2,
+  minTier: 3,
   trustedWorkspaces: []
 };
 var RESUME_TASK = "You were interrupted while working on ticket {ticket_path}: {ticket_title} (network error, crash, or the editor/PC closed). Check the ticket Work Log and the git status/diff to see what is already done, then continue from where you stopped. Do not redo finished work. If everything is already complete, verify it and say so in the Work Log.";
@@ -4854,6 +4977,10 @@ var TerminalLauncher = class {
   onLimit;
   onAttention;
   onFatal;
+  onDenied;
+  onStart;
+  /** Called when the agent's output stream ends, with everything it printed (ANSI stripped, capped). */
+  onOutput;
   modelsFor;
   lastOutput = /* @__PURE__ */ new Map();
   lastOutputAt(id) {
@@ -4888,12 +5015,13 @@ var TerminalLauncher = class {
     }
   }
   async launch(session, payload) {
+    this.onStart?.(session, payload.cwd);
     if (payload.kind === "vscode-command") {
       await AgentRunner.launchDefault(payload);
       setTimeout(() => this.manager.ended(session.id, 0, "Handed to IDE chat"), 0);
       return true;
     }
-    const base = `Agent: ${session.providerName} \xB7 ${session.ticketId || path14.basename(session.ticketPath)}`;
+    const base = `Agent: ${session.providerName} \xB7 ${session.ticketId || path15.basename(session.ticketPath)}`;
     let name = base;
     let n = 2;
     while (vscode4.window.terminals.some((t) => t.name === name))
@@ -4923,10 +5051,20 @@ var TerminalLauncher = class {
     let buf = "";
     let limitFired = false;
     let fatalFired = false;
+    let deniedNotified = false;
+    let full = "";
     try {
       for await (const chunk of exec.read()) {
         this.lastOutput.set(session.id, Date.now());
         buf = (buf + chunk).slice(-8e3);
+        full = (full + stripAnsi(chunk)).slice(-4e5);
+        if (!deniedNotified) {
+          const n = countPermissionDenials(full);
+          if (n >= 2) {
+            deniedNotified = true;
+            this.onDenied?.(session, n);
+          }
+        }
         if (!limitFired) {
           const models = this.modelsFor?.(session.providerId) || [];
           const info = detectLimit(buf.slice(-2500), models.length ? models : [session.model]);
@@ -4950,6 +5088,7 @@ var TerminalLauncher = class {
       }
     } catch {
     }
+    this.onOutput?.(session, full);
   }
   show(session) {
     const t = this.terminals.get(session.id);
@@ -5007,7 +5146,7 @@ var FleetController = class _FleetController {
     if (!dir)
       return;
     for (const s of this.sessions.list()) {
-      const key = s.ticketId || path14.basename(s.ticketPath, ".md");
+      const key = s.ticketId || path15.basename(s.ticketPath, ".md");
       const tracked = this.sessionClaims.get(s.id);
       if (s.status === "running" && !tracked) {
         const agent = s.providerName;
@@ -5035,7 +5174,7 @@ var FleetController = class _FleetController {
     const dir = this.messageBoardDir();
     if (!dir)
       return void 0;
-    const key = ticket.id || path14.basename(ticket.path, ".md");
+    const key = ticket.id || path15.basename(ticket.path, ".md");
     const held = readClaims(dir).find((c) => !c.expired && c.key.toLowerCase() === key.toLowerCase() && c.agent !== agent);
     return held?.agent;
   }
@@ -5047,19 +5186,19 @@ var FleetController = class _FleetController {
   }
   constructor(context) {
     const root = vscode4.workspace.workspaceFolders?.[0]?.uri.fsPath || context.globalStorageUri.fsPath;
-    const dir = path14.join(root, ".agentic-kanban");
-    this.settingsPath = path14.join(dir, "fleet.json");
-    this.briefPath = path14.join(dir, "runtime", "orchestrator-brief.md");
+    const dir = path15.join(root, ".agentic-kanban");
+    this.settingsPath = path15.join(dir, "fleet.json");
+    this.briefPath = path15.join(dir, "runtime", "orchestrator-brief.md");
     this.registry = new ProviderRegistry(root);
     this.settings = this.loadSettings();
     this.catalogStore = new CatalogStore(root);
     this.catalog = new CatalogIndex(this.catalogStore.loadCatalog());
-    this.speed = new SpeedBook(new JsonSpeedStore(path14.join(dir, "runtime", "speed.json")));
+    this.speed = new SpeedBook(new JsonSpeedStore(path15.join(dir, "runtime", "speed.json")));
     const launcher = new TerminalLauncher(context.subscriptions);
     this.sessions = new SessionManager(
       (id) => this.registry.list().find((p) => p.id === id),
       launcher,
-      new JsonFleetStore(path14.join(dir, "runtime", "fleet-usage.json"))
+      new JsonFleetStore(path15.join(dir, "runtime", "fleet-usage.json"))
     );
     launcher.manager = this.sessions;
     this.launcher = launcher;
@@ -5070,6 +5209,13 @@ var FleetController = class _FleetController {
     launcher.onAttention = (s, text) => this.handleAttention(s.id, text);
     launcher.onFatal = (s, info) => {
       void this.handleFatal(s.id, info);
+    };
+    launcher.onDenied = (s, n) => {
+      void this.handleDenied(s.id, n);
+    };
+    launcher.onStart = (s, cwd) => this.noteSessionStart(s.id, cwd);
+    launcher.onOutput = (s, text) => {
+      void this.handleOutput(s.id, text);
     };
     AgentRunner.launcher = async (req) => {
       const provider = this.registry.get(req.assignee.id);
@@ -5082,6 +5228,7 @@ var FleetController = class _FleetController {
     this.sessions.onChange(() => {
       this.syncClaims();
       this.learnSpeeds();
+      this.scheduleWorkLog();
       this.maybeAutoReview();
       this.scheduleAutoResumes();
       this.changeEmitter.fire();
@@ -5102,7 +5249,7 @@ var FleetController = class _FleetController {
   // ---------------------------------------------------------------- settings
   loadSettings() {
     try {
-      return { ...DEFAULT_SETTINGS, ...JSON.parse(fs11.readFileSync(this.settingsPath, "utf8")) };
+      return { ...DEFAULT_SETTINGS, ...JSON.parse(fs12.readFileSync(this.settingsPath, "utf8")) };
     } catch {
       return { ...DEFAULT_SETTINGS };
     }
@@ -5113,8 +5260,8 @@ var FleetController = class _FleetController {
     next.maxNewPerTick = Math.min(20, Math.max(1, Math.round(Number(next.maxNewPerTick)) || 3));
     this.settings = next;
     try {
-      fs11.mkdirSync(path14.dirname(this.settingsPath), { recursive: true });
-      fs11.writeFileSync(this.settingsPath, JSON.stringify(next, null, 2), "utf8");
+      fs12.mkdirSync(path15.dirname(this.settingsPath), { recursive: true });
+      fs12.writeFileSync(this.settingsPath, JSON.stringify(next, null, 2), "utf8");
     } catch (e) {
       console.warn("[Agentic Kanban] Could not save fleet settings:", e);
     }
@@ -5192,7 +5339,7 @@ var FleetController = class _FleetController {
       model = alt;
     }
     const board = boardId && BoardManager.getInstance().getBoard(boardId) || BoardManager.getInstance().findBoardForTicketPath(ticket.path);
-    const boardRoot = board?.rootPath || path14.dirname(ticket.path);
+    const boardRoot = board?.rootPath || path15.dirname(ticket.path);
     let payload = prebuilt;
     if (!payload || task || extra.assignee) {
       if (role !== "worker" && !provider.command.includes("{task}")) {
@@ -5204,6 +5351,8 @@ var FleetController = class _FleetController {
       payload = await AgentRunner.prepareLaunch(ticket, extra.assignee || providerToAssignee(provider), boardRoot, board?.config, {
         model,
         modelFlag: provider.modelFlag,
+        permissionMode: provider.permissionMode,
+        permissionFlag: provider.permissionFlag,
         trustedRoots: this.settings.trustedWorkspaces,
         trustFlag: provider.trustFlag,
         effort: resolved.effort,
@@ -5281,7 +5430,7 @@ var FleetController = class _FleetController {
     });
   }
   optimizerBase() {
-    return { catalog: this.catalog, speed: this.speed, bench: this.catalogStore.loadBench(), objective: this.settings.objective };
+    return { catalog: this.catalog, speed: this.speed, bench: this.catalogStore.loadBench(), objective: this.settings.objective, minTier: this.settings.minTier };
   }
   /** Feeds finished sessions into the speed book so duration predictions improve with use. */
   learnSpeeds() {
@@ -5377,10 +5526,10 @@ var FleetController = class _FleetController {
     return this.registry.list().map((p) => this.sessions.usage(p));
   }
   findTicket(ticketPath) {
-    const key = path14.resolve(ticketPath).toLowerCase();
+    const key = path15.resolve(ticketPath).toLowerCase();
     for (const board of BoardManager.getInstance().getAllBoards()) {
       for (const col of board.columns) {
-        const t = col.tickets.find((x) => path14.resolve(x.path).toLowerCase() === key);
+        const t = col.tickets.find((x) => path15.resolve(x.path).toLowerCase() === key);
         if (t)
           return { ticket: t, board };
       }
@@ -5399,7 +5548,7 @@ var FleetController = class _FleetController {
     if (decision.startsNow) {
       const ongoing = found.board.columns.find((c) => /ongoing|in progress/i.test(c.name));
       if (ongoing && await bm.moveTicket(found.board.id, found.ticket.path, ongoing.name, null)) {
-        ticket = this.findTicket(path14.join(found.board.rootPath, ongoing.name, path14.basename(found.ticket.path)))?.ticket || ticket;
+        ticket = this.findTicket(path15.join(found.board.rootPath, ongoing.name, path15.basename(found.ticket.path)))?.ticket || ticket;
       }
     }
     return !!await this.startSession(provider, decision.model, "worker", ticket, found.board.id, void 0, void 0, true, { hidden: this.settings.backgroundTerminals, reasoning: decision.reasoning ?? "auto" });
@@ -5523,6 +5672,105 @@ var FleetController = class _FleetController {
       return;
     }
     this.escalate(sessionId, `${label} hit its usage limit on "${s.ticketTitle}". ` + (this.settings.autoFailover ? "No other model is capable enough and no reset time was reported." : "Auto-failover is off.") + " Resume it when usage is available, or switch it to another agent.");
+  }
+  // ---------------------------------------------------------------- outcomes & Work Log
+  gitBefore = /* @__PURE__ */ new Map();
+  outputs = /* @__PURE__ */ new Map();
+  workLogTimers = /* @__PURE__ */ new Set();
+  deniedNotified = /* @__PURE__ */ new Set();
+  /** Remember the repo state when a session starts, so the end-of-session summary can list what changed. */
+  noteSessionStart(sessionId, cwd) {
+    void gitStatusSet(cwd).then((set) => this.gitBefore.set(sessionId, set));
+  }
+  /** The agent's output stream ended: keep the full text, save a log, remember the closing message. */
+  async handleOutput(sessionId, text) {
+    const s = this.sessions.get(sessionId);
+    if (!s)
+      return;
+    this.outputs.set(sessionId, text);
+    const dir = path15.join(path15.dirname(this.settingsPath), "runtime", "sessions");
+    let logFile;
+    try {
+      logFile = writeSessionLog(dir, sessionId, `${s.providerName} \xB7 ${s.model} (${s.role}) \u2014 ${s.ticketId}: ${s.ticketTitle}`, text);
+    } catch {
+    }
+    this.sessions.setOutcome(sessionId, { summary: summarizeOutput(text), logFile });
+    void this.writeWorkLog(sessionId);
+  }
+  /** After a session ends, append its outcome to the ticket Work Log even if the agent never wrote one itself. */
+  scheduleWorkLog() {
+    for (const s of this.sessions.list()) {
+      if (s.workLogged || this.workLogTimers.has(s.id))
+        continue;
+      if (!["finished", "failed", "interrupted", "cancelled"].includes(s.status))
+        continue;
+      this.workLogTimers.add(s.id);
+      setTimeout(() => {
+        void this.writeWorkLog(s.id);
+      }, 2500);
+    }
+  }
+  async writeWorkLog(sessionId) {
+    const s = this.sessions.get(sessionId);
+    if (!s || s.workLogged || !["finished", "failed", "interrupted", "cancelled"].includes(s.status))
+      return;
+    if (s.role === "orchestrator" || s.status === "cancelled") {
+      this.sessions.markWorkLogged(sessionId);
+      return;
+    }
+    const found = this.findTicket(s.ticketPath) || this.findTicketById(s.ticketId);
+    if (!found)
+      return;
+    this.sessions.markWorkLogged(sessionId);
+    const after = await gitStatusSet(s.cwd);
+    const files = changedSince(this.gitBefore.get(sessionId), after).filter((f) => !/\.agentic-kanban[\\/]/.test(f));
+    this.gitBefore.delete(sessionId);
+    this.sessions.setOutcome(sessionId, { files });
+    const root = path15.dirname(this.settingsPath);
+    const entry = formatWorkLogEntry({
+      at: /* @__PURE__ */ new Date(),
+      provider: s.providerName,
+      model: s.model,
+      reasoning: s.reasoning,
+      role: s.role,
+      status: s.status,
+      minutes: s.startedAt && s.endedAt ? (s.endedAt - s.startedAt) / 6e4 : void 0,
+      exitCode: s.exitCode,
+      summary: s.outcome || "",
+      files,
+      logFile: s.logFile ? path15.relative(path15.dirname(root), s.logFile).replace(/\\/g, "/") : void 0,
+      note: s.status !== "finished" ? s.note : void 0
+    });
+    appendWorkLog(found.ticket.path, entry);
+  }
+  /** The agent keeps getting tool calls refused because nobody can approve them (unattended mode). */
+  async handleDenied(sessionId, count) {
+    const s = this.sessions.get(sessionId);
+    if (!s || this.deniedNotified.has(s.providerId))
+      return;
+    const provider = this.registry.get(s.providerId);
+    if (!provider)
+      return;
+    this.deniedNotified.add(s.providerId);
+    this.sessions.setAttention(sessionId, `${count} tool calls were denied: nobody can approve prompts in unattended mode, so the agent can only read.`);
+    const canFix = !!provider.permissionFlag && provider.permissionMode !== "smart";
+    const pick = await vscode4.window.showWarningMessage(
+      `${provider.name} had ${count} tool calls denied in session "${s.ticketTitle}": unattended runs cannot answer permission prompts, so edits and commands are refused.`,
+      ...canFix ? ['Use "smart" permission mode', "Open Agents"] : ["Open Agents"]
+    );
+    if (pick === "Open Agents")
+      void vscode4.commands.executeCommand("agenticKanban.openProviders");
+    else if (pick && canFix) {
+      const ok = await vscode4.window.showWarningMessage(
+        `Set ${provider.name} to --permission-mode smart? It auto-approves read-only tools and workspace edits, and auto-runs actions a fast model judges safe. Destructive commands can still be refused. Applies to new sessions.`,
+        { modal: true },
+        "Set smart mode"
+      );
+      if (ok) {
+        this.registry.upsert({ ...provider, permissionMode: "smart" });
+        vscode4.window.showInformationMessage(`${provider.name} will use --permission-mode smart for new sessions.`);
+      }
+    }
   }
   /**
    * A setup problem that retrying cannot fix (untrusted folder, signed out, missing CLI). The session stops
@@ -5802,15 +6050,15 @@ var FleetController = class _FleetController {
     if (!cands.length)
       lines.push("(none)");
     for (const c of cands) {
-      lines.push(`- ${c.ticket.id || path14.basename(c.ticket.path)} \u2014 ${c.ticket.title} [${c.ticket.priority}] (${c.ticket.path}) assignee: ${c.ticket.assignee || "unassigned"}`);
+      lines.push(`- ${c.ticket.id || path15.basename(c.ticket.path)} \u2014 ${c.ticket.title} [${c.ticket.priority}] (${c.ticket.path}) assignee: ${c.ticket.assignee || "unassigned"}`);
     }
-    fs11.mkdirSync(path14.dirname(this.briefPath), { recursive: true });
-    fs11.writeFileSync(this.briefPath, lines.join("\n"), "utf8");
+    fs12.mkdirSync(path15.dirname(this.briefPath), { recursive: true });
+    fs12.writeFileSync(this.briefPath, lines.join("\n"), "utf8");
     const planTicket = {
       id: "ORCHESTRATE",
-      filename: path14.basename(this.briefPath),
+      filename: path15.basename(this.briefPath),
       path: this.briefPath,
-      relativePath: path14.relative(board.rootPath, this.briefPath),
+      relativePath: path15.relative(board.rootPath, this.briefPath),
       column: "Backlog",
       subfolder: null,
       title: "Orchestration planning",
@@ -5967,8 +6215,8 @@ var KanbanWebviewManager = class _KanbanWebviewManager {
         try {
           const board = boardManager.getBoard(message.boardId);
           if (board) {
-            const configPath = path15.join(board.rootPath, "config.md");
-            if (fs12.existsSync(configPath)) {
+            const configPath = path16.join(board.rootPath, "config.md");
+            if (fs13.existsSync(configPath)) {
               const doc = await vscode5.workspace.openTextDocument(vscode5.Uri.file(configPath));
               await vscode5.window.showTextDocument(doc, { viewColumn: vscode5.ViewColumn.Beside });
             } else {
@@ -6046,7 +6294,7 @@ Instructions:
           const allBoards = boardManager.getAllBoards();
           if (t && t.path) {
             const foundBoard = allBoards.find(
-              (b) => path15.resolve(t.path).toLowerCase().startsWith(path15.resolve(b.rootPath).toLowerCase())
+              (b) => path16.resolve(t.path).toLowerCase().startsWith(path16.resolve(b.rootPath).toLowerCase())
             );
             if (foundBoard)
               targetBoard2 = foundBoard;
@@ -6078,7 +6326,7 @@ Instructions:
           const allBoards = boardManager.getAllBoards();
           if (message.ticketPath) {
             const foundBoard = allBoards.find(
-              (b) => path15.resolve(message.ticketPath).toLowerCase().startsWith(path15.resolve(b.rootPath).toLowerCase())
+              (b) => path16.resolve(message.ticketPath).toLowerCase().startsWith(path16.resolve(b.rootPath).toLowerCase())
             );
             if (foundBoard)
               targetBoard2 = foundBoard;
@@ -6110,7 +6358,7 @@ Instructions:
               let ticketObj = null;
               for (const col of reloadedBoard.columns) {
                 const found = col.tickets.find(
-                  (t) => path15.resolve(t.path).toLowerCase() === path15.resolve(message.ticketPath).toLowerCase() || message.ticketId && t.id === message.ticketId || t.filename.toLowerCase() === path15.basename(message.ticketPath).toLowerCase()
+                  (t) => path16.resolve(t.path).toLowerCase() === path16.resolve(message.ticketPath).toLowerCase() || message.ticketId && t.id === message.ticketId || t.filename.toLowerCase() === path16.basename(message.ticketPath).toLowerCase()
                 );
                 if (found) {
                   ticketObj = found;
@@ -6119,7 +6367,7 @@ Instructions:
               }
               if (!ticketObj) {
                 const sourcePath = boardManager.resolveTicketPathOnDisk(targetBoard2, message.ticketPath) || message.ticketPath;
-                const fileContent = await fs12.promises.readFile(sourcePath, "utf8");
+                const fileContent = await fs13.promises.readFile(sourcePath, "utf8");
                 ticketObj = TicketParser.parse(sourcePath, fileContent, targetBoard2.rootPath, "", null);
                 if (ticketObj) {
                   ticketObj.assignee = targetName;
@@ -6252,7 +6500,7 @@ Instructions:
   }
   getHtmlForWebview(webview) {
     let webviewDir = vscode5.Uri.joinPath(this.extensionUri, "dist", "webview");
-    if (!fs12.existsSync(webviewDir.fsPath)) {
+    if (!fs13.existsSync(webviewDir.fsPath)) {
       webviewDir = vscode5.Uri.joinPath(this.extensionUri, "src", "webview");
     }
     const v = Date.now();
@@ -6572,7 +6820,7 @@ Instructions:
 
 // src/fleet/panels.ts
 var vscode6 = __toESM(require("vscode"));
-var fs13 = __toESM(require("fs"));
+var fs14 = __toESM(require("fs"));
 var TITLES = {
   providers: "Agent Providers",
   orchestrator: "Orchestrator",
@@ -6636,7 +6884,7 @@ var FleetPanel = class _FleetPanel {
           fleet.registry.add(m.kindId);
           break;
         case "openFile": {
-          if (m.path && fs13.existsSync(m.path)) {
+          if (m.path && fs14.existsSync(m.path)) {
             const doc = await vscode6.workspace.openTextDocument(vscode6.Uri.file(m.path));
             await vscode6.window.showTextDocument(doc, { viewColumn: vscode6.ViewColumn.Beside });
           }
@@ -6659,7 +6907,7 @@ var FleetPanel = class _FleetPanel {
         }
         case "reply": {
           const text = await vscode6.window.showInputBox({ prompt: "Your reply (signed as Bj\xF6rn, Agentic Kanban UI)" });
-          if (text?.trim() && m.path && fs13.existsSync(m.path))
+          if (text?.trim() && m.path && fs14.existsSync(m.path))
             replyToThread(m.path, "Bj\xF6rn", "Agentic Kanban UI", text);
           break;
         }
@@ -6767,7 +7015,7 @@ var FleetPanel = class _FleetPanel {
           await fleet.requestReview(m.id);
           break;
         case "openTicket": {
-          if (m.path && fs13.existsSync(m.path)) {
+          if (m.path && fs14.existsSync(m.path)) {
             const doc = await vscode6.workspace.openTextDocument(vscode6.Uri.file(m.path));
             await vscode6.window.showTextDocument(doc, { viewColumn: vscode6.ViewColumn.Beside });
           }
@@ -6822,7 +7070,7 @@ var FleetPanel = class _FleetPanel {
   html() {
     const webview = this.panel.webview;
     let dir = vscode6.Uri.joinPath(this.extensionUri, "dist", "webview");
-    if (!fs13.existsSync(dir.fsPath))
+    if (!fs14.existsSync(dir.fsPath))
       dir = vscode6.Uri.joinPath(this.extensionUri, "src", "webview");
     const v = Date.now();
     const css = webview.asWebviewUri(vscode6.Uri.joinPath(dir, "fleet.css")).with({ query: `v=${v}` });
@@ -6963,10 +7211,10 @@ async function activate(context) {
           return;
         board = pick.board;
       }
-      const configPath = path16.join(board.rootPath, "config.md");
-      if (!fs14.existsSync(configPath)) {
+      const configPath = path17.join(board.rootPath, "config.md");
+      if (!fs15.existsSync(configPath)) {
         const defaultConfig = ConfigParser.generateDefaultConfig(board.name);
-        await fs14.promises.writeFile(configPath, defaultConfig, "utf8");
+        await fs15.promises.writeFile(configPath, defaultConfig, "utf8");
       }
       const doc = await vscode7.workspace.openTextDocument(vscode7.Uri.file(configPath));
       await vscode7.window.showTextDocument(doc);
@@ -6992,29 +7240,29 @@ async function activate(context) {
       const res = await boardManager.generateAgentRules(board.id);
       if (!res)
         return;
-      if (fs14.existsSync(res.targetPath)) {
+      if (fs15.existsSync(res.targetPath)) {
         const choice = await vscode7.window.showQuickPick(
           [
-            { label: "Overwrite", description: `Replace entire ${path16.basename(res.targetPath)}` },
-            { label: "Append", description: `Append Kanban rules to existing ${path16.basename(res.targetPath)}` },
+            { label: "Overwrite", description: `Replace entire ${path17.basename(res.targetPath)}` },
+            { label: "Append", description: `Append Kanban rules to existing ${path17.basename(res.targetPath)}` },
             { label: "Cancel", description: "Keep existing file unchanged" }
           ],
-          { placeHolder: `${path16.basename(res.targetPath)} already exists. What would you like to do?` }
+          { placeHolder: `${path17.basename(res.targetPath)} already exists. What would you like to do?` }
         );
         if (!choice || choice.label === "Cancel")
           return;
         if (choice.label === "Append") {
-          const existing = await fs14.promises.readFile(res.targetPath, "utf8");
-          await fs14.promises.writeFile(res.targetPath, `${existing}
+          const existing = await fs15.promises.readFile(res.targetPath, "utf8");
+          await fs15.promises.writeFile(res.targetPath, `${existing}
 
 ${res.content}`, "utf8");
         } else {
-          await fs14.promises.writeFile(res.targetPath, res.content, "utf8");
+          await fs15.promises.writeFile(res.targetPath, res.content, "utf8");
         }
       } else {
-        await fs14.promises.writeFile(res.targetPath, res.content, "utf8");
+        await fs15.promises.writeFile(res.targetPath, res.content, "utf8");
       }
-      vscode7.window.showInformationMessage(`Agent rules generated at ${path16.basename(res.targetPath)}`);
+      vscode7.window.showInformationMessage(`Agent rules generated at ${path17.basename(res.targetPath)}`);
       const doc = await vscode7.workspace.openTextDocument(vscode7.Uri.file(res.targetPath));
       await vscode7.window.showTextDocument(doc);
     }),
@@ -7039,8 +7287,8 @@ ${res.content}`, "utf8");
       const created = await boardManager.initTemplates(board.id);
       if (created && created.length > 0) {
         vscode7.window.showInformationMessage(`Initialized templates: ${created.join(", ")} in ${board.name}/.templates/`);
-        const firstTemplate = path16.join(board.rootPath, ".templates", created[0]);
-        if (fs14.existsSync(firstTemplate)) {
+        const firstTemplate = path17.join(board.rootPath, ".templates", created[0]);
+        if (fs15.existsSync(firstTemplate)) {
           const doc = await vscode7.workspace.openTextDocument(vscode7.Uri.file(firstTemplate));
           await vscode7.window.showTextDocument(doc);
         }

@@ -28,6 +28,8 @@ export interface OptimizerContext {
   /** Measured local tokens/second per `providerId::model` (from the benchmark script). */
   bench?: Record<string, { tps: number }>;
   objective?: Objective;
+  /** Never pick a model weaker than this for automatic assignments (1-5). */
+  minTier?: number;
   weights?: Partial<Weights>;
   now?: number;
   /** Slots already promised to other tickets in this planning pass. */
@@ -131,12 +133,17 @@ export function rankOptions(
   const now = ctx.now ?? Date.now();
   const w: Weights = { ...OBJECTIVES[ctx.objective || 'balanced'], ...(ctx.weights || {}) };
   const points = ticketPoints(ticket);
-  const needed = requiredTier(ticket);
+  const needed = Math.max(requiredTier(ticket), ctx.minTier || 0);
+  // A `model:<name>` label on the ticket restricts the choice to matching models (id contains the name).
+  const modelLabel = (ticket.labels || []).map(l => l.replace(/[`\s]/g, '')).find(l => /^model:/i.test(l));
+  const modelWanted = modelLabel ? modelLabel.slice(modelLabel.indexOf(':') + 1).toLowerCase() : '';
   const options: Option[] = [];
 
   for (const p of restrictTo ? [restrictTo] : providers) {
     const pressure = quotaPressure(p, sessions, now);
-    for (const model of candidateModels(p, ctx.catalog)) {
+    const allModels = candidateModels(p, ctx.catalog);
+    const labelled = modelWanted ? allModels.filter(m => m.toLowerCase().includes(modelWanted)) : [];
+    for (const model of labelled.length ? labelled : modelWanted && restrictTo === undefined && providers.some(q => candidateModels(q, ctx.catalog).some(m => m.toLowerCase().includes(modelWanted))) ? [] : allModels) {
       if (sessions.modelBlock(p.id, model, now)) continue;
       const entry = ctx.catalog.get(p.id, model);
       const wanted = pickReasoning(ticket, p, entry, ctx.objective || 'balanced');

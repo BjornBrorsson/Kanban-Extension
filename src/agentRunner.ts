@@ -21,6 +21,9 @@ export const DEFAULT_TASK = 'Review requirements and implement ticket {ticket_pa
 export interface FormatOptions {
   /** Instruction text substituted for {task} (defaults to implementing the ticket). */
   task?: string;
+  /** Permission mode for unattended runs and its CLI flag (e.g. --permission-mode smart). */
+  permissionMode?: string;
+  permissionFlag?: string;
   /** True when the working folder is a workspace you marked trusted; adds `trustFlag` to the command. */
   trusted?: boolean;
   trustFlag?: string;
@@ -213,6 +216,11 @@ export class AgentRunner {
     // A model was chosen but the template has no placeholder for it: append the provider's model flag.
     if (modelArgs && !command.includes('{model_args}') && !command.includes('{model}')) {
       command = `${command.trimEnd()} ${modelArgs}`;
+    }
+
+    // Unattended runs cannot answer permission prompts: pass the provider's configured permission mode.
+    if (options.permissionMode && options.permissionFlag && /^[a-z][a-z-]{0,20}$/.test(options.permissionMode) && /^[\w =.-]+$/.test(options.permissionFlag) && !command.includes(options.permissionFlag)) {
+      command = `${command.trimEnd()} ${options.permissionFlag} ${options.permissionMode}`;
     }
 
     // Workspace trusted in the extension: tell the agent to skip its own trust check (flag is provider-defined, never user text).

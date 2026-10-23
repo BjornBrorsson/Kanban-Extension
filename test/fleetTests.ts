@@ -10,6 +10,8 @@ import { TicketParser } from '../src/ticketParser';
 import { Assignee, Ticket } from '../src/types';
 import { ProviderRegistry, createProvider, providerToAssignee, sanitizeProvider, AgentProvider } from '../src/fleet/providers';
 import { SessionLauncher, SessionManager, Session, JsonFleetStore } from '../src/fleet/sessions';
+import { appendWorkLog, changedSince, formatWorkLogEntry, summarizeOutput } from '../src/fleet/outcome';
+import { countPermissionDenials } from '../src/fleet/limits';
 import { addCopilotTrustedFolder, removeCopilotTrustedFolder, copilotTrusts, isTrusted } from '../src/fleet/trust';
 import { detectFatal, detectLimit, detectAttention, modelTier, requiredTier, pickFallback } from '../src/fleet/limits';
 import { modelFor, pickReviewer, planWork, priorityRank } from '../src/fleet/scheduler';
@@ -301,6 +303,36 @@ async function main() {
   check(!untrustedCmd.command.includes('respect-workspace-trust'), 'no flag in a workspace that was not marked trusted');
   const evilFlag = (await AgentRunner.prepareLaunch(mkTicket(), devinAssignee, 'C:\\Aptic\\Tickets', undefined, { trustedRoots: ['C:\\Aptic'], trustFlag: '--x; rm -rf ~' }))!;
   check(!evilFlag.command.includes('rm -rf'), 'a malformed trust flag is never put on the command line');
+
+  console.log('\n--- unattended permissions, outcomes and Work Log ---');
+  check(countPermissionDenials('x\nPermission denied because no interactive user response was available.\n...\nPermission denied because no interactive user response was available.') === 2 && countPermissionDenials('all good') === 0, 'counts "no one to approve" denials');
+  const permCmd = AgentRunner.formatCliCommand(mkTicket(), { id: 'd', name: 'D', type: 'agent', agentConfig: { type: 'cli', command: 'devin -p "{task}"' } }, os.tmpdir(), undefined, 'b', { shell: 'posix', permissionMode: 'smart', permissionFlag: '--permission-mode' });
+  check(permCmd.endsWith('--permission-mode smart'), 'the provider permission mode becomes --permission-mode smart');
+  check(!AgentRunner.formatCliCommand(mkTicket(), { id: 'd', name: 'D', type: 'agent', agentConfig: { type: 'cli', command: 'devin -p "x"' } }, os.tmpdir(), undefined, 'b', { shell: 'posix', permissionMode: 'smart; rm -rf ~', permissionFlag: '--permission-mode' }).includes('rm -rf'), 'permission mode values are validated before reaching a shell');
+  check(sanitizeProvider({ kind: 'devin', permissionMode: 'smart' }).permissionMode === 'smart' && sanitizeProvider({ kind: 'devin', permissionMode: 'x;y' }).permissionMode === '', 'provider permission mode is sanitised');
+  check(sanitizeProvider({ kind: 'devin' }).permissionFlag === '--permission-mode', 'the Devin preset knows its permission flag');
+
+  const out = ['─────', 'Reading ticket ATF-180', 'Running generator...', '', 'Done. Added 3 regression tests, all passing. See Dev/tests/export_v8.py', '─────'].join('\n');
+  const sum = summarizeOutput(out);
+  check(sum.endsWith('See Dev/tests/export_v8.py') && !sum.includes('─'), 'the summary is the agent\'s closing lines without decoration');
+  check(summarizeOutput('x'.repeat(5000)).length <= 700 && summarizeOutput('') === '', 'summaries are capped; empty output gives an empty summary');
+  check(JSON.stringify(changedSince(new Set(['M a.cs']), new Set(['M a.cs', 'M b.cs', '?? c.cs']))) === '["b.cs","c.cs"]', 'files touched = new/changed git status lines');
+
+  const wlDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wl-'));
+  const entry = formatWorkLogEntry({ at: new Date(2026, 9, 23, 14, 5), provider: 'Devin', model: 'nemotron-3-ultra-high', role: 'worker', status: 'finished', minutes: 1.7, summary: 'Added 3 tests.', files: ['a.py', 'b.py'], logFile: '.agentic-kanban/runtime/sessions/s1.log' });
+  check(entry[0].startsWith('- **2026-10-23 14:05**: [Orchestrator] Devin') && entry.some(l => /Result: Added 3 tests/.test(l)) && entry.some(l => /Files touched.*a\.py, b\.py/.test(l)), 'Work Log entry has time, who, result and files');
+  const t1 = path.join(wlDir, 't1.md');
+  fs.writeFileSync(t1, '# T\n\n| Field | Value |\n|---|---|\n| **Status** | Ongoing |\n\n## Work Log\n- **2026-10-22**: Created.\n\n## Notes\nkeep me\n');
+  check(appendWorkLog(t1, entry) === true, 'appends to an existing Work Log');
+  const t1txt = fs.readFileSync(t1, 'utf8');
+  check(t1txt.includes('- **2026-10-22**: Created.\n- **2026-10-23 14:05**') && t1txt.indexOf('## Notes') > t1txt.indexOf('Added 3 tests') && t1txt.includes('keep me'), 'the entry lands at the end of the Work Log section; earlier lines and later sections are untouched');
+  const t2 = path.join(wlDir, 't2.md');
+  fs.writeFileSync(t2, '# T\r\n\r\nBody\r\n');
+  appendWorkLog(t2, entry);
+  const t2txt = fs.readFileSync(t2, 'utf8');
+  check(t2txt.includes('## Work Log') && /\r\n- \*\*2026-10-23/.test(t2txt) && !/[^\r]\n/.test(t2txt), 'a missing Work Log section is created, and CRLF endings are kept');
+  check(appendWorkLog(path.join(wlDir, 'nope.md'), entry) === false, 'a missing ticket file is reported, not created');
+  fs.rmSync(wlDir, { recursive: true, force: true });
 
   console.log('\n--- usage limits: block, fallback, wait ---');
   const fclock = () => t0;

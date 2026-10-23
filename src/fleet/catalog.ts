@@ -428,14 +428,15 @@ export function tierFromName(name: string, sizeB?: number): number {
   const b = sizeB ?? (n.match(/(\d+(?:\.\d+)?)b\b/) ? Number(n.match(/(\d+(?:\.\d+)?)b\b/)![1]) : undefined);
   if (b !== undefined) return b <= 4 ? 1 : b <= 9 ? 2 : b <= 40 ? 3 : b < 100 ? 4 : 5;
   if (/haiku|flash|(?:^|[-_ :])mini|nano|lite|small|instant/.test(n)) return 2;
-  if (/fable|opus|gpt-?[5-9]|o3|o1|ultra|argon|gemini.*pro|deepseek-r1|astra|max/.test(n)) return 5;
+  if (/fable|opus|o3|o1|ultra|argon|gemini.*pro|deepseek-r1|astra/.test(n)) return 5;
   if (/sonnet|gpt-?4|codex|codestral|devstral|coder|sol\b|pro\b/.test(n)) return 4;
   return 3;
 }
 
 function priceTier(p?: Pricing): number | undefined {
   if (!p || p.free || p.outPerM === undefined) return undefined;
-  return p.outPerM <= 2 ? 2 : p.outPerM <= 8 ? 3 : p.outPerM <= 25 ? 4 : 5;
+  // price is the stronger signal for capability when the provider actually listed it
+  return p.outPerM <= 1.5 ? 2 : p.outPerM <= 4 ? 3 : p.outPerM <= 12 ? 4 : 5;
 }
 
 /** Fallback $/1M output price by tier when nothing was listed (rough public list-price levels). */
@@ -504,8 +505,8 @@ export function curate(raws: RawFile[], opts: CurateOptions = {}): Catalog {
       const ovKey = [`${raw.providerId}::${rep}`, `${raw.providerId}::*`, `*::${rep}`].find(k => overrides[k]);
       let pricing: Pricing | undefined = repItem.raw.pricing;
       if (ovKey) pricing = { ...(pricing || {}), ...overrides[ovKey], source: 'override' };
-      const pTier = priceTier(pricing);
-      const tier = local ? nameTier : pTier ? Math.max(1, Math.min(5, Math.round((nameTier * 2 + pTier) / 3))) : nameTier;
+      const pTier = pricing && pricing.source !== 'estimated' ? priceTier(pricing) : undefined;
+      const tier = local ? nameTier : pTier ? Math.max(1, Math.min(5, Math.round((nameTier + pTier * 2) / 3))) : nameTier;
       if (!pricing) pricing = estimatePricing(tier, local);
       entries.push({
         key: `${raw.providerId}::${rep}`,

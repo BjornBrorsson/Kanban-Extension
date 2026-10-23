@@ -55,6 +55,9 @@
       .map(([v, t]) => el('option', { value: v, text: t, selected: v === (p.defaultReasoning || '') })));
     f.defaultReasoning.addEventListener('change', mark);
     f.effortFlag = input('effortFlag', 'text', p.effortFlag, { placeholder: 'e.g. --reasoning-effort (only if no effort model variants)' });
+    f.permissionMode = el('select', {}, [['', 'Agent default'], ['auto', 'auto (read-only auto-approved)'], ['accept-edits', 'accept-edits (+ workspace edits)'], ['smart', 'smart (+ safe commands, recommended)'], ['dangerous', 'dangerous (approve everything)']]
+      .map(([v, t]) => el('option', { value: v, text: t, selected: v === (p.permissionMode || '') })));
+    f.permissionMode.addEventListener('change', mark);
     f.pinned = input('pinnedModels', 'text', (p.pinnedModels || []).join(', '), { placeholder: 'e.g. swe-2-medium, fusion-claude-opus-5-5-high-sidekick-swe-2-medium' });
     f.modelTiers = input('modelTiers', 'text', p.modelTiers, { placeholder: 'opus=5, sonnet=4, haiku=2' });
     f.models = input('models', 'text', p.models.join(', '), { placeholder: 'comma separated, e.g. opus, sonnet, haiku' });
@@ -96,7 +99,7 @@
         id: p.id, kind: p.kind, type: p.type,
         name: f.name.value, account: f.account.value, enabled: f.enabled.checked,
         command: f.command.value, resumeCommand: f.resumeCommand.value, modelTiers: f.modelTiers.value,
-        defaultReasoning: f.defaultReasoning.value, effortFlag: f.effortFlag.value,
+        permissionMode: f.permissionMode.value, defaultReasoning: f.defaultReasoning.value, effortFlag: f.effortFlag.value,
         pinnedModels: f.pinned.value.split(',').map(s => s.trim()).filter(Boolean),
         budgetDaily: +f.budgetDaily.value, budgetWeekly: +f.budgetWeekly.value, budgetMonthly: +f.budgetMonthly.value,
         listCommand: f.listCommand.value, agentic: f.agentic.checked, modelFlag: f.modelFlag.value,
@@ -136,6 +139,7 @@
           'Continues an interrupted conversation via {session_id}. Without it, a resume re-runs the command with a "check the ticket and git state, then continue" prompt.')),
         fusionBar,
         el('div', { class: 'wide' }, field('Pinned models (always available)', f.pinned, 'Add model ids by hand (comma separated). They survive catalog refreshes even if hidden or missing, and the orchestrator considers them.')),
+        p.permissionFlag ? field('Permission mode (unattended runs)', f.permissionMode, 'Unattended -p runs cannot answer prompts: with the default, edits and commands are denied. smart is recommended; dangerous disables safety checks.') : null,
         field('Default reasoning level', f.defaultReasoning, 'The orchestrator raises/lowers it per task from here'),
         field('Reasoning flag (optional)', f.effortFlag, 'CLI flag for effort; models with -low/-high variants do not need it'),
         field('Budget per day (USD, 0 = none)', f.budgetDaily, 'Orchestrator stays under this'),

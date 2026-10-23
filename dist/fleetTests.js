@@ -23,7 +23,7 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 ));
 
 // test/fleetTests.ts
-var fs6 = __toESM(require("fs"));
+var fs7 = __toESM(require("fs"));
 var os3 = __toESM(require("os"));
 var http2 = __toESM(require("http"));
 var path8 = __toESM(require("path"));
@@ -809,6 +809,9 @@ var AgentRunner = class {
     if (modelArgs && !command.includes("{model_args}") && !command.includes("{model}")) {
       command = `${command.trimEnd()} ${modelArgs}`;
     }
+    if (options.permissionMode && options.permissionFlag && /^[a-z][a-z-]{0,20}$/.test(options.permissionMode) && /^[\w =.-]+$/.test(options.permissionFlag) && !command.includes(options.permissionFlag)) {
+      command = `${command.trimEnd()} ${options.permissionFlag} ${options.permissionMode}`;
+    }
     if (options.trusted && options.trustFlag && /^[\w =.-]+$/.test(options.trustFlag) && !command.includes(options.trustFlag)) {
       command = `${command.trimEnd()} ${options.trustFlag}`;
     }
@@ -1303,6 +1306,7 @@ var PROVIDER_PRESETS = [
     command: `devin {model_args} -p "{task}"`,
     modelFlag: "--model",
     trustFlag: "--respect-workspace-trust false",
+    permissionFlag: "--permission-mode",
     models: [],
     defaultModel: "",
     maxParallel: 2,
@@ -1491,6 +1495,8 @@ function sanitizeProvider(raw, existingIds = []) {
     type: raw?.type === "vscode-command" ? "vscode-command" : raw?.type === "cli" ? "cli" : preset.type,
     command: String(raw?.command ?? preset.command),
     defaultReasoning: ["none", "minimal", "low", "medium", "high", "xhigh", "max"].includes(String(raw?.defaultReasoning)) ? String(raw.defaultReasoning) : "",
+    permissionMode: /^[a-z][a-z-]{0,20}$/.test(String(raw?.permissionMode || "")) ? String(raw.permissionMode) : "",
+    permissionFlag: raw?.permissionFlag !== void 0 ? String(raw.permissionFlag).trim() || void 0 : getPreset(kind).permissionFlag,
     trustFlag: raw?.trustFlag !== void 0 ? String(raw.trustFlag).trim() || void 0 : getPreset(kind).trustFlag,
     effortFlag: raw?.effortFlag !== void 0 ? String(raw.effortFlag).trim() || void 0 : getPreset(kind).effortFlag,
     pinnedModels: Array.isArray(raw?.pinnedModels) ? raw.pinnedModels.map((m) => String(m).trim()).filter(Boolean) : [],
@@ -1977,6 +1983,25 @@ var SessionManager = class {
     this.interrupt(id, "usage-limit", `Usage limit reached${model ? ` on ${model}` : ""}${info.excerpt ? `: ${info.excerpt}` : ""}`);
     return block;
   }
+  setOutcome(id, outcome) {
+    const s = this.get(id);
+    if (!s)
+      return;
+    if (outcome.summary !== void 0)
+      s.outcome = outcome.summary;
+    if (outcome.logFile)
+      s.logFile = outcome.logFile;
+    if (outcome.files)
+      s.changedFiles = outcome.files;
+    this.emit();
+  }
+  markWorkLogged(id) {
+    const s = this.get(id);
+    if (s) {
+      s.workLogged = true;
+      this.emit();
+    }
+  }
   setAttention(id, text) {
     const s = this.get(id);
     if (!s || s.attention === text)
@@ -2250,6 +2275,74 @@ var SessionManager = class {
   }
 };
 
+// src/fleet/outcome.ts
+var fs6 = __toESM(require("fs"));
+function summarizeOutput(text, maxChars = 700) {
+  const lines = text.split(/\r?\n/).map((l) => l.replace(/\s+$/, "")).filter((l) => l.trim().length > 0 && !/^[\s─━═\-=_*│|>╭╰╮╯┌└┐┘]+$/.test(l));
+  if (!lines.length)
+    return "";
+  const picked = [];
+  let used = 0;
+  for (let i = lines.length - 1; i >= 0 && picked.length < 14; i--) {
+    const l = lines[i].trim();
+    if (used + l.length > maxChars && picked.length)
+      break;
+    picked.unshift(l.length > maxChars ? l.slice(0, maxChars) : l);
+    used += l.length + 1;
+  }
+  return picked.join(" ").replace(/\s+/g, " ").trim();
+}
+function changedSince(before, after) {
+  if (!after)
+    return [];
+  return [...after].filter((l) => !before || !before.has(l)).map((l) => l.replace(/^\S+\s+/, ""));
+}
+var pad = (n) => String(n).padStart(2, "0");
+function formatWorkLogEntry(i) {
+  const stamp = `${i.at.getFullYear()}-${pad(i.at.getMonth() + 1)}-${pad(i.at.getDate())} ${pad(i.at.getHours())}:${pad(i.at.getMinutes())}`;
+  const dur = i.minutes !== void 0 ? ` in ${i.minutes < 1 ? "<1" : Math.round(i.minutes)} min` : "";
+  const model = `${i.model || "default model"}${i.reasoning ? ` (${i.reasoning})` : ""}`;
+  const lines = [`- **${stamp}**: [Orchestrator] ${i.provider} \xB7 ${model} (${i.role}) ${i.status}${dur}${i.exitCode !== void 0 && i.exitCode !== 0 ? `, exit code ${i.exitCode}` : ""}.`];
+  if (i.note)
+    lines.push(`  - Note: ${i.note.replace(/\s+/g, " ").slice(0, 300)}`);
+  lines.push(`  - Result: ${i.summary || "(no output captured \u2014 terminal shell integration was not available)"}`);
+  if (i.files.length) {
+    const shown = i.files.slice(0, 8).join(", ");
+    lines.push(`  - Files touched in the workspace during the session: ${shown}${i.files.length > 8 ? ` (+${i.files.length - 8} more)` : ""}`);
+  }
+  if (i.logFile)
+    lines.push(`  - Full output: ${i.logFile}`);
+  return lines;
+}
+function appendWorkLog(ticketPath, entry) {
+  let text;
+  try {
+    text = fs6.readFileSync(ticketPath, "utf8");
+  } catch {
+    return false;
+  }
+  const eol = text.includes("\r\n") ? "\r\n" : "\n";
+  const body = text.replace(/\r\n/g, "\n");
+  const head = /^##\s+Work Log\s*$/im.exec(body);
+  const block = entry.join("\n");
+  let out;
+  if (head) {
+    const from = head.index + head[0].length;
+    const next = /^##\s+\S/m.exec(body.slice(from));
+    const end = next ? from + next.index : body.length;
+    const section = body.slice(from, end).replace(/\s+$/, "");
+    out = body.slice(0, from) + section + "\n" + block + "\n" + (next ? "\n" : "") + body.slice(end);
+  } else {
+    out = body.replace(/\s+$/, "") + "\n\n## Work Log\n" + block + "\n";
+  }
+  try {
+    fs6.writeFileSync(ticketPath, eol === "\r\n" ? out.replace(/\n/g, "\r\n") : out, "utf8");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // src/fleet/catalog.ts
 var ESTIMATED_OUT_PER_M = { 1: 0, 2: 1.5, 3: 6, 4: 15, 5: 30 };
 function estimatePricing(tier, local) {
@@ -2387,11 +2480,15 @@ function rankOptions(ticket, providers, sessions, ctx, restrictTo) {
   const now = ctx.now ?? Date.now();
   const w = { ...OBJECTIVES[ctx.objective || "balanced"], ...ctx.weights || {} };
   const points = ticketPoints(ticket);
-  const needed = requiredTier(ticket);
+  const needed = Math.max(requiredTier(ticket), ctx.minTier || 0);
+  const modelLabel = (ticket.labels || []).map((l) => l.replace(/[`\s]/g, "")).find((l) => /^model:/i.test(l));
+  const modelWanted = modelLabel ? modelLabel.slice(modelLabel.indexOf(":") + 1).toLowerCase() : "";
   const options = [];
   for (const p of restrictTo ? [restrictTo] : providers) {
     const pressure = quotaPressure(p, sessions, now);
-    for (const model of candidateModels(p, ctx.catalog)) {
+    const allModels = candidateModels(p, ctx.catalog);
+    const labelled = modelWanted ? allModels.filter((m) => m.toLowerCase().includes(modelWanted)) : [];
+    for (const model of labelled.length ? labelled : modelWanted && restrictTo === void 0 && providers.some((q) => candidateModels(q, ctx.catalog).some((m) => m.toLowerCase().includes(modelWanted))) ? [] : allModels) {
       if (sessions.modelBlock(p.id, model, now))
         continue;
       const entry = ctx.catalog.get(p.id, model);
@@ -2628,6 +2725,9 @@ function detectLimit(text, models = [], now = Date.now()) {
     excerpt: clean.slice(Math.max(0, m.index - 20), m.index + 140).replace(/\s+/g, " ").trim()
   };
 }
+function countPermissionDenials(text) {
+  return (stripAnsi(text).match(/permission denied because no interactive user response|no one to approve|denied,? no (?:one|user) to approve/gi) || []).length;
+}
 function detectFatal(text) {
   const clean = stripAnsi(text);
   const rules = [
@@ -2847,7 +2947,7 @@ async function main() {
   const as = TicketParser.updateTicketAssignee(md, "Dev$`in");
   check(as.includes("| **Assignee** | Dev$`in |"), "assignee keeps $-patterns literal");
   console.log("\n--- providers ---");
-  const tmp = fs6.mkdtempSync(path8.join(os3.tmpdir(), "fleet-"));
+  const tmp = fs7.mkdtempSync(path8.join(os3.tmpdir(), "fleet-"));
   const reg = new ProviderRegistry(tmp);
   const d1 = reg.add("devin", "Devin (work)");
   const d2 = reg.add("devin", "Devin (personal)");
@@ -2857,7 +2957,7 @@ async function main() {
   check(new ProviderRegistry(tmp).list().length === 2, "registry persists to disk");
   const weird = sanitizeProvider({ kind: "claude-code", name: "  ", maxParallel: 999, safetyMarginPct: 99, models: ["a", "b"], defaultModel: "zzz" });
   check(weird.maxParallel === 32 && weird.safetyMarginPct === 50 && weird.defaultModel === "a", "sanitize clamps limits and fixes default model");
-  const seeded = new ProviderRegistry(fs6.mkdtempSync(path8.join(os3.tmpdir(), "fleet-")));
+  const seeded = new ProviderRegistry(fs7.mkdtempSync(path8.join(os3.tmpdir(), "fleet-")));
   check(seeded.seedFromAssignees([agent, { id: "bj", name: "Bj", type: "human" }]) === 1 && seeded.list()[0].kind === "claude-code", "legacy agents are imported, humans ignored");
   check(providerToAssignee(d1).id === d1.id && providerToAssignee(d1).type === "agent", "provider converts to an assignee");
   console.log("\n--- sessions: parallel, window, spacing, cooldown ---");
@@ -2947,9 +3047,9 @@ async function main() {
   const rev = pickReviewer([{ ...p1, roles: ["worker", "reviewer"] }, { ...p2, roles: ["worker", "reviewer"] }], sm2, "p1", now2);
   check(rev?.id === "p2", "reviewer prefers a different provider than the author");
   console.log("\n--- auto-detect & ollama ---");
-  const bin = fs6.mkdtempSync(path8.join(os3.tmpdir(), "bin-"));
+  const bin = fs7.mkdtempSync(path8.join(os3.tmpdir(), "bin-"));
   const exeName = process.platform === "win32" ? "claude.cmd" : "claude";
-  fs6.writeFileSync(path8.join(bin, exeName), process.platform === "win32" ? "@echo off\r\n" : "#!/bin/sh\n");
+  fs7.writeFileSync(path8.join(bin, exeName), process.platform === "win32" ? "@echo off\r\n" : "#!/bin/sh\n");
   const fakeEnv = { PATH: "", PATHEXT: ".CMD;.EXE" };
   check(findExecutable(["claude"], fakeEnv, [bin]) === path8.join(bin, exeName), "findExecutable finds a CLI in an extra install folder");
   check(findExecutable(["claude"], { ...fakeEnv, PATH: bin }, []) === path8.join(bin, exeName), "findExecutable finds a CLI on PATH");
@@ -2965,7 +3065,7 @@ async function main() {
   srv.close();
   check(models.length === 2 && models[0] === "llama3.2:3b", "detects models from the Ollama HTTP API");
   check((await detectOllamaModels("127.0.0.1:1", path8.join(bin, "nonexistent"))).length === 0, "unreachable Ollama yields an empty list, not an error");
-  const oreg = new ProviderRegistry(fs6.mkdtempSync(path8.join(os3.tmpdir(), "fleet-")));
+  const oreg = new ProviderRegistry(fs7.mkdtempSync(path8.join(os3.tmpdir(), "fleet-")));
   const addedP = oreg.addDetected([{ kind: "ollama", path: path8.join(bin, "ollama.exe"), models: ["llama3.2:3b", "codestral:22b"] }, { kind: "claude-code", path: path8.join(bin, exeName) }]);
   const oll = addedP.find((p) => p.kind === "ollama");
   check(addedP.length === 2 && oll.models.length === 2 && oll.defaultModel === "llama3.2:3b" && oll.path.includes("ollama"), "addDetected creates providers with path and detected models");
@@ -3030,26 +3130,26 @@ async function main() {
   check(detectFatal("'agy' is not recognized as an internal or external command")?.kind === "missing-cli", "recognises a missing executable");
   check(detectFatal("Reading src/index.ts\nRunning tests... 12 passed") === null && detectFatal("I trusted the tests and signed the release notes") === null, "ordinary output is not flagged");
   console.log("\n--- workspace trust ---");
-  const trustHome = fs6.mkdtempSync(path8.join(os3.tmpdir(), "home-"));
-  fs6.mkdirSync(path8.join(trustHome, ".copilot"));
+  const trustHome = fs7.mkdtempSync(path8.join(os3.tmpdir(), "home-"));
+  fs7.mkdirSync(path8.join(trustHome, ".copilot"));
   const cfgFile = path8.join(trustHome, ".copilot", "config.json");
-  fs6.writeFileSync(cfgFile, '// User settings belong in settings.json.\n// This file is managed automatically.\n{\n  "firstLaunchAt": "2026-08-21T12:55:20.970Z",\n  "trustedFolders": ["C:\\\\Aptic"],\n  "recentModelIds": ["kimi-k3"]\n}\n');
+  fs7.writeFileSync(cfgFile, '// User settings belong in settings.json.\n// This file is managed automatically.\n{\n  "firstLaunchAt": "2026-08-21T12:55:20.970Z",\n  "trustedFolders": ["C:\\\\Aptic"],\n  "recentModelIds": ["kimi-k3"]\n}\n');
   const r1 = addCopilotTrustedFolder("C:\\Work\\Proj", trustHome);
-  const txt = fs6.readFileSync(cfgFile, "utf8");
+  const txt = fs7.readFileSync(cfgFile, "utf8");
   check(r1.changed && txt.startsWith("// User settings belong in settings.json.\n// This file is managed automatically.\n"), "Copilot config: the folder is added and the comment header is kept");
   const parsed = JSON.parse(txt.split("\n").filter((l) => !l.startsWith("//")).join("\n"));
   check(parsed.trustedFolders.length === 2 && parsed.recentModelIds[0] === "kimi-k3" && parsed.firstLaunchAt === "2026-08-21T12:55:20.970Z", "other settings are untouched");
   check(addCopilotTrustedFolder("c:\\work\\proj", trustHome).changed === false && copilotTrusts("C:\\WORK\\PROJ", trustHome), "adding again (any letter case) changes nothing");
   check(removeCopilotTrustedFolder("C:\\Work\\Proj", trustHome).changed && !copilotTrusts("C:\\Work\\Proj", trustHome) && copilotTrusts("C:\\Aptic", trustHome), "removing only removes that folder");
-  fs6.writeFileSync(cfgFile, "{ not json");
+  fs7.writeFileSync(cfgFile, "{ not json");
   let threw = false;
   try {
     addCopilotTrustedFolder("C:\\x", trustHome);
   } catch {
     threw = true;
   }
-  check(threw && fs6.readFileSync(cfgFile, "utf8") === "{ not json", "an unreadable config is never overwritten");
-  fs6.rmSync(trustHome, { recursive: true, force: true });
+  check(threw && fs7.readFileSync(cfgFile, "utf8") === "{ not json", "an unreadable config is never overwritten");
+  fs7.rmSync(trustHome, { recursive: true, force: true });
   check(isTrusted(["C:\\Aptic"], "C:\\Aptic\\sub\\dir") && isTrusted(["c:\\aptic"], "C:\\APTIC") && !isTrusted(["C:\\Aptic"], "C:\\Aptic2"), "trust covers the folder and its subfolders, not look-alike siblings");
   const devinAssignee = { id: "devin", name: "Devin", type: "agent", agentConfig: { type: "cli", command: 'devin {model_args} -p "{task}"', workingDir: "C:\\Aptic" } };
   const trustedCmd = await AgentRunner.prepareLaunch(mkTicket(), devinAssignee, "C:\\Aptic\\Tickets", void 0, { trustedRoots: ["C:\\Aptic"], trustFlag: "--respect-workspace-trust false", model: "swe-2-high", modelFlag: "--model" });
@@ -3058,6 +3158,33 @@ async function main() {
   check(!untrustedCmd.command.includes("respect-workspace-trust"), "no flag in a workspace that was not marked trusted");
   const evilFlag = await AgentRunner.prepareLaunch(mkTicket(), devinAssignee, "C:\\Aptic\\Tickets", void 0, { trustedRoots: ["C:\\Aptic"], trustFlag: "--x; rm -rf ~" });
   check(!evilFlag.command.includes("rm -rf"), "a malformed trust flag is never put on the command line");
+  console.log("\n--- unattended permissions, outcomes and Work Log ---");
+  check(countPermissionDenials("x\nPermission denied because no interactive user response was available.\n...\nPermission denied because no interactive user response was available.") === 2 && countPermissionDenials("all good") === 0, 'counts "no one to approve" denials');
+  const permCmd = AgentRunner.formatCliCommand(mkTicket(), { id: "d", name: "D", type: "agent", agentConfig: { type: "cli", command: 'devin -p "{task}"' } }, os3.tmpdir(), void 0, "b", { shell: "posix", permissionMode: "smart", permissionFlag: "--permission-mode" });
+  check(permCmd.endsWith("--permission-mode smart"), "the provider permission mode becomes --permission-mode smart");
+  check(!AgentRunner.formatCliCommand(mkTicket(), { id: "d", name: "D", type: "agent", agentConfig: { type: "cli", command: 'devin -p "x"' } }, os3.tmpdir(), void 0, "b", { shell: "posix", permissionMode: "smart; rm -rf ~", permissionFlag: "--permission-mode" }).includes("rm -rf"), "permission mode values are validated before reaching a shell");
+  check(sanitizeProvider({ kind: "devin", permissionMode: "smart" }).permissionMode === "smart" && sanitizeProvider({ kind: "devin", permissionMode: "x;y" }).permissionMode === "", "provider permission mode is sanitised");
+  check(sanitizeProvider({ kind: "devin" }).permissionFlag === "--permission-mode", "the Devin preset knows its permission flag");
+  const out = ["\u2500\u2500\u2500\u2500\u2500", "Reading ticket ATF-180", "Running generator...", "", "Done. Added 3 regression tests, all passing. See Dev/tests/export_v8.py", "\u2500\u2500\u2500\u2500\u2500"].join("\n");
+  const sum = summarizeOutput(out);
+  check(sum.endsWith("See Dev/tests/export_v8.py") && !sum.includes("\u2500"), "the summary is the agent's closing lines without decoration");
+  check(summarizeOutput("x".repeat(5e3)).length <= 700 && summarizeOutput("") === "", "summaries are capped; empty output gives an empty summary");
+  check(JSON.stringify(changedSince(/* @__PURE__ */ new Set(["M a.cs"]), /* @__PURE__ */ new Set(["M a.cs", "M b.cs", "?? c.cs"]))) === '["b.cs","c.cs"]', "files touched = new/changed git status lines");
+  const wlDir = fs7.mkdtempSync(path8.join(os3.tmpdir(), "wl-"));
+  const entry = formatWorkLogEntry({ at: new Date(2026, 9, 23, 14, 5), provider: "Devin", model: "nemotron-3-ultra-high", role: "worker", status: "finished", minutes: 1.7, summary: "Added 3 tests.", files: ["a.py", "b.py"], logFile: ".agentic-kanban/runtime/sessions/s1.log" });
+  check(entry[0].startsWith("- **2026-10-23 14:05**: [Orchestrator] Devin") && entry.some((l) => /Result: Added 3 tests/.test(l)) && entry.some((l) => /Files touched.*a\.py, b\.py/.test(l)), "Work Log entry has time, who, result and files");
+  const t1 = path8.join(wlDir, "t1.md");
+  fs7.writeFileSync(t1, "# T\n\n| Field | Value |\n|---|---|\n| **Status** | Ongoing |\n\n## Work Log\n- **2026-10-22**: Created.\n\n## Notes\nkeep me\n");
+  check(appendWorkLog(t1, entry) === true, "appends to an existing Work Log");
+  const t1txt = fs7.readFileSync(t1, "utf8");
+  check(t1txt.includes("- **2026-10-22**: Created.\n- **2026-10-23 14:05**") && t1txt.indexOf("## Notes") > t1txt.indexOf("Added 3 tests") && t1txt.includes("keep me"), "the entry lands at the end of the Work Log section; earlier lines and later sections are untouched");
+  const t2 = path8.join(wlDir, "t2.md");
+  fs7.writeFileSync(t2, "# T\r\n\r\nBody\r\n");
+  appendWorkLog(t2, entry);
+  const t2txt = fs7.readFileSync(t2, "utf8");
+  check(t2txt.includes("## Work Log") && /\r\n- \*\*2026-10-23/.test(t2txt) && !/[^\r]\n/.test(t2txt), "a missing Work Log section is created, and CRLF endings are kept");
+  check(appendWorkLog(path8.join(wlDir, "nope.md"), entry) === false, "a missing ticket file is reported, not created");
+  fs7.rmSync(wlDir, { recursive: true, force: true });
   console.log("\n--- usage limits: block, fallback, wait ---");
   const fclock = () => t0;
   const claude = { ...createProvider("claude-code", []), id: "cc", name: "Claude", maxParallel: 2, maxSessionsPerWindow: 0, minSpacingSeconds: 0, models: ["opus", "sonnet", "haiku"], defaultModel: "opus" };
@@ -3100,7 +3227,7 @@ async function main() {
     return m;
   })(), { now: t0 });
   check(planModel.length === 1 && planModel[0].model !== "opus", "the planner avoids a model that is at its limit");
-  fs6.rmSync(tmp, { recursive: true, force: true });
+  fs7.rmSync(tmp, { recursive: true, force: true });
   if (failures) {
     console.error(`
 ${failures} fleet check(s) FAILED`);
