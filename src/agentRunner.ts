@@ -4,6 +4,7 @@ import * as fs from 'fs';
 import { Ticket, Assignee, BoardConfig } from './types';
 import { ConfigParser } from './configParser';
 import { ShellKind, detectShellKind, escapeForDoubleQuotes } from './shellEscape';
+import { isTrusted } from './fleet/trust';
 
 export interface LaunchRequest {
   kind: 'cli' | 'vscode-command';
@@ -20,6 +21,11 @@ export const DEFAULT_TASK = 'Review requirements and implement ticket {ticket_pa
 export interface FormatOptions {
   /** Instruction text substituted for {task} (defaults to implementing the ticket). */
   task?: string;
+  /** True when the working folder is a workspace you marked trusted; adds `trustFlag` to the command. */
+  trusted?: boolean;
+  trustFlag?: string;
+  /** Workspaces marked trusted in the extension; prepareLaunch checks the agent's working folder against them. */
+  trustedRoots?: string[];
   /** Reasoning level for {effort_args}, with its CLI flag (e.g. --reasoning-effort). */
   effort?: string;
   effortFlag?: string;
@@ -209,6 +215,11 @@ export class AgentRunner {
       command = `${command.trimEnd()} ${modelArgs}`;
     }
 
+    // Workspace trusted in the extension: tell the agent to skip its own trust check (flag is provider-defined, never user text).
+    if (options.trusted && options.trustFlag && /^[\w =.-]+$/.test(options.trustFlag) && !command.includes(options.trustFlag)) {
+      command = `${command.trimEnd()} ${options.trustFlag}`;
+    }
+
     // A reasoning level was chosen but the template has no placeholder: append the effort flag.
     if (effortArgs && !command.includes('{effort_args}')) {
       command = `${command.trimEnd()} ${effortArgs}`;
@@ -263,8 +274,9 @@ export class AgentRunner {
     }
 
     if (config.type === 'cli') {
-      const command = this.formatCliCommand(ticket, assignee, boardRoot, boardConfig, ticketContent, options);
       const cwd = config.workingDir ? config.workingDir.replace('{workspace_root}', workspaceFolder).replace('{board_root}', boardRoot) : workspaceFolder;
+      const trusted = options.trustedRoots ? isTrusted(options.trustedRoots, cwd) : options.trusted;
+      const command = this.formatCliCommand(ticket, assignee, boardRoot, boardConfig, ticketContent, { ...options, trusted });
       return { kind: 'cli', ticket, assignee, command, cwd, model: options.model };
     }
 

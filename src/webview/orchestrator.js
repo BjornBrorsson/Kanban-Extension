@@ -24,7 +24,7 @@
     return Math.floor(m / 60) + 'h ' + (m % 60) + 'm';
   }
 
-  function settingsBar(s, providers) {
+  function settingsBar(s, providers, workspace) {
     const orchProviders = providers.filter(p => p.roles.includes('orchestrator') && p.command.includes('{task}'));
     const orchSel = el('select', { onchange: () => save({ orchestratorProviderId: orchSel.value, orchestratorModel: '' }) },
       el('option', { value: '', text: '(none)' }),
@@ -64,6 +64,9 @@
         el('label', { class: 'inline' }, auto, el('b', { text: 'Autopilot' }), ' start Ready tickets automatically'),
         el('label', { class: 'inline' }, rev, 'auto-request a review when a worker finishes'),
         el('span', { class: 'grow' }),
+        workspace ? (workspace.trusted
+          ? el('button', { text: 'Workspace trusted \u2713', title: 'Agents skip their own trust prompt in ' + workspace.folder + '. Click to stop trusting it.', onclick: () => send('untrustWorkspace') })
+          : el('button', { class: 'primary', text: 'Trust this workspace', title: 'Let agents run non-interactively in ' + workspace.folder, onclick: () => send('trustWorkspace') })) : null,
         el('button', { text: 'Message Board', title: 'Agent roster, claims and threads (if the BACF Message Board add-on is installed)', onclick: () => send('openMessageBoard') }),
         el('button', { text: 'Agent providers…', onclick: () => send('openProviders') })
       ),
@@ -168,7 +171,7 @@
       el('h1', { text: 'Orchestrator' }),
       el('p', { class: 'sub', text: running + ' agent session' + (running === 1 ? '' : 's') + ' running. The orchestrator spreads work across your providers and stays below each one\'s limits so you are not rate-limited.' }),
       recoveryBanner(state),
-      settingsBar(state.settings, state.providers),
+      settingsBar(state.settings, state.providers, state.workspace),
       el('h2', { text: 'Provider capacity' }), capacity(state),
       el('div', { class: 'bar-row' }, el('h2', { text: 'Proposed plan', style: 'margin:18px 0 0' }), el('span', { class: 'grow' }),
         el('button', { class: 'primary', text: 'Run plan now', disabled: !state.plan.some(d => d.startsNow), onclick: () => send('runPlan') })),

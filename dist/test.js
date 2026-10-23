@@ -37,7 +37,7 @@ __export(runParserTests_exports, {
 });
 module.exports = __toCommonJS(runParserTests_exports);
 var fs2 = __toESM(require("fs"));
-var path4 = __toESM(require("path"));
+var path5 = __toESM(require("path"));
 
 // src/ticketParser.ts
 var path = __toESM(require("path"));
@@ -903,7 +903,7 @@ var PromptFormatter = class {
 };
 
 // src/agentRunner.ts
-var path3 = __toESM(require("path"));
+var path4 = __toESM(require("path"));
 var fs = __toESM(require("fs"));
 
 // src/shellEscape.ts
@@ -927,6 +927,29 @@ function escapeForDoubleQuotes(value, shell) {
     default:
       return flat.replace(/[\\"$`!]/g, (ch) => "\\" + ch);
   }
+}
+
+// src/pathUtils.ts
+var path3 = __toESM(require("path"));
+var CASE_INSENSITIVE = process.platform === "win32" || process.platform === "darwin";
+function norm(p) {
+  const resolved = path3.resolve(p);
+  return CASE_INSENSITIVE ? resolved.toLowerCase() : resolved;
+}
+function isInside(root, candidate) {
+  if (!root || !candidate)
+    return false;
+  const r = norm(root);
+  const c = norm(candidate);
+  if (c === r)
+    return true;
+  const prefix = r.endsWith(path3.sep) ? r : r + path3.sep;
+  return c.startsWith(prefix);
+}
+
+// src/fleet/trust.ts
+function isTrusted(trustedRoots, cwd) {
+  return trustedRoots.some((r) => isInside(r, cwd));
 }
 
 // src/agentRunner.ts
@@ -976,21 +999,21 @@ var AgentRunner = class {
     if (process.platform === "win32") {
       const localAppData = process.env.LOCALAPPDATA;
       if (localAppData) {
-        candidates.push(path3.join(localAppData, "agy", "bin", "agy.exe"));
+        candidates.push(path4.join(localAppData, "agy", "bin", "agy.exe"));
       }
       const userProfile = process.env.USERPROFILE;
       if (userProfile) {
-        candidates.push(path3.join(userProfile, "AppData", "Local", "agy", "bin", "agy.exe"));
+        candidates.push(path4.join(userProfile, "AppData", "Local", "agy", "bin", "agy.exe"));
       }
       const programFiles = process.env.ProgramFiles;
       if (programFiles) {
-        candidates.push(path3.join(programFiles, "agy", "bin", "agy.exe"));
+        candidates.push(path4.join(programFiles, "agy", "bin", "agy.exe"));
       }
     } else {
       const home = process.env.HOME;
       if (home) {
-        candidates.push(path3.join(home, ".agy", "bin", "agy"));
-        candidates.push(path3.join(home, ".local", "bin", "agy"));
+        candidates.push(path4.join(home, ".agy", "bin", "agy"));
+        candidates.push(path4.join(home, ".local", "bin", "agy"));
       }
       candidates.push("/usr/local/bin/agy");
       candidates.push("/usr/bin/agy");
@@ -1013,11 +1036,11 @@ var AgentRunner = class {
     const vscode = getVsCode();
     const shell = options.shell || detectShellKind(vscode?.env?.shell);
     const esc = (v) => escapeForDoubleQuotes(v, shell);
-    const workspaceFolder = vscode?.workspace?.workspaceFolders?.[0]?.uri.fsPath || path3.dirname(boardRoot);
+    const workspaceFolder = vscode?.workspace?.workspaceFolders?.[0]?.uri.fsPath || path4.dirname(boardRoot);
     const content = rawTicketContent ?? ticket.summary ?? ticket.title;
     let effectiveBoardConfig = boardConfig;
     if (!effectiveBoardConfig) {
-      const configPath = path3.join(boardRoot, "config.md");
+      const configPath = path4.join(boardRoot, "config.md");
       if (fs.existsSync(configPath)) {
         try {
           const cfgText = fs.readFileSync(configPath, "utf8");
@@ -1070,6 +1093,9 @@ var AgentRunner = class {
     if (modelArgs && !command.includes("{model_args}") && !command.includes("{model}")) {
       command = `${command.trimEnd()} ${modelArgs}`;
     }
+    if (options.trusted && options.trustFlag && /^[\w =.-]+$/.test(options.trustFlag) && !command.includes(options.trustFlag)) {
+      command = `${command.trimEnd()} ${options.trustFlag}`;
+    }
     if (effortArgs && !command.includes("{effort_args}")) {
       command = `${command.trimEnd()} ${effortArgs}`;
     }
@@ -1077,7 +1103,7 @@ var AgentRunner = class {
     command = command.replace(/ {2,}/g, " ").trim();
     const exePath = config.path || config.executable;
     const first = command.match(/^([A-Za-z][\w.-]*)(?=\s|$)/);
-    if (exePath && first && path3.basename(exePath).replace(/\.[^.]+$/, "").toLowerCase() === first[1].toLowerCase()) {
+    if (exePath && first && path4.basename(exePath).replace(/\.[^.]+$/, "").toLowerCase() === first[1].toLowerCase()) {
       const quoted = `"${exePath}"`;
       command = (shell === "powershell" ? "& " : "") + quoted + command.slice(first[1].length);
     }
@@ -1097,7 +1123,7 @@ var AgentRunner = class {
       return null;
     }
     const config = assignee.agentConfig;
-    const workspaceFolder = vscode?.workspace?.workspaceFolders?.[0]?.uri.fsPath || path3.dirname(boardRoot);
+    const workspaceFolder = vscode?.workspace?.workspaceFolders?.[0]?.uri.fsPath || path4.dirname(boardRoot);
     let ticketContent = "";
     try {
       ticketContent = await fs.promises.readFile(ticket.path, "utf8");
@@ -1105,8 +1131,9 @@ var AgentRunner = class {
       ticketContent = ticket.summary || ticket.title;
     }
     if (config.type === "cli") {
-      const command = this.formatCliCommand(ticket, assignee, boardRoot, boardConfig, ticketContent, options);
       const cwd = config.workingDir ? config.workingDir.replace("{workspace_root}", workspaceFolder).replace("{board_root}", boardRoot) : workspaceFolder;
+      const trusted = options.trustedRoots ? isTrusted(options.trustedRoots, cwd) : options.trusted;
+      const command = this.formatCliCommand(ticket, assignee, boardRoot, boardConfig, ticketContent, { ...options, trusted });
       return { kind: "cli", ticket, assignee, command, cwd, model: options.model };
     }
     if (config.type === "vscode-command") {
@@ -1179,9 +1206,9 @@ function assert(condition, message) {
 }
 async function runTests() {
   console.log("=== Running Parser Unit Tests ===");
-  const root = path4.join(__dirname, "..");
-  const ticketsRoot = path4.join(root, "Example Structure", "Tickets");
-  const configPath = path4.join(ticketsRoot, "config.md");
+  const root = path5.join(__dirname, "..");
+  const ticketsRoot = path5.join(root, "Example Structure", "Tickets");
+  const configPath = path5.join(ticketsRoot, "config.md");
   const configContent = fs2.readFileSync(configPath, "utf8");
   const config = ConfigParser.parse(configContent, "Example Project Board");
   console.log("Testing ConfigParser...");
@@ -1198,7 +1225,7 @@ async function runTests() {
   assert(ideChat !== void 0 && ideChat.agentConfig?.type === "vscode-command", "ide-chat should be parsed as vscode-command");
   console.log("\u2713 ConfigParser tests passed!");
   console.log("\nTesting TicketParser on table ticket (ticket-019)...");
-  const ticket019Path = path4.join(ticketsRoot, "Ongoing", "Example_ticket-019_cleanup-audit-trail.md");
+  const ticket019Path = path5.join(ticketsRoot, "Ongoing", "Example_ticket-019_cleanup-audit-trail.md");
   const ticket019Content = fs2.readFileSync(ticket019Path, "utf8");
   const ticket019 = TicketParser.parse(ticket019Path, ticket019Content, ticketsRoot, "Ongoing", null);
   assert(ticket019.id === "DEMO-019", `Expected ID DEMO-019, got '${ticket019.id}'`);
@@ -1212,7 +1239,7 @@ async function runTests() {
   assert(ticket019.hasWorkLog === true, "Expected hasWorkLog to be true");
   console.log("\u2713 Ticket-019 table parser tests passed!");
   console.log("\nTesting TicketParser on checklist progress (ticket-001)...");
-  const ticket001Path = path4.join(ticketsRoot, "Assistance Required", "Example_ticket-001_local-gpu-model-host.md");
+  const ticket001Path = path5.join(ticketsRoot, "Assistance Required", "Example_ticket-001_local-gpu-model-host.md");
   const ticket001Content = fs2.readFileSync(ticket001Path, "utf8");
   const ticket001 = TicketParser.parse(ticket001Path, ticket001Content, ticketsRoot, "Assistance Required", null);
   assert(ticket001.id === "DEMO-005", `Expected ID DEMO-005, got '${ticket001.id}'`);
@@ -1221,7 +1248,7 @@ async function runTests() {
   assert(ticket001.labels.includes("llm") && ticket001.labels.includes("gpu"), "Expected llm and gpu labels");
   console.log("\u2713 Ticket-001 checklist tests passed!");
   console.log("\nTesting TicketParser on freeform ticket (ticket-092)...");
-  const ticket092Path = path4.join(ticketsRoot, "Backlog", "Needs further specification", "Example_ticket-092-Pathfix.md");
+  const ticket092Path = path5.join(ticketsRoot, "Backlog", "Needs further specification", "Example_ticket-092-Pathfix.md");
   const ticket092Content = fs2.readFileSync(ticket092Path, "utf8");
   const ticket092 = TicketParser.parse(ticket092Path, ticket092Content, ticketsRoot, "Backlog", "Needs further specification");
   assert(ticket092.id.includes("092"), `Expected ID to contain 092, got '${ticket092.id}'`);
@@ -1258,12 +1285,12 @@ async function runTests() {
   assert(yamlAssigned.includes("assignee: Copilot"), "Expected assignee to be inserted in YAML frontmatter");
   console.log("\u2713 YAML frontmatter assignment tests passed!");
   console.log("\nTesting Assignee insertion on EXT-001 format...");
-  const ext001Path = fs2.existsSync(path4.join(root, "Tickets", "Completed", "EXT-001_copy-agent-task-prompt.md")) ? path4.join(root, "Tickets", "Completed", "EXT-001_copy-agent-task-prompt.md") : path4.join(root, "Tickets", "Ongoing", "EXT-001_copy-agent-task-prompt.md");
+  const ext001Path = fs2.existsSync(path5.join(root, "Tickets", "Completed", "EXT-001_copy-agent-task-prompt.md")) ? path5.join(root, "Tickets", "Completed", "EXT-001_copy-agent-task-prompt.md") : path5.join(root, "Tickets", "Ongoing", "EXT-001_copy-agent-task-prompt.md");
   if (fs2.existsSync(ext001Path)) {
     const ext001Content = fs2.readFileSync(ext001Path, "utf8");
     const ext001Assigned = TicketParser.updateTicketAssignee(ext001Content, "Cline CLI (Ollama - Gemma 4 E4B)");
     assert(ext001Assigned.includes("| **Assignee** | Cline CLI (Ollama - Gemma 4 E4B) |"), "Expected Assignee row inserted into EXT-001");
-    const parsedExt001 = TicketParser.parse(ext001Path, ext001Assigned, path4.join(root, "Tickets"), "Ongoing", null);
+    const parsedExt001 = TicketParser.parse(ext001Path, ext001Assigned, path5.join(root, "Tickets"), "Ongoing", null);
     assert(parsedExt001.assignee === "Cline CLI (Ollama - Gemma 4 E4B)", `Expected parsed assignee to be Cline CLI, got: ${parsedExt001.assignee}`);
     const ext001Reassigned = TicketParser.updateTicketAssignee(ext001Assigned, "Bj\xF6rn");
     assert(ext001Reassigned.includes("| **Assignee** | Bj\xF6rn |"), "Expected Assignee row updated to Bj\xF6rn");
@@ -1404,7 +1431,7 @@ Ship it
   assert(interpolated.includes("| **Status** | Backlog |"), "Expected status column interpolated");
   assert(interpolated.includes(`- **${dateStr}**: Created ticket.`), "Expected date interpolated");
   console.log("\nTesting AGENTS.md file existence and structure...");
-  const agentsMdPath = path4.join(root, "AGENTS.md");
+  const agentsMdPath = path5.join(root, "AGENTS.md");
   assert(fs2.existsSync(agentsMdPath), "Expected root AGENTS.md to exist");
   const agentsMdContent = fs2.readFileSync(agentsMdPath, "utf8");
   assert(agentsMdContent.includes("# AGENTS.md \u2014 Agentic Kanban Operating Rules & Guidelines"), "Expected AGENTS.md header");
@@ -1414,11 +1441,11 @@ Ship it
   assert(agentsMdContent.includes("## 4. Standard Agent Operating Protocol"), "Expected Operating Protocol section");
   assert(agentsMdContent.includes("## 5. Multi-Model Orchestration & Subtask Routing"), "Expected Orchestration section");
   assert(agentsMdContent.includes("## 6. Critical Invariants for Agents"), "Expected Invariants section");
-  const agentMdPath = path4.join(root, "AGENT.md");
+  const agentMdPath = path5.join(root, "AGENT.md");
   assert(fs2.existsSync(agentMdPath), "Expected root AGENT.md compatibility file to exist");
   const agentMdContent = fs2.readFileSync(agentMdPath, "utf8");
   assert(agentMdContent.includes("[AGENTS.md](AGENTS.md)"), "Expected AGENT.md to reference AGENTS.md");
-  const exampleAgentsMd = path4.join(root, "Example Structure", "AGENTS.md");
+  const exampleAgentsMd = path5.join(root, "Example Structure", "AGENTS.md");
   assert(fs2.existsSync(exampleAgentsMd), "Expected Example Structure/AGENTS.md to exist");
   console.log("\u2713 AGENTS.md operating rules tests passed!");
   console.log("\nTesting Antigravity CLI Config Parsing, Path Resolution & Dispatch...");

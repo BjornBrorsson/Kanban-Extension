@@ -9,7 +9,9 @@ import { AgentProvider, ProviderRegistry, ProviderRole, providerToAssignee } fro
 import { JsonFleetStore, ProviderUsage, Session, SessionLauncher, SessionManager } from './sessions';
 import { detectAll, detectOne } from './detect';
 import { claim, findMessageBoard, readClaims, release } from './messageBoard';
-import { LimitInfo, detectAttention, detectLimit, pickFallback } from './limits';
+import { FatalInfo, LimitInfo, detectAttention, detectFatal, detectLimit, pickFallback } from './limits';
+import { findForKind } from './detect';
+import { addCopilotTrustedFolder, copilotTrusts, isTrusted, removeCopilotTrustedFolder } from './trust';
 import { CatalogIndex, CatalogStore, FusionCombo, fusionCombos, parseImportedList, providerPatches } from './catalog';
 import { JsonSpeedStore, SpeedBook } from './speed';
 import { Objective, OptimizerContext, estimateRun } from './optimizer';
@@ -38,6 +40,8 @@ export interface FleetSettings {
   objective: Objective;
   /** How many versions of each model family stay visible after curating the catalog. */
   keepModelVersions: number;
+  /** Workspace folders you marked trusted: agents started in them skip their own trust prompt where they support it. */
+  trustedWorkspaces: string[];
 }
 
 const DEFAULT_SETTINGS: FleetSettings = {
@@ -53,7 +57,8 @@ const DEFAULT_SETTINGS: FleetSettings = {
   backgroundTerminals: true,
   idleMinutes: 10,
   objective: 'balanced',
-  keepModelVersions: 2
+  keepModelVersions: 2,
+  trustedWorkspaces: []
 };
 
 const RESUME_TASK =
@@ -73,6 +78,7 @@ class TerminalLauncher implements SessionLauncher {
   public shuttingDown = false;
   public onLimit?: (s: Session, info: LimitInfo) => void;
   public onAttention?: (s: Session, text: string | undefined) => void;
+  public onFatal?: (s: Session, info: FatalInfo) => void;
   public modelsFor?: (providerId: string) => string[];
   private lastOutput = new Map<string, number>();
 
@@ -144,6 +150,7 @@ class TerminalLauncher implements SessionLauncher {
     if (!exec || typeof exec.read !== 'function') return;
     let buf = '';
     let limitFired = false;
+    let fatalFired = false;
     try {
       for await (const chunk of exec.read() as AsyncIterable<string>) {
         this.lastOutput.set(session.id, Date.now());
@@ -152,6 +159,10 @@ class TerminalLauncher implements SessionLauncher {
           const models = this.modelsFor?.(session.providerId) || [];
           const info = detectLimit(buf.slice(-2500), models.length ? models : [session.model]);
           if (info) { limitFired = true; this.onLimit?.(session, info); }
+        }
+        if (!fatalFired && !limitFired) {
+          const fatal = detectFatal(buf.slice(-1500));
+          if (fatal) { fatalFired = true; this.onFatal?.(session, fatal); }
         }
         const attention = detectAttention(buf.slice(-800));
         if (attention) this.onAttention?.(session, attention);
@@ -278,6 +289,7 @@ export class FleetController {
     launcher.modelsFor = id => this.registry.get(id)?.models || [];
     launcher.onLimit = (s, info) => { void this.handleLimit(s.id, info); };
     launcher.onAttention = (s, text) => this.handleAttention(s.id, text);
+    launcher.onFatal = (s, info) => { void this.handleFatal(s.id, info); };
 
     // Everything that starts an agent (card buttons, assign menu) now goes through the session manager.
     AgentRunner.launcher = async (req: LaunchRequest) => {
@@ -434,6 +446,8 @@ export class FleetController {
       payload = (await AgentRunner.prepareLaunch(ticket, extra.assignee || providerToAssignee(provider), boardRoot, board?.config, {
         model,
         modelFlag: provider.modelFlag,
+        trustedRoots: this.settings.trustedWorkspaces,
+        trustFlag: provider.trustFlag,
         effort: resolved.effort,
         effortFlag: provider.effortFlag,
         task,
@@ -454,6 +468,7 @@ export class FleetController {
       ticketTitle: ticket.title,
       boardId: board?.id || boardId,
       payload,
+      cwd: (payload as LaunchRequest | undefined)?.cwd,
       queueIfBusy,
       agentSessionId,
       attempt: extra.attempt,
@@ -643,6 +658,65 @@ export class FleetController {
     this.changeEmitter.fire();
   }
 
+  // ---------------------------------------------------------------- workspace trust
+
+  public currentWorkspace(): string | undefined {
+    return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  }
+
+  public isWorkspaceTrusted(folder = this.currentWorkspace()): boolean {
+    return !!folder && isTrusted(this.settings.trustedWorkspaces, folder);
+  }
+
+  /**
+   * "Trust this workspace" for every provider. Providers differ:
+   *  - flag-based (Devin): the extension adds trustFlag (--respect-workspace-trust false) to sessions started in this folder
+   *  - Copilot CLI: the folder is added to trustedFolders in ~/.copilot/config.json
+   *  - others: no known trust mechanism; they are listed so you know to approve their prompt once
+   */
+  public async trustWorkspace(folder = this.currentWorkspace(), confirm = true): Promise<string> {
+    if (!folder) return 'No workspace folder is open.';
+    const providers = this.registry.list().filter(p => p.enabled && p.type === 'cli');
+    const lines = providers.map(p => {
+      if (p.trustFlag) return `${p.name}: sessions here will run with "${p.trustFlag}"`;
+      if (p.kind === 'copilot-cli') return `${p.name}: adds the folder to trustedFolders in ~/.copilot/config.json`;
+      return `${p.name}: no known trust setting (approve its prompt once if it asks)`;
+    });
+    if (confirm) {
+      const pick = await vscode.window.showWarningMessage(
+        `Trust ${folder} for your agents? This lets them run non-interactively here without asking.`,
+        { modal: true, detail: lines.join('\n') || 'No providers configured.' },
+        'Trust this workspace'
+      );
+      if (pick !== 'Trust this workspace') return 'Cancelled.';
+    }
+    this.saveSettings({ trustedWorkspaces: [...new Set([...this.settings.trustedWorkspaces, folder])] });
+    const done: string[] = [];
+    for (const p of providers) {
+      if (p.kind === 'copilot-cli') {
+        try { done.push(addCopilotTrustedFolder(folder).changed ? 'Copilot CLI config updated' : 'Copilot CLI already trusted'); }
+        catch (e: any) { done.push(`Copilot CLI: ${e?.message || e}`); }
+      } else if (p.trustFlag) {
+        done.push(`${p.name}: will run with ${p.trustFlag}`);
+      }
+    }
+    return `Trusted ${folder}. ${done.join('; ')}`.trim();
+  }
+
+  public async untrustWorkspace(folder = this.currentWorkspace()): Promise<string> {
+    if (!folder) return 'No workspace folder is open.';
+    this.saveSettings({ trustedWorkspaces: this.settings.trustedWorkspaces.filter(w => w.toLowerCase() !== folder.toLowerCase()) });
+    let note = '';
+    try { note = removeCopilotTrustedFolder(folder).changed ? ' Removed from Copilot CLI trustedFolders.' : ''; } catch { /* config unreadable */ }
+    return `No longer trusting ${folder}.${note}`;
+  }
+
+  /** For the UI: the open workspace and whether it is trusted. */
+  public workspaceTrust(): { folder: string; trusted: boolean; copilotTrusted: boolean } | undefined {
+    const folder = this.currentWorkspace();
+    return folder ? { folder, trusted: this.isWorkspaceTrusted(folder), copilotTrusted: copilotTrusts(folder) } : undefined;
+  }
+
   // ---------------------------------------------------------------- usage limits & needing a human
 
   /**
@@ -685,6 +759,38 @@ export class FleetController {
     this.escalate(sessionId, `${label} hit its usage limit on "${s.ticketTitle}". ` +
       (this.settings.autoFailover ? 'No other model is capable enough and no reset time was reported.' : 'Auto-failover is off.') +
       ' Resume it when usage is available, or switch it to another agent.');
+  }
+
+  /**
+   * A setup problem that retrying cannot fix (untrusted folder, signed out, missing CLI). The session stops
+   * cleanly (no cooldown, no auto-retry) and you get a one-click way to fix it.
+   */
+  public async handleFatal(sessionId: string, info: FatalInfo): Promise<void> {
+    const s = this.sessions.get(sessionId);
+    if (!s || s.status !== 'running') return;
+    this.sessions.interrupt(sessionId, 'user-closed', `${info.message} (${info.excerpt})`);
+    this.sessions.setAttention(sessionId, info.message);
+    this.launcher.kill(this.sessions.get(sessionId)!);
+    const provider = this.registry.get(s.providerId);
+    const buttons = info.kind === 'workspace-trust' ? ['Trust this workspace', 'Open agent to fix', 'Open Orchestrator']
+      : info.kind === 'auth' ? ['Open agent to fix', 'Open Orchestrator'] : ['Open Agents', 'Open Orchestrator'];
+    const pick = await vscode.window.showWarningMessage(`${s.providerName}: ${info.message}`, ...buttons);
+    if (pick === 'Trust this workspace') {
+      const msg = await this.trustWorkspace(s.cwd, true);
+      vscode.window.showInformationMessage(msg);
+      if (this.isWorkspaceTrusted(s.cwd)) await this.resumeSession(sessionId, 'restart');
+    } else if (pick === 'Open agent to fix' && provider) {
+      // Starts the agent interactively in the same folder: trusting the folder / signing in happens there.
+      const exe = provider.path || findForKind(provider.kind) || provider.command.split(/\s+/)[0];
+      const term = vscode.window.createTerminal({ name: `Fix ${provider.name}`, cwd: s.cwd });
+      term.show(false);
+      term.sendText(process.platform === 'win32' && /\s/.test(exe) ? `& "${exe}"` : exe.includes(' ') ? `"${exe}"` : exe);
+      vscode.window.showInformationMessage('Accept the prompt in that terminal, exit the agent, then press Resume on the session in the Orchestrator.');
+    } else if (pick === 'Open Agents') {
+      void vscode.commands.executeCommand('agenticKanban.openProviders');
+    } else if (pick === 'Open Orchestrator') {
+      void vscode.commands.executeCommand('agenticKanban.openOrchestrator');
+    }
   }
 
   /** The orchestrator cannot fix this: flag the session and tell the user how to get into it. */

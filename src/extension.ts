@@ -46,6 +46,11 @@ export async function activate(context: vscode.ExtensionContext) {
       FleetPanel.show(context.extensionUri, 'providers');
     }),
 
+    vscode.commands.registerCommand('agenticKanban.trustWorkspace', async () => {
+      const ctl = FleetController.get();
+      if (ctl) vscode.window.showInformationMessage(await ctl.trustWorkspace());
+    }),
+
     vscode.commands.registerCommand('agenticKanban.importModels', async () => {
       const ctl = FleetController.get();
       if (!ctl) return;

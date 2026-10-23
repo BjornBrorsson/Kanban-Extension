@@ -24,7 +24,7 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 
 // test/m0Tests.ts
 var fs4 = __toESM(require("fs"));
-var path4 = __toESM(require("path"));
+var path5 = __toESM(require("path"));
 
 // src/orchestrator/config/orchestrationConfig.ts
 var OrchestrationConfigParser = class {
@@ -432,7 +432,7 @@ var cp = __toESM(require("child_process"));
 var fs2 = __toESM(require("fs"));
 
 // src/agentRunner.ts
-var path = __toESM(require("path"));
+var path2 = __toESM(require("path"));
 var fs = __toESM(require("fs"));
 
 // src/shellEscape.ts
@@ -456,6 +456,29 @@ function escapeForDoubleQuotes(value, shell) {
     default:
       return flat.replace(/[\\"$`!]/g, (ch) => "\\" + ch);
   }
+}
+
+// src/pathUtils.ts
+var path = __toESM(require("path"));
+var CASE_INSENSITIVE = process.platform === "win32" || process.platform === "darwin";
+function norm(p) {
+  const resolved = path.resolve(p);
+  return CASE_INSENSITIVE ? resolved.toLowerCase() : resolved;
+}
+function isInside(root, candidate) {
+  if (!root || !candidate)
+    return false;
+  const r = norm(root);
+  const c = norm(candidate);
+  if (c === r)
+    return true;
+  const prefix = r.endsWith(path.sep) ? r : r + path.sep;
+  return c.startsWith(prefix);
+}
+
+// src/fleet/trust.ts
+function isTrusted(trustedRoots, cwd) {
+  return trustedRoots.some((r) => isInside(r, cwd));
 }
 
 // src/agentRunner.ts
@@ -505,21 +528,21 @@ var AgentRunner = class {
     if (process.platform === "win32") {
       const localAppData = process.env.LOCALAPPDATA;
       if (localAppData) {
-        candidates.push(path.join(localAppData, "agy", "bin", "agy.exe"));
+        candidates.push(path2.join(localAppData, "agy", "bin", "agy.exe"));
       }
       const userProfile = process.env.USERPROFILE;
       if (userProfile) {
-        candidates.push(path.join(userProfile, "AppData", "Local", "agy", "bin", "agy.exe"));
+        candidates.push(path2.join(userProfile, "AppData", "Local", "agy", "bin", "agy.exe"));
       }
       const programFiles = process.env.ProgramFiles;
       if (programFiles) {
-        candidates.push(path.join(programFiles, "agy", "bin", "agy.exe"));
+        candidates.push(path2.join(programFiles, "agy", "bin", "agy.exe"));
       }
     } else {
       const home = process.env.HOME;
       if (home) {
-        candidates.push(path.join(home, ".agy", "bin", "agy"));
-        candidates.push(path.join(home, ".local", "bin", "agy"));
+        candidates.push(path2.join(home, ".agy", "bin", "agy"));
+        candidates.push(path2.join(home, ".local", "bin", "agy"));
       }
       candidates.push("/usr/local/bin/agy");
       candidates.push("/usr/bin/agy");
@@ -542,11 +565,11 @@ var AgentRunner = class {
     const vscode = getVsCode();
     const shell = options.shell || detectShellKind(vscode?.env?.shell);
     const esc = (v) => escapeForDoubleQuotes(v, shell);
-    const workspaceFolder = vscode?.workspace?.workspaceFolders?.[0]?.uri.fsPath || path.dirname(boardRoot);
+    const workspaceFolder = vscode?.workspace?.workspaceFolders?.[0]?.uri.fsPath || path2.dirname(boardRoot);
     const content = rawTicketContent ?? ticket.summary ?? ticket.title;
     let effectiveBoardConfig = boardConfig;
     if (!effectiveBoardConfig) {
-      const configPath = path.join(boardRoot, "config.md");
+      const configPath = path2.join(boardRoot, "config.md");
       if (fs.existsSync(configPath)) {
         try {
           const cfgText = fs.readFileSync(configPath, "utf8");
@@ -599,6 +622,9 @@ var AgentRunner = class {
     if (modelArgs && !command.includes("{model_args}") && !command.includes("{model}")) {
       command = `${command.trimEnd()} ${modelArgs}`;
     }
+    if (options.trusted && options.trustFlag && /^[\w =.-]+$/.test(options.trustFlag) && !command.includes(options.trustFlag)) {
+      command = `${command.trimEnd()} ${options.trustFlag}`;
+    }
     if (effortArgs && !command.includes("{effort_args}")) {
       command = `${command.trimEnd()} ${effortArgs}`;
     }
@@ -606,7 +632,7 @@ var AgentRunner = class {
     command = command.replace(/ {2,}/g, " ").trim();
     const exePath = config.path || config.executable;
     const first = command.match(/^([A-Za-z][\w.-]*)(?=\s|$)/);
-    if (exePath && first && path.basename(exePath).replace(/\.[^.]+$/, "").toLowerCase() === first[1].toLowerCase()) {
+    if (exePath && first && path2.basename(exePath).replace(/\.[^.]+$/, "").toLowerCase() === first[1].toLowerCase()) {
       const quoted = `"${exePath}"`;
       command = (shell === "powershell" ? "& " : "") + quoted + command.slice(first[1].length);
     }
@@ -626,7 +652,7 @@ var AgentRunner = class {
       return null;
     }
     const config = assignee.agentConfig;
-    const workspaceFolder = vscode?.workspace?.workspaceFolders?.[0]?.uri.fsPath || path.dirname(boardRoot);
+    const workspaceFolder = vscode?.workspace?.workspaceFolders?.[0]?.uri.fsPath || path2.dirname(boardRoot);
     let ticketContent = "";
     try {
       ticketContent = await fs.promises.readFile(ticket.path, "utf8");
@@ -634,8 +660,9 @@ var AgentRunner = class {
       ticketContent = ticket.summary || ticket.title;
     }
     if (config.type === "cli") {
-      const command = this.formatCliCommand(ticket, assignee, boardRoot, boardConfig, ticketContent, options);
       const cwd = config.workingDir ? config.workingDir.replace("{workspace_root}", workspaceFolder).replace("{board_root}", boardRoot) : workspaceFolder;
+      const trusted = options.trustedRoots ? isTrusted(options.trustedRoots, cwd) : options.trusted;
+      const command = this.formatCliCommand(ticket, assignee, boardRoot, boardConfig, ticketContent, { ...options, trusted });
       return { kind: "cli", ticket, assignee, command, cwd, model: options.model };
     }
     if (config.type === "vscode-command") {
@@ -864,12 +891,12 @@ var CapabilityProbe = class {
     return results;
   }
   static execWithTimeout(cmd, timeoutMs) {
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve2, reject) => {
       cp.exec(cmd, { timeout: timeoutMs }, (err, stdout) => {
         if (err) {
           reject(err);
         } else {
-          resolve(stdout);
+          resolve2(stdout);
         }
       });
     });
@@ -879,7 +906,7 @@ var CapabilityProbe = class {
 // src/orchestrator/models/ticketAttempt.ts
 var crypto = __toESM(require("crypto"));
 var fs3 = __toESM(require("fs"));
-var path2 = __toESM(require("path"));
+var path3 = __toESM(require("path"));
 var TicketAttemptManager = class {
   /**
    * Generates a unique monotonic attempt ID.
@@ -938,7 +965,7 @@ var TicketAttemptManager = class {
    * and never wiped while active attempts or recovery obligations exist.
    */
   static getRuntimeStoreDir(workspaceRoot) {
-    const dir = path2.join(workspaceRoot, ".agentic-kanban", "runtime");
+    const dir = path3.join(workspaceRoot, ".agentic-kanban", "runtime");
     if (!fs3.existsSync(dir)) {
       fs3.mkdirSync(dir, { recursive: true });
     }
@@ -948,12 +975,12 @@ var TicketAttemptManager = class {
    * Persists an attempt record durably to the runtime store.
    */
   static saveAttempt(workspaceRoot, attempt) {
-    const attemptsDir = path2.join(this.getRuntimeStoreDir(workspaceRoot), "attempts");
+    const attemptsDir = path3.join(this.getRuntimeStoreDir(workspaceRoot), "attempts");
     if (!fs3.existsSync(attemptsDir)) {
       fs3.mkdirSync(attemptsDir, { recursive: true });
     }
     attempt.updatedAt = Date.now();
-    const filePath = path2.join(attemptsDir, `${attempt.attemptId}.json`);
+    const filePath = path3.join(attemptsDir, `${attempt.attemptId}.json`);
     const tempPath = `${filePath}.tmp`;
     fs3.writeFileSync(tempPath, JSON.stringify(attempt, null, 2), "utf8");
     fs3.renameSync(tempPath, filePath);
@@ -962,7 +989,7 @@ var TicketAttemptManager = class {
    * Reads an attempt record from disk.
    */
   static loadAttempt(workspaceRoot, attemptId) {
-    const filePath = path2.join(this.getRuntimeStoreDir(workspaceRoot), "attempts", `${attemptId}.json`);
+    const filePath = path3.join(this.getRuntimeStoreDir(workspaceRoot), "attempts", `${attemptId}.json`);
     if (!fs3.existsSync(filePath)) {
       return null;
     }
@@ -976,7 +1003,7 @@ var TicketAttemptManager = class {
 };
 
 // src/orchestrator/models/migration.ts
-var path3 = __toESM(require("path"));
+var path4 = __toESM(require("path"));
 var TicketMigrationUtility = class {
   /**
    * Assigns a stable ID to a ticket if it lacks one, updating the file content
@@ -1027,7 +1054,7 @@ id: ${generatedId}` + frontmatter;
     let maxSeq = 0;
     const regex = new RegExp(`^${prefix}-(\\d+)`, "i");
     for (const f of ticketFiles) {
-      const base = path3.basename(f);
+      const base = path4.basename(f);
       const match = base.match(regex);
       if (match) {
         const num = parseInt(match[1], 10);
@@ -1121,9 +1148,9 @@ orchestration:
   assert(probeResults["copilot-cli"] !== void 0, "Probe results should include copilot-cli");
   console.log("\u2713 Capability discovery probes evaluated successfully across all runners.");
   console.log("\nTesting ORCH-004: Ticket Attempt Model, Manifest, and Migration...");
-  const tempWorkspace = path4.join(__dirname, "..", "scratch", "test-orch");
+  const tempWorkspace = path5.join(__dirname, "..", "scratch", "test-orch");
   fs4.mkdirSync(tempWorkspace, { recursive: true });
-  const testFilePath = path4.join(tempWorkspace, "sample.txt");
+  const testFilePath = path5.join(tempWorkspace, "sample.txt");
   fs4.writeFileSync(testFilePath, "Hello Orchestrator!", "utf8");
   const manifest = TicketAttemptManager.createManifest("commit-sha-12345", [testFilePath]);
   assert(manifest.baseRevision === "commit-sha-12345", "Manifest baseRevision should match");

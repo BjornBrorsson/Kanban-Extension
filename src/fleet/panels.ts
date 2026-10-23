@@ -106,6 +106,12 @@ export class FleetPanel {
           if (dir && m.key) release(dir, m.key, 'Agentic Kanban UI', true);
           break;
         }
+        case 'trustWorkspace':
+          vscode.window.showInformationMessage(await fleet.trustWorkspace());
+          break;
+        case 'untrustWorkspace':
+          vscode.window.showInformationMessage(await fleet.untrustWorkspace());
+          break;
         case 'openMessageBoard':
           FleetPanel.show(this.extensionUri, 'messageboard');
           return;
@@ -243,6 +249,7 @@ export class FleetPanel {
     this.panel.webview.postMessage({
       ...base,
       settings: fleet.settings,
+      workspace: fleet.workspaceTrust(),
       sessions: fleet.sessions.list().sort((a, b) => (b.startedAt || b.queuedAt) - (a.startedAt || a.queuedAt)),
       plan: fleet.plan()
     });

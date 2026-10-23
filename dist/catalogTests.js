@@ -25,7 +25,7 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 // test/catalogTests.ts
 var fs4 = __toESM(require("fs"));
 var os3 = __toESM(require("os"));
-var path5 = __toESM(require("path"));
+var path6 = __toESM(require("path"));
 
 // src/fleet/catalog.ts
 var fs2 = __toESM(require("fs"));
@@ -224,14 +224,14 @@ function sizeFromParameterSize(s) {
   return /t/i.test(m[2]) ? n * 1e3 : /m/i.test(m[2]) ? n / 1e3 : n;
 }
 function httpGetJson(url, timeoutMs) {
-  return new Promise((resolve2, reject) => {
+  return new Promise((resolve3, reject) => {
     const req = http.get(url, { timeout: timeoutMs }, (res) => {
       let body = "";
       res.setEncoding("utf8");
       res.on("data", (d) => body += d);
       res.on("end", () => {
         try {
-          resolve2(JSON.parse(body));
+          resolve3(JSON.parse(body));
         } catch (e) {
           reject(e);
         }
@@ -355,12 +355,12 @@ function isShim(exe) {
   return process.platform === "win32" && /\.(cmd|bat)$/i.test(exe);
 }
 function runCapture(exe, args, timeoutMs = 3e4) {
-  return new Promise((resolve2, reject) => {
+  return new Promise((resolve3, reject) => {
     (0, import_child_process.execFile)(exe, args, { timeout: timeoutMs, windowsHide: true, maxBuffer: 8 * 1024 * 1024, shell: isShim(exe) }, (err, stdout, stderr) => {
       if (err && !String(stdout).trim())
         reject(new Error(String(stderr || err.message).trim().slice(0, 300)));
       else
-        resolve2(String(stdout));
+        resolve3(String(stdout));
     });
   });
 }
@@ -861,6 +861,7 @@ var PROVIDER_PRESETS = [
     type: "cli",
     command: `devin {model_args} -p "{task}"`,
     modelFlag: "--model",
+    trustFlag: "--respect-workspace-trust false",
     models: [],
     defaultModel: "",
     maxParallel: 2,
@@ -1030,6 +1031,7 @@ function sanitizeProvider(raw, existingIds = []) {
     type: raw?.type === "vscode-command" ? "vscode-command" : raw?.type === "cli" ? "cli" : preset.type,
     command: String(raw?.command ?? preset.command),
     defaultReasoning: ["none", "minimal", "low", "medium", "high", "xhigh", "max"].includes(String(raw?.defaultReasoning)) ? String(raw.defaultReasoning) : "",
+    trustFlag: raw?.trustFlag !== void 0 ? String(raw.trustFlag).trim() || void 0 : getPreset(kind).trustFlag,
     effortFlag: raw?.effortFlag !== void 0 ? String(raw.effortFlag).trim() || void 0 : getPreset(kind).effortFlag,
     pinnedModels: Array.isArray(raw?.pinnedModels) ? raw.pinnedModels.map((m) => String(m).trim()).filter(Boolean) : [],
     listCommand: raw?.listCommand ? String(raw.listCommand).slice(0, 300) : void 0,
@@ -1378,6 +1380,7 @@ var SessionManager = class {
       attempt: req.attempt ?? 1,
       resumedFrom: req.resumedFrom,
       hidden: req.hidden,
+      cwd: req.cwd,
       reasoning: req.reasoning,
       points: req.points,
       estCost: req.estCost,
@@ -1968,7 +1971,7 @@ function rankOptions(ticket, providers, sessions, ctx, restrictTo) {
 }
 
 // src/agentRunner.ts
-var path4 = __toESM(require("path"));
+var path5 = __toESM(require("path"));
 var fs3 = __toESM(require("fs"));
 
 // src/orchestrator/config/orchestrationConfig.ts
@@ -2395,6 +2398,29 @@ function escapeForDoubleQuotes(value, shell) {
   }
 }
 
+// src/pathUtils.ts
+var path4 = __toESM(require("path"));
+var CASE_INSENSITIVE = process.platform === "win32" || process.platform === "darwin";
+function norm(p) {
+  const resolved = path4.resolve(p);
+  return CASE_INSENSITIVE ? resolved.toLowerCase() : resolved;
+}
+function isInside(root, candidate) {
+  if (!root || !candidate)
+    return false;
+  const r = norm(root);
+  const c = norm(candidate);
+  if (c === r)
+    return true;
+  const prefix = r.endsWith(path4.sep) ? r : r + path4.sep;
+  return c.startsWith(prefix);
+}
+
+// src/fleet/trust.ts
+function isTrusted(trustedRoots, cwd) {
+  return trustedRoots.some((r) => isInside(r, cwd));
+}
+
 // src/agentRunner.ts
 var DEFAULT_TASK = "Review requirements and implement ticket {ticket_path}: {ticket_title}";
 var SESSION_ID_PATTERN = /^[0-9a-fA-F-]{8,64}$/;
@@ -2442,21 +2468,21 @@ var AgentRunner = class {
     if (process.platform === "win32") {
       const localAppData = process.env.LOCALAPPDATA;
       if (localAppData) {
-        candidates.push(path4.join(localAppData, "agy", "bin", "agy.exe"));
+        candidates.push(path5.join(localAppData, "agy", "bin", "agy.exe"));
       }
       const userProfile = process.env.USERPROFILE;
       if (userProfile) {
-        candidates.push(path4.join(userProfile, "AppData", "Local", "agy", "bin", "agy.exe"));
+        candidates.push(path5.join(userProfile, "AppData", "Local", "agy", "bin", "agy.exe"));
       }
       const programFiles = process.env.ProgramFiles;
       if (programFiles) {
-        candidates.push(path4.join(programFiles, "agy", "bin", "agy.exe"));
+        candidates.push(path5.join(programFiles, "agy", "bin", "agy.exe"));
       }
     } else {
       const home = process.env.HOME;
       if (home) {
-        candidates.push(path4.join(home, ".agy", "bin", "agy"));
-        candidates.push(path4.join(home, ".local", "bin", "agy"));
+        candidates.push(path5.join(home, ".agy", "bin", "agy"));
+        candidates.push(path5.join(home, ".local", "bin", "agy"));
       }
       candidates.push("/usr/local/bin/agy");
       candidates.push("/usr/bin/agy");
@@ -2479,11 +2505,11 @@ var AgentRunner = class {
     const vscode = getVsCode();
     const shell = options.shell || detectShellKind(vscode?.env?.shell);
     const esc = (v) => escapeForDoubleQuotes(v, shell);
-    const workspaceFolder = vscode?.workspace?.workspaceFolders?.[0]?.uri.fsPath || path4.dirname(boardRoot);
+    const workspaceFolder = vscode?.workspace?.workspaceFolders?.[0]?.uri.fsPath || path5.dirname(boardRoot);
     const content = rawTicketContent ?? ticket.summary ?? ticket.title;
     let effectiveBoardConfig = boardConfig;
     if (!effectiveBoardConfig) {
-      const configPath = path4.join(boardRoot, "config.md");
+      const configPath = path5.join(boardRoot, "config.md");
       if (fs3.existsSync(configPath)) {
         try {
           const cfgText = fs3.readFileSync(configPath, "utf8");
@@ -2536,6 +2562,9 @@ var AgentRunner = class {
     if (modelArgs && !command.includes("{model_args}") && !command.includes("{model}")) {
       command = `${command.trimEnd()} ${modelArgs}`;
     }
+    if (options.trusted && options.trustFlag && /^[\w =.-]+$/.test(options.trustFlag) && !command.includes(options.trustFlag)) {
+      command = `${command.trimEnd()} ${options.trustFlag}`;
+    }
     if (effortArgs && !command.includes("{effort_args}")) {
       command = `${command.trimEnd()} ${effortArgs}`;
     }
@@ -2543,7 +2572,7 @@ var AgentRunner = class {
     command = command.replace(/ {2,}/g, " ").trim();
     const exePath = config.path || config.executable;
     const first = command.match(/^([A-Za-z][\w.-]*)(?=\s|$)/);
-    if (exePath && first && path4.basename(exePath).replace(/\.[^.]+$/, "").toLowerCase() === first[1].toLowerCase()) {
+    if (exePath && first && path5.basename(exePath).replace(/\.[^.]+$/, "").toLowerCase() === first[1].toLowerCase()) {
       const quoted = `"${exePath}"`;
       command = (shell === "powershell" ? "& " : "") + quoted + command.slice(first[1].length);
     }
@@ -2563,7 +2592,7 @@ var AgentRunner = class {
       return null;
     }
     const config = assignee.agentConfig;
-    const workspaceFolder = vscode?.workspace?.workspaceFolders?.[0]?.uri.fsPath || path4.dirname(boardRoot);
+    const workspaceFolder = vscode?.workspace?.workspaceFolders?.[0]?.uri.fsPath || path5.dirname(boardRoot);
     let ticketContent = "";
     try {
       ticketContent = await fs3.promises.readFile(ticket.path, "utf8");
@@ -2571,8 +2600,9 @@ var AgentRunner = class {
       ticketContent = ticket.summary || ticket.title;
     }
     if (config.type === "cli") {
-      const command = this.formatCliCommand(ticket, assignee, boardRoot, boardConfig, ticketContent, options);
       const cwd = config.workingDir ? config.workingDir.replace("{workspace_root}", workspaceFolder).replace("{board_root}", boardRoot) : workspaceFolder;
+      const trusted = options.trustedRoots ? isTrusted(options.trustedRoots, cwd) : options.trusted;
+      const command = this.formatCliCommand(ticket, assignee, boardRoot, boardConfig, ticketContent, { ...options, trusted });
       return { kind: "cli", ticket, assignee, command, cwd, model: options.model };
     }
     if (config.type === "vscode-command") {
@@ -2648,8 +2678,8 @@ function check(cond, msg) {
     console.log("  \u2714 " + msg);
   }
 }
-var FIX = path5.join(__dirname, "..", "test", "fixtures", "models");
-var read = (f) => fs4.readFileSync(path5.join(FIX, f), "utf8");
+var FIX = path6.join(__dirname, "..", "test", "fixtures", "models");
+var read = (f) => fs4.readFileSync(path6.join(FIX, f), "utf8");
 var NullLauncher = class {
   async launch(_s) {
     return true;
@@ -2663,7 +2693,7 @@ function mkTicket(over = {}) {
   return {
     id: "T-1",
     filename: "t-1.md",
-    path: path5.join(os3.tmpdir(), "catalog-t1.md"),
+    path: path6.join(os3.tmpdir(), "catalog-t1.md"),
     relativePath: "t-1.md",
     column: "Backlog",
     subfolder: "Ready",
@@ -2750,11 +2780,11 @@ async function main() {
   const keep1 = curate([rawDevin], { keepVersionsPerFamily: 1 });
   check(keep1.models.filter((m) => m.family === "claude-opus" && !m.hidden).length === 1, "keep=1 leaves only the newest version");
   console.log("\n--- script files on disk ---");
-  const tmp = fs4.mkdtempSync(path5.join(os3.tmpdir(), "cat-"));
+  const tmp = fs4.mkdtempSync(path6.join(os3.tmpdir(), "cat-"));
   const store = new CatalogStore(tmp);
   store.saveRaw(rawDevin);
   store.saveRaw(rawOllama);
-  fs4.mkdirSync(path5.dirname(store.overridesPath), { recursive: true });
+  fs4.mkdirSync(path6.dirname(store.overridesPath), { recursive: true });
   fs4.writeFileSync(store.overridesPath, JSON.stringify({ "ol::*": { outPerM: 0.5, inPerM: 0.1 } }));
   const saved = store.curateSaved(2);
   check(fs4.existsSync(store.catalogPath) && saved.models.length > 20, "curate reads the saved raw files and writes catalog.json");
@@ -2787,7 +2817,7 @@ async function main() {
   check(!mMonth.canStart(budgetP, NOW, 0.3).ok && /Monthly/.test(mMonth.canStart(budgetP, NOW, 0.3).reason || ""), "monthly cap blocks too");
   const mOk = new SessionManager(() => budgetP, new NullLauncher(), storeWith({ spend: [{ providerId: "bp", model: "x", cost: 50, at: new Date(2026, 8, 1).getTime() }] }), () => NOW);
   check(mOk.canStart(budgetP, NOW, 0.3).ok, "spend from earlier periods does not count");
-  const started = await mBud.request({ provider: budgetP, model: "m", role: "worker", ticketPath: path5.join(tmp, "x.md"), ticketId: "X", ticketTitle: "X", boardId: "b", payload: {}, estCost: 0.05, points: 3 });
+  const started = await mBud.request({ provider: budgetP, model: "m", role: "worker", ticketPath: path6.join(tmp, "x.md"), ticketId: "X", ticketTitle: "X", boardId: "b", payload: {}, estCost: 0.05, points: 3 });
   check(started.status === "running" && Math.abs(mBud.spentSince("bp", periodStart("day", NOW)) - 0.95) < 1e-9, "starting a session records its estimated cost in the ledger");
   check(mBud.usage(budgetP).spend.day > 0.9 && mBud.usage(budgetP).budget.week === 5, "usage reports spend and caps per day / week / month");
   console.log("\n--- speed learning ---");
@@ -2851,7 +2881,7 @@ async function main() {
   const cheap = rankOptions(ticket, [gem, loc], smA, { ...ctxA, objective: "cost" });
   check(cheap.length === 2, 'both options are ranked under the "cost" objective');
   const smBusy = new SessionManager((id) => id === "gm" ? gem : loc, new NullLauncher(), storeWith({ starts: { gm: startsA } }), () => clockNow);
-  await smBusy.request({ provider: loc, model: "qwen2.5-coder:14b", role: "worker", ticketPath: path5.join(tmp, "busy.md"), ticketId: "B", ticketTitle: "B", boardId: "b", payload: {} });
+  await smBusy.request({ provider: loc, model: "qwen2.5-coder:14b", role: "worker", ticketPath: path6.join(tmp, "busy.md"), ticketId: "B", ticketTitle: "B", boardId: "b", payload: {} });
   const rankBusy = rankOptions(ticket, [gem, loc], smBusy, ctxA);
   check(rankBusy.find((o) => o.provider.id === "ol").waitMinutes > 0 && !rankBusy.find((o) => o.provider.id === "ol").startsNow, "a busy provider is charged for the wait");
   const hard = mkTicket({ priority: "P0", type: "Architecture" });
@@ -2877,7 +2907,7 @@ async function main() {
   check(usable.every((m) => cop.find((r) => r.id === m.id)?.enabled === true), "only models enabled on your account stay visible");
   check(usable.some((m) => m.id === "claude-opus-4.8") && !usable.some((m) => m.id === "claude-opus-5.5"), "a disabled newer model (Opus 5.5) does not hide the enabled older one (Opus 4.8)");
   check(usable.some((m) => m.id === "claude-sonnet-5.5") && usable.some((m) => m.id === "claude-sonnet-5"), "enabled Sonnet 5.5 and 5 are kept");
-  const impTmp = fs4.mkdtempSync(path5.join(os3.tmpdir(), "imp-"));
+  const impTmp = fs4.mkdtempSync(path6.join(os3.tmpdir(), "imp-"));
   const impStore = new CatalogStore(impTmp);
   impStore.saveImport("cp", read("copilot.txt"));
   const viaFile = await listProviderModels({ ...createProvider("copilot-cli", []), id: "cp" }, process.env, impStore.importsDir);

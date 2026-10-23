@@ -35,8 +35,8 @@ __export(extension_exports, {
 });
 module.exports = __toCommonJS(extension_exports);
 var vscode7 = __toESM(require("vscode"));
-var path15 = __toESM(require("path"));
-var fs13 = __toESM(require("fs"));
+var path16 = __toESM(require("path"));
+var fs14 = __toESM(require("fs"));
 
 // src/boardManager.ts
 var vscode2 = __toESM(require("vscode"));
@@ -1775,12 +1775,12 @@ var TreeItemNode = class extends vscode3.TreeItem {
 
 // src/webviewPanel.ts
 var vscode5 = __toESM(require("vscode"));
-var path14 = __toESM(require("path"));
-var fs11 = __toESM(require("fs"));
+var path15 = __toESM(require("path"));
+var fs12 = __toESM(require("fs"));
 
 // src/agentRunner.ts
-var path5 = __toESM(require("path"));
-var fs3 = __toESM(require("fs"));
+var path6 = __toESM(require("path"));
+var fs4 = __toESM(require("fs"));
 
 // src/shellEscape.ts
 function detectShellKind(shellPath, platform = process.platform) {
@@ -1802,6 +1802,68 @@ function escapeForDoubleQuotes(value, shell) {
       return flat.replace(/"/g, '""').replace(/%/g, "%%");
     default:
       return flat.replace(/[\\"$`!]/g, (ch) => "\\" + ch);
+  }
+}
+
+// src/fleet/trust.ts
+var fs3 = __toESM(require("fs"));
+var os = __toESM(require("os"));
+var path5 = __toESM(require("path"));
+function isTrusted(trustedRoots, cwd) {
+  return trustedRoots.some((r) => isInside(r, cwd));
+}
+var same = (a, b) => path5.resolve(a).toLowerCase() === path5.resolve(b).toLowerCase();
+function readCopilotConfig(home) {
+  const file = path5.join(home, ".copilot", "config.json");
+  let text = "";
+  try {
+    text = fs3.readFileSync(file, "utf8");
+  } catch {
+  }
+  const lines = text.split(/\r?\n/);
+  const header = [];
+  while (lines.length && /^\s*\/\//.test(lines[0]))
+    header.push(lines.shift());
+  let json = {};
+  try {
+    json = JSON.parse(lines.join("\n") || "{}");
+  } catch {
+    throw new Error(`Could not parse ${file}; not changing it.`);
+  }
+  return { header: header.join("\n"), json, file };
+}
+function writeCopilotConfig(c) {
+  fs3.mkdirSync(path5.dirname(c.file), { recursive: true });
+  const body = JSON.stringify(c.json, null, 2);
+  const tmp = c.file + ".tmp";
+  fs3.writeFileSync(tmp, (c.header ? c.header + "\n" : "") + body + "\n", "utf8");
+  fs3.renameSync(tmp, c.file);
+}
+function addCopilotTrustedFolder(folder, home = os.homedir()) {
+  const c = readCopilotConfig(home);
+  const list = Array.isArray(c.json.trustedFolders) ? c.json.trustedFolders : [];
+  if (list.some((f) => same(f, folder)))
+    return { changed: false, file: c.file };
+  c.json.trustedFolders = [...list, folder];
+  writeCopilotConfig(c);
+  return { changed: true, file: c.file };
+}
+function removeCopilotTrustedFolder(folder, home = os.homedir()) {
+  const c = readCopilotConfig(home);
+  const list = Array.isArray(c.json.trustedFolders) ? c.json.trustedFolders : [];
+  const next = list.filter((f) => !same(f, folder));
+  if (next.length === list.length)
+    return { changed: false, file: c.file };
+  c.json.trustedFolders = next;
+  writeCopilotConfig(c);
+  return { changed: true, file: c.file };
+}
+function copilotTrusts(folder, home = os.homedir()) {
+  try {
+    const c = readCopilotConfig(home);
+    return Array.isArray(c.json.trustedFolders) && c.json.trustedFolders.some((f) => same(f, folder));
+  } catch {
+    return false;
   }
 }
 
@@ -1852,27 +1914,27 @@ var AgentRunner = class {
     if (process.platform === "win32") {
       const localAppData = process.env.LOCALAPPDATA;
       if (localAppData) {
-        candidates.push(path5.join(localAppData, "agy", "bin", "agy.exe"));
+        candidates.push(path6.join(localAppData, "agy", "bin", "agy.exe"));
       }
       const userProfile = process.env.USERPROFILE;
       if (userProfile) {
-        candidates.push(path5.join(userProfile, "AppData", "Local", "agy", "bin", "agy.exe"));
+        candidates.push(path6.join(userProfile, "AppData", "Local", "agy", "bin", "agy.exe"));
       }
       const programFiles = process.env.ProgramFiles;
       if (programFiles) {
-        candidates.push(path5.join(programFiles, "agy", "bin", "agy.exe"));
+        candidates.push(path6.join(programFiles, "agy", "bin", "agy.exe"));
       }
     } else {
       const home = process.env.HOME;
       if (home) {
-        candidates.push(path5.join(home, ".agy", "bin", "agy"));
-        candidates.push(path5.join(home, ".local", "bin", "agy"));
+        candidates.push(path6.join(home, ".agy", "bin", "agy"));
+        candidates.push(path6.join(home, ".local", "bin", "agy"));
       }
       candidates.push("/usr/local/bin/agy");
       candidates.push("/usr/bin/agy");
     }
     for (const candidate of candidates) {
-      if (candidate && fs3.existsSync(candidate)) {
+      if (candidate && fs4.existsSync(candidate)) {
         return candidate;
       }
     }
@@ -1889,14 +1951,14 @@ var AgentRunner = class {
     const vscode8 = getVsCode();
     const shell = options.shell || detectShellKind(vscode8?.env?.shell);
     const esc = (v) => escapeForDoubleQuotes(v, shell);
-    const workspaceFolder = vscode8?.workspace?.workspaceFolders?.[0]?.uri.fsPath || path5.dirname(boardRoot);
+    const workspaceFolder = vscode8?.workspace?.workspaceFolders?.[0]?.uri.fsPath || path6.dirname(boardRoot);
     const content = rawTicketContent ?? ticket.summary ?? ticket.title;
     let effectiveBoardConfig = boardConfig;
     if (!effectiveBoardConfig) {
-      const configPath = path5.join(boardRoot, "config.md");
-      if (fs3.existsSync(configPath)) {
+      const configPath = path6.join(boardRoot, "config.md");
+      if (fs4.existsSync(configPath)) {
         try {
-          const cfgText = fs3.readFileSync(configPath, "utf8");
+          const cfgText = fs4.readFileSync(configPath, "utf8");
           effectiveBoardConfig = ConfigParser.parse(cfgText, "board");
         } catch {
         }
@@ -1946,6 +2008,9 @@ var AgentRunner = class {
     if (modelArgs && !command.includes("{model_args}") && !command.includes("{model}")) {
       command = `${command.trimEnd()} ${modelArgs}`;
     }
+    if (options.trusted && options.trustFlag && /^[\w =.-]+$/.test(options.trustFlag) && !command.includes(options.trustFlag)) {
+      command = `${command.trimEnd()} ${options.trustFlag}`;
+    }
     if (effortArgs && !command.includes("{effort_args}")) {
       command = `${command.trimEnd()} ${effortArgs}`;
     }
@@ -1953,7 +2018,7 @@ var AgentRunner = class {
     command = command.replace(/ {2,}/g, " ").trim();
     const exePath = config.path || config.executable;
     const first = command.match(/^([A-Za-z][\w.-]*)(?=\s|$)/);
-    if (exePath && first && path5.basename(exePath).replace(/\.[^.]+$/, "").toLowerCase() === first[1].toLowerCase()) {
+    if (exePath && first && path6.basename(exePath).replace(/\.[^.]+$/, "").toLowerCase() === first[1].toLowerCase()) {
       const quoted = `"${exePath}"`;
       command = (shell === "powershell" ? "& " : "") + quoted + command.slice(first[1].length);
     }
@@ -1973,16 +2038,17 @@ var AgentRunner = class {
       return null;
     }
     const config = assignee.agentConfig;
-    const workspaceFolder = vscode8?.workspace?.workspaceFolders?.[0]?.uri.fsPath || path5.dirname(boardRoot);
+    const workspaceFolder = vscode8?.workspace?.workspaceFolders?.[0]?.uri.fsPath || path6.dirname(boardRoot);
     let ticketContent = "";
     try {
-      ticketContent = await fs3.promises.readFile(ticket.path, "utf8");
+      ticketContent = await fs4.promises.readFile(ticket.path, "utf8");
     } catch {
       ticketContent = ticket.summary || ticket.title;
     }
     if (config.type === "cli") {
-      const command = this.formatCliCommand(ticket, assignee, boardRoot, boardConfig, ticketContent, options);
       const cwd = config.workingDir ? config.workingDir.replace("{workspace_root}", workspaceFolder).replace("{board_root}", boardRoot) : workspaceFolder;
+      const trusted = options.trustedRoots ? isTrusted(options.trustedRoots, cwd) : options.trusted;
+      const command = this.formatCliCommand(ticket, assignee, boardRoot, boardConfig, ticketContent, { ...options, trusted });
       return { kind: "cli", ticket, assignee, command, cwd, model: options.model };
     }
     if (config.type === "vscode-command") {
@@ -2048,7 +2114,7 @@ ${ticket.summary}`;
 };
 
 // src/promptFormatter.ts
-var path6 = __toESM(require("path"));
+var path7 = __toESM(require("path"));
 var PromptFormatter = class {
   static DEFAULT_TEMPLATE = `Please review and work on ticket **{id}: {title}** located at \`{relative_path}\`.
 
@@ -2069,18 +2135,18 @@ var PromptFormatter = class {
   static formatPrompt(ticket, boardConfig, workspaceRoot, boardRoot) {
     let relPath = ticket.relativePath || ticket.filename;
     if (workspaceRoot && ticket.path) {
-      const calculated = path6.relative(workspaceRoot, ticket.path).replace(/\\/g, "/");
+      const calculated = path7.relative(workspaceRoot, ticket.path).replace(/\\/g, "/");
       if (!calculated.startsWith("..")) {
         relPath = calculated;
       }
     } else if (boardRoot && ticket.path) {
-      const boardDirName = path6.basename(boardRoot);
-      const fromBoard = path6.relative(boardRoot, ticket.path).replace(/\\/g, "/");
+      const boardDirName = path7.basename(boardRoot);
+      const fromBoard = path7.relative(boardRoot, ticket.path).replace(/\\/g, "/");
       relPath = `${boardDirName}/${fromBoard}`;
     }
     let completedPath = "Tickets/Completed/";
     if (boardRoot && workspaceRoot) {
-      const relBoard = path6.relative(workspaceRoot, boardRoot).replace(/\\/g, "/");
+      const relBoard = path7.relative(workspaceRoot, boardRoot).replace(/\\/g, "/");
       completedPath = relBoard && relBoard !== "." ? `${relBoard}/Completed/` : "Completed/";
     } else if (ticket.column) {
       const colSubstr = "/" + ticket.column + "/";
@@ -2147,13 +2213,13 @@ var PromptFormatter = class {
 
 // src/fleet/fleetController.ts
 var vscode4 = __toESM(require("vscode"));
-var fs10 = __toESM(require("fs"));
-var path13 = __toESM(require("path"));
+var fs11 = __toESM(require("fs"));
+var path14 = __toESM(require("path"));
 var import_crypto = require("crypto");
 
 // src/fleet/providers.ts
-var fs4 = __toESM(require("fs"));
-var path7 = __toESM(require("path"));
+var fs5 = __toESM(require("fs"));
+var path8 = __toESM(require("path"));
 var PROVIDER_PRESETS = [
   {
     kind: "claude-code",
@@ -2175,6 +2241,7 @@ var PROVIDER_PRESETS = [
     type: "cli",
     command: `devin {model_args} -p "{task}"`,
     modelFlag: "--model",
+    trustFlag: "--respect-workspace-trust false",
     models: [],
     defaultModel: "",
     maxParallel: 2,
@@ -2363,6 +2430,7 @@ function sanitizeProvider(raw, existingIds = []) {
     type: raw?.type === "vscode-command" ? "vscode-command" : raw?.type === "cli" ? "cli" : preset.type,
     command: String(raw?.command ?? preset.command),
     defaultReasoning: ["none", "minimal", "low", "medium", "high", "xhigh", "max"].includes(String(raw?.defaultReasoning)) ? String(raw.defaultReasoning) : "",
+    trustFlag: raw?.trustFlag !== void 0 ? String(raw.trustFlag).trim() || void 0 : getPreset(kind).trustFlag,
     effortFlag: raw?.effortFlag !== void 0 ? String(raw.effortFlag).trim() || void 0 : getPreset(kind).effortFlag,
     pinnedModels: Array.isArray(raw?.pinnedModels) ? raw.pinnedModels.map((m) => String(m).trim()).filter(Boolean) : [],
     listCommand: raw?.listCommand ? String(raw.listCommand).slice(0, 300) : void 0,
@@ -2464,7 +2532,7 @@ function migrateProvider(raw) {
 var ProviderRegistry = class {
   constructor(workspaceRoot) {
     this.workspaceRoot = workspaceRoot;
-    this.filePath = path7.join(workspaceRoot, ".agentic-kanban", "providers.json");
+    this.filePath = path8.join(workspaceRoot, ".agentic-kanban", "providers.json");
     this.load();
   }
   providers = [];
@@ -2475,7 +2543,7 @@ var ProviderRegistry = class {
   }
   load() {
     try {
-      const raw = JSON.parse(fs4.readFileSync(this.filePath, "utf8"));
+      const raw = JSON.parse(fs5.readFileSync(this.filePath, "utf8"));
       const list = Array.isArray(raw) ? raw : raw?.providers || [];
       const ids = [];
       this.providers = list.map((r) => {
@@ -2578,17 +2646,17 @@ var ProviderRegistry = class {
     return added.length;
   }
   save() {
-    fs4.mkdirSync(path7.dirname(this.filePath), { recursive: true });
+    fs5.mkdirSync(path8.dirname(this.filePath), { recursive: true });
     const tmp = `${this.filePath}.tmp`;
-    fs4.writeFileSync(tmp, JSON.stringify({ version: 1, providers: this.providers }, null, 2), "utf8");
-    fs4.renameSync(tmp, this.filePath);
+    fs5.writeFileSync(tmp, JSON.stringify({ version: 1, providers: this.providers }, null, 2), "utf8");
+    fs5.renameSync(tmp, this.filePath);
     this.listeners.forEach((fn) => fn());
   }
 };
 
 // src/fleet/sessions.ts
-var fs5 = __toESM(require("fs"));
-var path8 = __toESM(require("path"));
+var fs6 = __toESM(require("fs"));
+var path9 = __toESM(require("path"));
 
 // src/fleet/cost.ts
 function ticketPoints(t) {
@@ -2652,7 +2720,7 @@ var JsonFleetStore = class {
   }
   load() {
     try {
-      const raw = JSON.parse(fs5.readFileSync(this.file, "utf8"));
+      const raw = JSON.parse(fs6.readFileSync(this.file, "utf8"));
       return {
         starts: raw?.starts && typeof raw.starts === "object" ? raw.starts : {},
         sessions: Array.isArray(raw?.sessions) ? raw.sessions : [],
@@ -2665,10 +2733,10 @@ var JsonFleetStore = class {
   }
   save(data) {
     try {
-      fs5.mkdirSync(path8.dirname(this.file), { recursive: true });
+      fs6.mkdirSync(path9.dirname(this.file), { recursive: true });
       const tmp = this.file + ".tmp";
-      fs5.writeFileSync(tmp, JSON.stringify(data), "utf8");
-      fs5.renameSync(tmp, this.file);
+      fs6.writeFileSync(tmp, JSON.stringify(data), "utf8");
+      fs6.renameSync(tmp, this.file);
     } catch {
     }
   }
@@ -2730,8 +2798,8 @@ var SessionManager = class {
     return this.sessions.filter((s) => s.status === "running" || s.status === "queued");
   }
   activeForTicket(ticketPath) {
-    const key = path8.resolve(ticketPath).toLowerCase();
-    return this.active().find((s) => path8.resolve(s.ticketPath).toLowerCase() === key);
+    const key = path9.resolve(ticketPath).toLowerCase();
+    return this.active().find((s) => path9.resolve(s.ticketPath).toLowerCase() === key);
   }
   startsInWindow(p, now) {
     const since = now - p.windowMinutes * 6e4;
@@ -2917,6 +2985,7 @@ var SessionManager = class {
       attempt: req.attempt ?? 1,
       resumedFrom: req.resumedFrom,
       hidden: req.hidden,
+      cwd: req.cwd,
       reasoning: req.reasoning,
       points: req.points,
       estCost: req.estCost,
@@ -3121,10 +3190,10 @@ var SessionManager = class {
 };
 
 // src/fleet/detect.ts
-var fs6 = __toESM(require("fs"));
+var fs7 = __toESM(require("fs"));
 var http = __toESM(require("http"));
-var os = __toESM(require("os"));
-var path9 = __toESM(require("path"));
+var os2 = __toESM(require("os"));
+var path10 = __toESM(require("path"));
 var import_child_process = require("child_process");
 var EXECUTABLE_NAMES = {
   "claude-code": ["claude"],
@@ -3145,45 +3214,45 @@ function pathExts() {
 }
 function isFile(p) {
   try {
-    return fs6.statSync(p).isFile();
+    return fs7.statSync(p).isFile();
   } catch {
     return false;
   }
 }
 function extraSearchDirs(env4 = process.env) {
-  const home = env4.USERPROFILE || env4.HOME || os.homedir();
+  const home = env4.USERPROFILE || env4.HOME || os2.homedir();
   const dirs = [];
   if (isWin()) {
-    const local = env4.LOCALAPPDATA || path9.join(home, "AppData", "Local");
-    const roaming = env4.APPDATA || path9.join(home, "AppData", "Roaming");
+    const local = env4.LOCALAPPDATA || path10.join(home, "AppData", "Local");
+    const roaming = env4.APPDATA || path10.join(home, "AppData", "Roaming");
     dirs.push(
-      path9.join(roaming, "npm"),
-      path9.join(local, "Programs", "Ollama"),
-      path9.join(local, "Programs", "Devin", "bin"),
-      path9.join(local, "Programs", "Devin Next", "bin"),
-      path9.join(local, "agy", "bin"),
-      path9.join(local, "Microsoft", "WindowsApps"),
-      path9.join(home, ".local", "bin"),
-      path9.join(home, ".claude", "local"),
-      path9.join(env4.ProgramFiles || "C:\\Program Files", "Ollama"),
-      path9.join(env4.ProgramFiles || "C:\\Program Files", "agy", "bin")
+      path10.join(roaming, "npm"),
+      path10.join(local, "Programs", "Ollama"),
+      path10.join(local, "Programs", "Devin", "bin"),
+      path10.join(local, "Programs", "Devin Next", "bin"),
+      path10.join(local, "agy", "bin"),
+      path10.join(local, "Microsoft", "WindowsApps"),
+      path10.join(home, ".local", "bin"),
+      path10.join(home, ".claude", "local"),
+      path10.join(env4.ProgramFiles || "C:\\Program Files", "Ollama"),
+      path10.join(env4.ProgramFiles || "C:\\Program Files", "agy", "bin")
     );
-    for (const root of [path9.join(local, "fnm_multishells"), env4.FNM_DIR ? path9.join(env4.FNM_DIR, "node-versions") : "", "C:\\fnm\\node-versions"]) {
-      if (!root || !fs6.existsSync(root))
+    for (const root of [path10.join(local, "fnm_multishells"), env4.FNM_DIR ? path10.join(env4.FNM_DIR, "node-versions") : "", "C:\\fnm\\node-versions"]) {
+      if (!root || !fs7.existsSync(root))
         continue;
       try {
-        for (const v of fs6.readdirSync(root))
-          dirs.push(path9.join(root, v, "installation"), path9.join(root, v));
+        for (const v of fs7.readdirSync(root))
+          dirs.push(path10.join(root, v, "installation"), path10.join(root, v));
       } catch {
       }
     }
   } else {
     dirs.push(
-      path9.join(home, ".local", "bin"),
-      path9.join(home, ".claude", "local"),
-      path9.join(home, ".agy", "bin"),
-      path9.join(home, ".npm-global", "bin"),
-      path9.join(home, ".cargo", "bin"),
+      path10.join(home, ".local", "bin"),
+      path10.join(home, ".claude", "local"),
+      path10.join(home, ".agy", "bin"),
+      path10.join(home, ".npm-global", "bin"),
+      path10.join(home, ".cargo", "bin"),
       "/usr/local/bin",
       "/opt/homebrew/bin",
       "/usr/bin"
@@ -3192,13 +3261,13 @@ function extraSearchDirs(env4 = process.env) {
   return dirs;
 }
 function findExecutable(names, env4 = process.env, extraDirs = extraSearchDirs(env4)) {
-  const pathDirs = (env4.PATH || env4.Path || "").split(path9.delimiter).filter(Boolean);
+  const pathDirs = (env4.PATH || env4.Path || "").split(path10.delimiter).filter(Boolean);
   const dirs = [...pathDirs, ...extraDirs];
   const exts = pathExts();
   for (const name of names) {
     for (const dir of dirs) {
       for (const ext of exts) {
-        const candidate = path9.join(dir, name + ext);
+        const candidate = path10.join(dir, name + ext);
         if (isFile(candidate))
           return candidate;
       }
@@ -3211,7 +3280,7 @@ function findForKind(kind, env4 = process.env, extraDirs) {
   if (!names)
     return void 0;
   if (kind === "antigravity") {
-    const local = env4.LOCALAPPDATA ? path9.join(env4.LOCALAPPDATA, "agy", "bin", "agy.exe") : "";
+    const local = env4.LOCALAPPDATA ? path10.join(env4.LOCALAPPDATA, "agy", "bin", "agy.exe") : "";
     if (local && isFile(local))
       return local;
     for (const key of ["AGY_PATH", "ANTIGRAVITY_PATH"]) {
@@ -3229,14 +3298,14 @@ function parseOllamaList(text) {
   return lines.map((l) => l.split(/\s+/)[0]).filter(Boolean);
 }
 function httpGetJson(url, timeoutMs) {
-  return new Promise((resolve8, reject) => {
+  return new Promise((resolve9, reject) => {
     const req = http.get(url, { timeout: timeoutMs }, (res) => {
       let body = "";
       res.setEncoding("utf8");
       res.on("data", (d) => body += d);
       res.on("end", () => {
         try {
-          resolve8(JSON.parse(body));
+          resolve9(JSON.parse(body));
         } catch (e) {
           reject(e);
         }
@@ -3257,9 +3326,9 @@ async function detectOllamaModels(host = "127.0.0.1:11434", exePath) {
   const exe = exePath || findExecutable(["ollama"]);
   if (!exe)
     return [];
-  return new Promise((resolve8) => {
+  return new Promise((resolve9) => {
     (0, import_child_process.execFile)(exe, ["list"], { timeout: 4e3, windowsHide: true, shell: isWin() && /\.(cmd|bat)$/i.test(exe) }, (err, stdout) => {
-      resolve8(err ? [] : parseOllamaList(String(stdout)));
+      resolve9(err ? [] : parseOllamaList(String(stdout)));
     });
   });
 }
@@ -3285,23 +3354,23 @@ async function detectOne(kind, env4 = process.env) {
 }
 
 // src/fleet/messageBoard.ts
-var fs7 = __toESM(require("fs"));
-var path10 = __toESM(require("path"));
+var fs8 = __toESM(require("fs"));
+var path11 = __toESM(require("path"));
 function isMessageBoardDir(dir) {
   try {
-    return fs7.statSync(dir).isDirectory() && (fs7.existsSync(path10.join(dir, "ACTIVE_AGENTS.md")) || fs7.existsSync(path10.join(dir, "THREADS")) || fs7.existsSync(path10.join(dir, "LOCKS")));
+    return fs8.statSync(dir).isDirectory() && (fs8.existsSync(path11.join(dir, "ACTIVE_AGENTS.md")) || fs8.existsSync(path11.join(dir, "THREADS")) || fs8.existsSync(path11.join(dir, "LOCKS")));
   } catch {
     return false;
   }
 }
 function findMessageBoard(roots) {
   for (const r of roots) {
-    let dir = path10.resolve(r);
+    let dir = path11.resolve(r);
     for (let i = 0; i < 4; i++) {
-      const candidate = path10.join(dir, "MessageBoard");
+      const candidate = path11.join(dir, "MessageBoard");
       if (isMessageBoardDir(candidate))
         return candidate;
-      const parent = path10.dirname(dir);
+      const parent = path11.dirname(dir);
       if (parent === dir)
         break;
       dir = parent;
@@ -3311,7 +3380,7 @@ function findMessageBoard(roots) {
 }
 function read(file) {
   try {
-    return fs7.readFileSync(file, "utf8");
+    return fs8.readFileSync(file, "utf8");
   } catch {
     return "";
   }
@@ -3346,10 +3415,10 @@ function field(md, name) {
   return m ? clean(m[1]) : "";
 }
 function parseThread(file, text) {
-  const title = (text.match(/^#\s+(.+)$/m)?.[1] || path10.basename(file, ".md")).trim();
+  const title = (text.match(/^#\s+(.+)$/m)?.[1] || path11.basename(file, ".md")).trim();
   const headings = [...text.matchAll(/^###\s+(.+)$/gm)].map((m) => m[1].trim());
   return {
-    file: path10.basename(file),
+    file: path11.basename(file),
     path: file,
     title,
     status: field(text, "Status"),
@@ -3361,17 +3430,17 @@ function parseThread(file, text) {
   };
 }
 function readClaims(boardDir, now = Date.now()) {
-  const dir = path10.join(boardDir, "LOCKS");
+  const dir = path11.join(boardDir, "LOCKS");
   let files = [];
   try {
-    files = fs7.readdirSync(dir).filter((f) => f.endsWith(".lock"));
+    files = fs8.readdirSync(dir).filter((f) => f.endsWith(".lock"));
   } catch {
     return [];
   }
   const out = [];
   for (const f of files) {
     try {
-      const l = JSON.parse(fs7.readFileSync(path10.join(dir, f), "utf8"));
+      const l = JSON.parse(fs8.readFileSync(path11.join(dir, f), "utf8"));
       const exp = Date.parse(l.expires);
       out.push({
         key: l.key || f.replace(/\.lock$/, ""),
@@ -3389,19 +3458,19 @@ function readClaims(boardDir, now = Date.now()) {
   return out.sort((a, b) => Number(a.expired) - Number(b.expired) || a.key.localeCompare(b.key));
 }
 function readMessageBoard(boardDir, now = Date.now()) {
-  const threadsDir = path10.join(boardDir, "THREADS");
+  const threadsDir = path11.join(boardDir, "THREADS");
   let threadFiles = [];
   try {
-    threadFiles = fs7.readdirSync(threadsDir).filter((f) => /\.md$/i.test(f)).sort().reverse();
+    threadFiles = fs8.readdirSync(threadsDir).filter((f) => /\.md$/i.test(f)).sort().reverse();
   } catch {
   }
-  const threads = threadFiles.map((f) => parseThread(path10.join(threadsDir, f), read(path10.join(threadsDir, f))));
+  const threads = threadFiles.map((f) => parseThread(path11.join(threadsDir, f), read(path11.join(threadsDir, f))));
   const dms = [];
-  const dmDir = path10.join(boardDir, "DIRECT_MESSAGES");
+  const dmDir = path11.join(boardDir, "DIRECT_MESSAGES");
   try {
-    for (const to of fs7.readdirSync(dmDir, { withFileTypes: true }).filter((d) => d.isDirectory())) {
-      for (const f of fs7.readdirSync(path10.join(dmDir, to.name)).filter((x) => /\.md$/i.test(x)).sort().reverse()) {
-        const p = path10.join(dmDir, to.name, f);
+    for (const to of fs8.readdirSync(dmDir, { withFileTypes: true }).filter((d) => d.isDirectory())) {
+      for (const f of fs8.readdirSync(path11.join(dmDir, to.name)).filter((x) => /\.md$/i.test(x)).sort().reverse()) {
+        const p = path11.join(dmDir, to.name, f);
         dms.push({ file: f, path: p, to: to.name, title: (read(p).match(/^#\s+(.+)$/m)?.[1] || f).trim() });
       }
     }
@@ -3409,11 +3478,11 @@ function readMessageBoard(boardDir, now = Date.now()) {
   }
   let archived = 0;
   try {
-    archived = fs7.readdirSync(path10.join(boardDir, "ARCHIVE")).filter((f) => /\.md$/i.test(f)).length;
+    archived = fs8.readdirSync(path11.join(boardDir, "ARCHIVE")).filter((f) => /\.md$/i.test(f)).length;
   } catch {
   }
-  const log = read(path10.join(boardDir, "LOCKS", "CLAIMS_LOG.md")).split(/\r?\n/).filter((l) => l.trim()).slice(-12).reverse();
-  return { root: boardDir, agents: parseActiveAgents(read(path10.join(boardDir, "ACTIVE_AGENTS.md"))), claims: readClaims(boardDir, now), threads, dms, archived, claimsLog: log };
+  const log = read(path11.join(boardDir, "LOCKS", "CLAIMS_LOG.md")).split(/\r?\n/).filter((l) => l.trim()).slice(-12).reverse();
+  return { root: boardDir, agents: parseActiveAgents(read(path11.join(boardDir, "ACTIVE_AGENTS.md"))), claims: readClaims(boardDir, now), threads, dms, archived, claimsLog: log };
 }
 var slug = (s) => s.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 var stamp = (d = /* @__PURE__ */ new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
@@ -3424,14 +3493,14 @@ function replyToThread(threadPath, author, client, text, now = /* @__PURE__ */ n
 ### ${stamp(now)} \u2014 ${author} (${client})
 ${text.trim()}
 `;
-  fs7.appendFileSync(threadPath, body, "utf8");
+  fs8.appendFileSync(threadPath, body, "utf8");
 }
 function createThread(boardDir, title, author, client, firstMessage, ticket = "", now = /* @__PURE__ */ new Date()) {
-  const dir = path10.join(boardDir, "THREADS");
-  fs7.mkdirSync(dir, { recursive: true });
-  const used = [...fs7.readdirSync(dir), ...fs7.existsSync(path10.join(boardDir, "ARCHIVE")) ? fs7.readdirSync(path10.join(boardDir, "ARCHIVE")) : []].map((f) => Number(f.match(/THREAD_(\d+)/i)?.[1])).filter((n) => Number.isFinite(n));
+  const dir = path11.join(boardDir, "THREADS");
+  fs8.mkdirSync(dir, { recursive: true });
+  const used = [...fs8.readdirSync(dir), ...fs8.existsSync(path11.join(boardDir, "ARCHIVE")) ? fs8.readdirSync(path11.join(boardDir, "ARCHIVE")) : []].map((f) => Number(f.match(/THREAD_(\d+)/i)?.[1])).filter((n) => Number.isFinite(n));
   const next = String((used.length ? Math.max(...used) : 0) + 1).padStart(3, "0");
-  const file = path10.join(dir, `THREAD_${next}_${slug(title).slice(0, 40) || "topic"}.md`);
+  const file = path11.join(dir, `THREAD_${next}_${slug(title).slice(0, 40) || "topic"}.md`);
   const content = `# THREAD-${next}: ${title.trim()}
 
 | Metadata | Details |
@@ -3451,22 +3520,22 @@ ${firstMessage.trim()}
 
 ## Conversation Log
 `;
-  fs7.writeFileSync(file, content, "utf8");
+  fs8.writeFileSync(file, content, "utf8");
   return file;
 }
 var lockSlug = (key) => key.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 function logClaim(boardDir, line) {
   try {
-    fs7.mkdirSync(path10.join(boardDir, "LOCKS"), { recursive: true });
-    fs7.appendFileSync(path10.join(boardDir, "LOCKS", "CLAIMS_LOG.md"), `- ${(/* @__PURE__ */ new Date()).toISOString()} ${line}
+    fs8.mkdirSync(path11.join(boardDir, "LOCKS"), { recursive: true });
+    fs8.appendFileSync(path11.join(boardDir, "LOCKS", "CLAIMS_LOG.md"), `- ${(/* @__PURE__ */ new Date()).toISOString()} ${line}
 `, "utf8");
   } catch {
   }
 }
 function claim(boardDir, key, agent, reason, ticket = "", minutes = 60, now = Date.now()) {
-  const dir = path10.join(boardDir, "LOCKS");
-  fs7.mkdirSync(dir, { recursive: true });
-  const file = path10.join(dir, `${lockSlug(key)}.lock`);
+  const dir = path11.join(boardDir, "LOCKS");
+  fs8.mkdirSync(dir, { recursive: true });
+  const file = path11.join(dir, `${lockSlug(key)}.lock`);
   const lock = (claimed) => JSON.stringify({
     key,
     agent,
@@ -3477,7 +3546,7 @@ function claim(boardDir, key, agent, reason, ticket = "", minutes = 60, now = Da
     expires: new Date(now + minutes * 6e4).toISOString()
   }, null, 2);
   try {
-    fs7.writeFileSync(file, lock(), { flag: "wx" });
+    fs8.writeFileSync(file, lock(), { flag: "wx" });
     logClaim(boardDir, `CLAIM ${key} by ${agent} (${minutes} min) - ${reason}`);
     return { ok: true };
   } catch (e) {
@@ -3486,33 +3555,33 @@ function claim(boardDir, key, agent, reason, ticket = "", minutes = 60, now = Da
   }
   let cur = {};
   try {
-    cur = JSON.parse(fs7.readFileSync(file, "utf8"));
+    cur = JSON.parse(fs8.readFileSync(file, "utf8"));
   } catch {
     cur = { agent: "?", expires: "9999-12-31T00:00:00Z" };
   }
   if (cur.agent === agent) {
-    fs7.writeFileSync(file, lock(cur.claimed), "utf8");
+    fs8.writeFileSync(file, lock(cur.claimed), "utf8");
     logClaim(boardDir, `RENEW ${key} by ${agent}`);
     return { ok: true, renewed: true };
   }
   if (Date.parse(cur.expires) > now)
     return { ok: false, heldBy: cur.agent, expires: cur.expires };
-  fs7.writeFileSync(file, lock(), "utf8");
+  fs8.writeFileSync(file, lock(), "utf8");
   logClaim(boardDir, `TAKEOVER ${key} by ${agent} from ${cur.agent} (expired ${cur.expires}) - ${reason}`);
   return { ok: true };
 }
 function release(boardDir, key, agent, force = false) {
-  const file = path10.join(boardDir, "LOCKS", `${lockSlug(key)}.lock`);
+  const file = path11.join(boardDir, "LOCKS", `${lockSlug(key)}.lock`);
   let cur;
   try {
-    cur = JSON.parse(fs7.readFileSync(file, "utf8"));
+    cur = JSON.parse(fs8.readFileSync(file, "utf8"));
   } catch {
     return false;
   }
   if (cur.agent !== agent && !force)
     return false;
   try {
-    fs7.unlinkSync(file);
+    fs8.unlinkSync(file);
   } catch {
     return false;
   }
@@ -3521,10 +3590,10 @@ function release(boardDir, key, agent, force = false) {
 }
 
 // src/fleet/catalog.ts
-var fs8 = __toESM(require("fs"));
+var fs9 = __toESM(require("fs"));
 var http2 = __toESM(require("http"));
-var os2 = __toESM(require("os"));
-var path11 = __toESM(require("path"));
+var os3 = __toESM(require("os"));
+var path12 = __toESM(require("path"));
 var import_child_process2 = require("child_process");
 function toMillions(n, unit) {
   return /m/i.test(unit || "") ? n * 1e6 : /k/i.test(unit || "") ? n * 1e3 : n;
@@ -3608,14 +3677,14 @@ function sizeFromParameterSize(s) {
   return /t/i.test(m[2]) ? n * 1e3 : /m/i.test(m[2]) ? n / 1e3 : n;
 }
 function httpGetJson2(url, timeoutMs) {
-  return new Promise((resolve8, reject) => {
+  return new Promise((resolve9, reject) => {
     const req = http2.get(url, { timeout: timeoutMs }, (res) => {
       let body = "";
       res.setEncoding("utf8");
       res.on("data", (d) => body += d);
       res.on("end", () => {
         try {
-          resolve8(JSON.parse(body));
+          resolve9(JSON.parse(body));
         } catch (e) {
           reject(e);
         }
@@ -3708,25 +3777,25 @@ function parseImportedList(text) {
     return delimited;
   return parseGenericModels(text);
 }
-function listCopilotLearned(home = os2.homedir()) {
+function listCopilotLearned(home = os3.homedir()) {
   const ids = /* @__PURE__ */ new Set();
-  const dir = path11.join(home, ".copilot");
+  const dir = path12.join(home, ".copilot");
   try {
-    const cfg = JSON.parse(fs8.readFileSync(path11.join(dir, "config.json"), "utf8").replace(/^\s*\/\/.*$/gm, ""));
+    const cfg = JSON.parse(fs9.readFileSync(path12.join(dir, "config.json"), "utf8").replace(/^\s*\/\/.*$/gm, ""));
     for (const id of cfg.recentModelIds || [])
       ids.add(String(id));
   } catch {
   }
   try {
-    const st = JSON.parse(fs8.readFileSync(path11.join(dir, "settings.json"), "utf8"));
+    const st = JSON.parse(fs9.readFileSync(path12.join(dir, "settings.json"), "utf8"));
     if (st.model)
       ids.add(String(st.model));
   } catch {
   }
   try {
-    const logs = fs8.readdirSync(path11.join(dir, "logs")).filter((f) => f.endsWith(".log")).sort().slice(-40);
+    const logs = fs9.readdirSync(path12.join(dir, "logs")).filter((f) => f.endsWith(".log")).sort().slice(-40);
     for (const f of logs) {
-      const text = fs8.readFileSync(path11.join(dir, "logs", f), "utf8");
+      const text = fs9.readFileSync(path12.join(dir, "logs", f), "utf8");
       for (const m of text.matchAll(/Using default model:\s*([\w.:\/-]+)/g))
         ids.add(m[1]);
     }
@@ -3739,12 +3808,12 @@ function isShim(exe) {
   return process.platform === "win32" && /\.(cmd|bat)$/i.test(exe);
 }
 function runCapture(exe, args, timeoutMs = 3e4) {
-  return new Promise((resolve8, reject) => {
+  return new Promise((resolve9, reject) => {
     (0, import_child_process2.execFile)(exe, args, { timeout: timeoutMs, windowsHide: true, maxBuffer: 8 * 1024 * 1024, shell: isShim(exe) }, (err, stdout, stderr) => {
       if (err && !String(stdout).trim())
         reject(new Error(String(stderr || err.message).trim().slice(0, 300)));
       else
-        resolve8(String(stdout));
+        resolve9(String(stdout));
     });
   });
 }
@@ -3752,7 +3821,7 @@ async function listProviderModels(p, env4 = process.env, importsDir) {
   const base = { providerId: p.id, providerName: p.name, kind: p.kind, fetchedAt: Date.now() };
   if (importsDir) {
     try {
-      const text = fs8.readFileSync(path11.join(importsDir, `${p.id}.txt`), "utf8");
+      const text = fs9.readFileSync(path12.join(importsDir, `${p.id}.txt`), "utf8");
       const models = parseImportedList(text);
       if (models.length)
         return { ...base, source: "import", command: `imports/${p.id}.txt`, ok: true, models };
@@ -3764,7 +3833,7 @@ async function listProviderModels(p, env4 = process.env, importsDir) {
   try {
     if (p.listCommand) {
       const parts = p.listCommand.trim().split(/\s+/);
-      const bin = parts[0] === p.kind || !path11.isAbsolute(parts[0]) ? findExecutable([parts[0]], env4) || parts[0] : parts[0];
+      const bin = parts[0] === p.kind || !path12.isAbsolute(parts[0]) ? findExecutable([parts[0]], env4) || parts[0] : parts[0];
       const text = await runCapture(bin, parts.slice(1));
       return { ...base, source: "command", command: p.listCommand, ok: true, models: parseGenericModels(text) };
     }
@@ -4011,51 +4080,51 @@ function curate(raws, opts = {}) {
 var CatalogStore = class {
   dir;
   constructor(workspaceRoot) {
-    this.dir = path11.join(workspaceRoot, ".agentic-kanban", "models");
+    this.dir = path12.join(workspaceRoot, ".agentic-kanban", "models");
   }
   get rawDir() {
-    return path11.join(this.dir, "raw");
+    return path12.join(this.dir, "raw");
   }
   get catalogPath() {
-    return path11.join(this.dir, "catalog.json");
+    return path12.join(this.dir, "catalog.json");
   }
   get overridesPath() {
-    return path11.join(this.dir, "pricing.overrides.json");
+    return path12.join(this.dir, "pricing.overrides.json");
   }
   get importsDir() {
-    return path11.join(this.dir, "imports");
+    return path12.join(this.dir, "imports");
   }
   /** Saves a pasted model list for a provider (used by the next refresh). */
   saveImport(providerId, text) {
-    const file = path11.join(this.importsDir, `${providerId}.txt`);
-    fs8.mkdirSync(path11.dirname(file), { recursive: true });
-    fs8.writeFileSync(file, text, "utf8");
+    const file = path12.join(this.importsDir, `${providerId}.txt`);
+    fs9.mkdirSync(path12.dirname(file), { recursive: true });
+    fs9.writeFileSync(file, text, "utf8");
     return file;
   }
   get benchPath() {
-    return path11.join(this.dir, "bench.json");
+    return path12.join(this.dir, "bench.json");
   }
   writeJson(file, data) {
-    fs8.mkdirSync(path11.dirname(file), { recursive: true });
+    fs9.mkdirSync(path12.dirname(file), { recursive: true });
     const tmp = file + ".tmp";
-    fs8.writeFileSync(tmp, JSON.stringify(data, null, 2), "utf8");
-    fs8.renameSync(tmp, file);
+    fs9.writeFileSync(tmp, JSON.stringify(data, null, 2), "utf8");
+    fs9.renameSync(tmp, file);
   }
   saveRaw(raw) {
-    const file = path11.join(this.rawDir, `${raw.providerId}.json`);
+    const file = path12.join(this.rawDir, `${raw.providerId}.json`);
     this.writeJson(file, raw);
     return file;
   }
   loadRaws() {
     try {
-      return fs8.readdirSync(this.rawDir).filter((f) => f.endsWith(".json")).map((f) => JSON.parse(fs8.readFileSync(path11.join(this.rawDir, f), "utf8")));
+      return fs9.readdirSync(this.rawDir).filter((f) => f.endsWith(".json")).map((f) => JSON.parse(fs9.readFileSync(path12.join(this.rawDir, f), "utf8")));
     } catch {
       return [];
     }
   }
   loadOverrides() {
     try {
-      return JSON.parse(fs8.readFileSync(this.overridesPath, "utf8"));
+      return JSON.parse(fs9.readFileSync(this.overridesPath, "utf8"));
     } catch {
       return {};
     }
@@ -4066,14 +4135,14 @@ var CatalogStore = class {
   }
   loadCatalog() {
     try {
-      return JSON.parse(fs8.readFileSync(this.catalogPath, "utf8"));
+      return JSON.parse(fs9.readFileSync(this.catalogPath, "utf8"));
     } catch {
       return void 0;
     }
   }
   loadBench() {
     try {
-      return JSON.parse(fs8.readFileSync(this.benchPath, "utf8"));
+      return JSON.parse(fs9.readFileSync(this.benchPath, "utf8"));
     } catch {
       return {};
     }
@@ -4097,15 +4166,15 @@ var CatalogStore = class {
   exportDocs() {
     const files = [];
     const catalog = this.loadCatalog();
-    fs8.mkdirSync(path11.join(this.dir, "full"), { recursive: true });
+    fs9.mkdirSync(path12.join(this.dir, "full"), { recursive: true });
     if (catalog) {
-      const f = path11.join(this.dir, "catalog.md");
-      fs8.writeFileSync(f, renderCatalogMarkdown(catalog), "utf8");
+      const f = path12.join(this.dir, "catalog.md");
+      fs9.writeFileSync(f, renderCatalogMarkdown(catalog), "utf8");
       files.push(f);
     }
     for (const raw of this.loadRaws()) {
-      const f = path11.join(this.dir, "full", `${raw.providerId}.md`);
-      fs8.writeFileSync(f, renderRawMarkdown(raw), "utf8");
+      const f = path12.join(this.dir, "full", `${raw.providerId}.md`);
+      fs9.writeFileSync(f, renderRawMarkdown(raw), "utf8");
       files.push(f);
     }
     return files;
@@ -4224,8 +4293,8 @@ function providerPatches(providers, catalog, maxModels = 60) {
 }
 
 // src/fleet/speed.ts
-var fs9 = __toESM(require("fs"));
-var path12 = __toESM(require("path"));
+var fs10 = __toESM(require("fs"));
+var path13 = __toESM(require("path"));
 function priorTps(tier, local, sizeB, benchTps) {
   if (benchTps && benchTps > 0)
     return benchTps;
@@ -4245,15 +4314,15 @@ var JsonSpeedStore = class {
   }
   load() {
     try {
-      return JSON.parse(fs9.readFileSync(this.file, "utf8"));
+      return JSON.parse(fs10.readFileSync(this.file, "utf8"));
     } catch {
       return {};
     }
   }
   save(data) {
     try {
-      fs9.mkdirSync(path12.dirname(this.file), { recursive: true });
-      fs9.writeFileSync(this.file, JSON.stringify(data), "utf8");
+      fs10.mkdirSync(path13.dirname(this.file), { recursive: true });
+      fs10.writeFileSync(this.file, JSON.stringify(data), "utf8");
     } catch {
     }
   }
@@ -4644,6 +4713,32 @@ function detectLimit(text, models = [], now = Date.now()) {
     excerpt: clean2.slice(Math.max(0, m.index - 20), m.index + 140).replace(/\s+/g, " ").trim()
   };
 }
+function detectFatal(text) {
+  const clean2 = stripAnsi(text);
+  const rules = [
+    {
+      re: /(?:refusing to run in an )?untrusted workspace|workspace (?:is )?not trusted|trust this (?:folder|workspace|directory)/i,
+      kind: "workspace-trust",
+      message: "The agent refuses to run in a folder it does not trust. Open the agent interactively in that folder once to trust it (or turn off workspace trust in the agent's config)."
+    },
+    {
+      re: /not (?:logged|signed) in|please (?:log ?in|sign ?in)|authentication (?:required|failed)|invalid (?:api key|token)|\b401 unauthorized/i,
+      kind: "auth",
+      message: "The agent is not signed in (or its token expired). Sign in from its terminal, then resume."
+    },
+    {
+      re: /is not recognized as an internal or external command|command not found|no such file or directory.*(?:devin|claude|gemini|agy|copilot|codex|aider)|cannot find the path specified/i,
+      kind: "missing-cli",
+      message: "The agent command was not found. Check the executable path in Agent Providers (use Detect)."
+    }
+  ];
+  for (const r of rules) {
+    const m = r.re.exec(clean2);
+    if (m)
+      return { kind: r.kind, message: r.message, excerpt: clean2.slice(Math.max(0, m.index - 10), m.index + 140).replace(/\s+/g, " ").trim() };
+  }
+  return null;
+}
 var ATTENTION_RE = [
   /\(y\/n\)|\[y\/n\]|\[yes\/no\]/i,
   /do you want to (?:proceed|continue|allow|make this edit|run)/i,
@@ -4746,7 +4841,8 @@ var DEFAULT_SETTINGS = {
   backgroundTerminals: true,
   idleMinutes: 10,
   objective: "balanced",
-  keepModelVersions: 2
+  keepModelVersions: 2,
+  trustedWorkspaces: []
 };
 var RESUME_TASK = "You were interrupted while working on ticket {ticket_path}: {ticket_title} (network error, crash, or the editor/PC closed). Check the ticket Work Log and the git status/diff to see what is already done, then continue from where you stopped. Do not redo finished work. If everything is already complete, verify it and say so in the Work Log.";
 var REVIEW_TASK = "Code-review the work done for ticket {ticket_path}: {ticket_title}. Check every acceptance criterion, run the tests, and record findings under the ticket Work Log. Do not start new features. If the work passes, say so in the Work Log.";
@@ -4757,6 +4853,7 @@ var TerminalLauncher = class {
   shuttingDown = false;
   onLimit;
   onAttention;
+  onFatal;
   modelsFor;
   lastOutput = /* @__PURE__ */ new Map();
   lastOutputAt(id) {
@@ -4796,7 +4893,7 @@ var TerminalLauncher = class {
       setTimeout(() => this.manager.ended(session.id, 0, "Handed to IDE chat"), 0);
       return true;
     }
-    const base = `Agent: ${session.providerName} \xB7 ${session.ticketId || path13.basename(session.ticketPath)}`;
+    const base = `Agent: ${session.providerName} \xB7 ${session.ticketId || path14.basename(session.ticketPath)}`;
     let name = base;
     let n = 2;
     while (vscode4.window.terminals.some((t) => t.name === name))
@@ -4825,6 +4922,7 @@ var TerminalLauncher = class {
       return;
     let buf = "";
     let limitFired = false;
+    let fatalFired = false;
     try {
       for await (const chunk of exec.read()) {
         this.lastOutput.set(session.id, Date.now());
@@ -4835,6 +4933,13 @@ var TerminalLauncher = class {
           if (info) {
             limitFired = true;
             this.onLimit?.(session, info);
+          }
+        }
+        if (!fatalFired && !limitFired) {
+          const fatal = detectFatal(buf.slice(-1500));
+          if (fatal) {
+            fatalFired = true;
+            this.onFatal?.(session, fatal);
           }
         }
         const attention = detectAttention(buf.slice(-800));
@@ -4902,7 +5007,7 @@ var FleetController = class _FleetController {
     if (!dir)
       return;
     for (const s of this.sessions.list()) {
-      const key = s.ticketId || path13.basename(s.ticketPath, ".md");
+      const key = s.ticketId || path14.basename(s.ticketPath, ".md");
       const tracked = this.sessionClaims.get(s.id);
       if (s.status === "running" && !tracked) {
         const agent = s.providerName;
@@ -4930,7 +5035,7 @@ var FleetController = class _FleetController {
     const dir = this.messageBoardDir();
     if (!dir)
       return void 0;
-    const key = ticket.id || path13.basename(ticket.path, ".md");
+    const key = ticket.id || path14.basename(ticket.path, ".md");
     const held = readClaims(dir).find((c) => !c.expired && c.key.toLowerCase() === key.toLowerCase() && c.agent !== agent);
     return held?.agent;
   }
@@ -4942,19 +5047,19 @@ var FleetController = class _FleetController {
   }
   constructor(context) {
     const root = vscode4.workspace.workspaceFolders?.[0]?.uri.fsPath || context.globalStorageUri.fsPath;
-    const dir = path13.join(root, ".agentic-kanban");
-    this.settingsPath = path13.join(dir, "fleet.json");
-    this.briefPath = path13.join(dir, "runtime", "orchestrator-brief.md");
+    const dir = path14.join(root, ".agentic-kanban");
+    this.settingsPath = path14.join(dir, "fleet.json");
+    this.briefPath = path14.join(dir, "runtime", "orchestrator-brief.md");
     this.registry = new ProviderRegistry(root);
     this.settings = this.loadSettings();
     this.catalogStore = new CatalogStore(root);
     this.catalog = new CatalogIndex(this.catalogStore.loadCatalog());
-    this.speed = new SpeedBook(new JsonSpeedStore(path13.join(dir, "runtime", "speed.json")));
+    this.speed = new SpeedBook(new JsonSpeedStore(path14.join(dir, "runtime", "speed.json")));
     const launcher = new TerminalLauncher(context.subscriptions);
     this.sessions = new SessionManager(
       (id) => this.registry.list().find((p) => p.id === id),
       launcher,
-      new JsonFleetStore(path13.join(dir, "runtime", "fleet-usage.json"))
+      new JsonFleetStore(path14.join(dir, "runtime", "fleet-usage.json"))
     );
     launcher.manager = this.sessions;
     this.launcher = launcher;
@@ -4963,6 +5068,9 @@ var FleetController = class _FleetController {
       void this.handleLimit(s.id, info);
     };
     launcher.onAttention = (s, text) => this.handleAttention(s.id, text);
+    launcher.onFatal = (s, info) => {
+      void this.handleFatal(s.id, info);
+    };
     AgentRunner.launcher = async (req) => {
       const provider = this.registry.get(req.assignee.id);
       if (!provider)
@@ -4994,7 +5102,7 @@ var FleetController = class _FleetController {
   // ---------------------------------------------------------------- settings
   loadSettings() {
     try {
-      return { ...DEFAULT_SETTINGS, ...JSON.parse(fs10.readFileSync(this.settingsPath, "utf8")) };
+      return { ...DEFAULT_SETTINGS, ...JSON.parse(fs11.readFileSync(this.settingsPath, "utf8")) };
     } catch {
       return { ...DEFAULT_SETTINGS };
     }
@@ -5005,8 +5113,8 @@ var FleetController = class _FleetController {
     next.maxNewPerTick = Math.min(20, Math.max(1, Math.round(Number(next.maxNewPerTick)) || 3));
     this.settings = next;
     try {
-      fs10.mkdirSync(path13.dirname(this.settingsPath), { recursive: true });
-      fs10.writeFileSync(this.settingsPath, JSON.stringify(next, null, 2), "utf8");
+      fs11.mkdirSync(path14.dirname(this.settingsPath), { recursive: true });
+      fs11.writeFileSync(this.settingsPath, JSON.stringify(next, null, 2), "utf8");
     } catch (e) {
       console.warn("[Agentic Kanban] Could not save fleet settings:", e);
     }
@@ -5084,7 +5192,7 @@ var FleetController = class _FleetController {
       model = alt;
     }
     const board = boardId && BoardManager.getInstance().getBoard(boardId) || BoardManager.getInstance().findBoardForTicketPath(ticket.path);
-    const boardRoot = board?.rootPath || path13.dirname(ticket.path);
+    const boardRoot = board?.rootPath || path14.dirname(ticket.path);
     let payload = prebuilt;
     if (!payload || task || extra.assignee) {
       if (role !== "worker" && !provider.command.includes("{task}")) {
@@ -5096,6 +5204,8 @@ var FleetController = class _FleetController {
       payload = await AgentRunner.prepareLaunch(ticket, extra.assignee || providerToAssignee(provider), boardRoot, board?.config, {
         model,
         modelFlag: provider.modelFlag,
+        trustedRoots: this.settings.trustedWorkspaces,
+        trustFlag: provider.trustFlag,
         effort: resolved.effort,
         effortFlag: provider.effortFlag,
         task,
@@ -5118,6 +5228,7 @@ var FleetController = class _FleetController {
       ticketTitle: ticket.title,
       boardId: board?.id || boardId,
       payload,
+      cwd: payload?.cwd,
       queueIfBusy,
       agentSessionId,
       attempt: extra.attempt,
@@ -5266,10 +5377,10 @@ var FleetController = class _FleetController {
     return this.registry.list().map((p) => this.sessions.usage(p));
   }
   findTicket(ticketPath) {
-    const key = path13.resolve(ticketPath).toLowerCase();
+    const key = path14.resolve(ticketPath).toLowerCase();
     for (const board of BoardManager.getInstance().getAllBoards()) {
       for (const col of board.columns) {
-        const t = col.tickets.find((x) => path13.resolve(x.path).toLowerCase() === key);
+        const t = col.tickets.find((x) => path14.resolve(x.path).toLowerCase() === key);
         if (t)
           return { ticket: t, board };
       }
@@ -5288,7 +5399,7 @@ var FleetController = class _FleetController {
     if (decision.startsNow) {
       const ongoing = found.board.columns.find((c) => /ongoing|in progress/i.test(c.name));
       if (ongoing && await bm.moveTicket(found.board.id, found.ticket.path, ongoing.name, null)) {
-        ticket = this.findTicket(path13.join(found.board.rootPath, ongoing.name, path13.basename(found.ticket.path)))?.ticket || ticket;
+        ticket = this.findTicket(path14.join(found.board.rootPath, ongoing.name, path14.basename(found.ticket.path)))?.ticket || ticket;
       }
     }
     return !!await this.startSession(provider, decision.model, "worker", ticket, found.board.id, void 0, void 0, true, { hidden: this.settings.backgroundTerminals, reasoning: decision.reasoning ?? "auto" });
@@ -5310,6 +5421,70 @@ var FleetController = class _FleetController {
       await this.runPlan();
     }
     this.changeEmitter.fire();
+  }
+  // ---------------------------------------------------------------- workspace trust
+  currentWorkspace() {
+    return vscode4.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  }
+  isWorkspaceTrusted(folder = this.currentWorkspace()) {
+    return !!folder && isTrusted(this.settings.trustedWorkspaces, folder);
+  }
+  /**
+   * "Trust this workspace" for every provider. Providers differ:
+   *  - flag-based (Devin): the extension adds trustFlag (--respect-workspace-trust false) to sessions started in this folder
+   *  - Copilot CLI: the folder is added to trustedFolders in ~/.copilot/config.json
+   *  - others: no known trust mechanism; they are listed so you know to approve their prompt once
+   */
+  async trustWorkspace(folder = this.currentWorkspace(), confirm = true) {
+    if (!folder)
+      return "No workspace folder is open.";
+    const providers = this.registry.list().filter((p) => p.enabled && p.type === "cli");
+    const lines = providers.map((p) => {
+      if (p.trustFlag)
+        return `${p.name}: sessions here will run with "${p.trustFlag}"`;
+      if (p.kind === "copilot-cli")
+        return `${p.name}: adds the folder to trustedFolders in ~/.copilot/config.json`;
+      return `${p.name}: no known trust setting (approve its prompt once if it asks)`;
+    });
+    if (confirm) {
+      const pick = await vscode4.window.showWarningMessage(
+        `Trust ${folder} for your agents? This lets them run non-interactively here without asking.`,
+        { modal: true, detail: lines.join("\n") || "No providers configured." },
+        "Trust this workspace"
+      );
+      if (pick !== "Trust this workspace")
+        return "Cancelled.";
+    }
+    this.saveSettings({ trustedWorkspaces: [.../* @__PURE__ */ new Set([...this.settings.trustedWorkspaces, folder])] });
+    const done = [];
+    for (const p of providers) {
+      if (p.kind === "copilot-cli") {
+        try {
+          done.push(addCopilotTrustedFolder(folder).changed ? "Copilot CLI config updated" : "Copilot CLI already trusted");
+        } catch (e) {
+          done.push(`Copilot CLI: ${e?.message || e}`);
+        }
+      } else if (p.trustFlag) {
+        done.push(`${p.name}: will run with ${p.trustFlag}`);
+      }
+    }
+    return `Trusted ${folder}. ${done.join("; ")}`.trim();
+  }
+  async untrustWorkspace(folder = this.currentWorkspace()) {
+    if (!folder)
+      return "No workspace folder is open.";
+    this.saveSettings({ trustedWorkspaces: this.settings.trustedWorkspaces.filter((w) => w.toLowerCase() !== folder.toLowerCase()) });
+    let note = "";
+    try {
+      note = removeCopilotTrustedFolder(folder).changed ? " Removed from Copilot CLI trustedFolders." : "";
+    } catch {
+    }
+    return `No longer trusting ${folder}.${note}`;
+  }
+  /** For the UI: the open workspace and whether it is trusted. */
+  workspaceTrust() {
+    const folder = this.currentWorkspace();
+    return folder ? { folder, trusted: this.isWorkspaceTrusted(folder), copilotTrusted: copilotTrusts(folder) } : void 0;
   }
   // ---------------------------------------------------------------- usage limits & needing a human
   /**
@@ -5348,6 +5523,37 @@ var FleetController = class _FleetController {
       return;
     }
     this.escalate(sessionId, `${label} hit its usage limit on "${s.ticketTitle}". ` + (this.settings.autoFailover ? "No other model is capable enough and no reset time was reported." : "Auto-failover is off.") + " Resume it when usage is available, or switch it to another agent.");
+  }
+  /**
+   * A setup problem that retrying cannot fix (untrusted folder, signed out, missing CLI). The session stops
+   * cleanly (no cooldown, no auto-retry) and you get a one-click way to fix it.
+   */
+  async handleFatal(sessionId, info) {
+    const s = this.sessions.get(sessionId);
+    if (!s || s.status !== "running")
+      return;
+    this.sessions.interrupt(sessionId, "user-closed", `${info.message} (${info.excerpt})`);
+    this.sessions.setAttention(sessionId, info.message);
+    this.launcher.kill(this.sessions.get(sessionId));
+    const provider = this.registry.get(s.providerId);
+    const buttons = info.kind === "workspace-trust" ? ["Trust this workspace", "Open agent to fix", "Open Orchestrator"] : info.kind === "auth" ? ["Open agent to fix", "Open Orchestrator"] : ["Open Agents", "Open Orchestrator"];
+    const pick = await vscode4.window.showWarningMessage(`${s.providerName}: ${info.message}`, ...buttons);
+    if (pick === "Trust this workspace") {
+      const msg = await this.trustWorkspace(s.cwd, true);
+      vscode4.window.showInformationMessage(msg);
+      if (this.isWorkspaceTrusted(s.cwd))
+        await this.resumeSession(sessionId, "restart");
+    } else if (pick === "Open agent to fix" && provider) {
+      const exe = provider.path || findForKind(provider.kind) || provider.command.split(/\s+/)[0];
+      const term = vscode4.window.createTerminal({ name: `Fix ${provider.name}`, cwd: s.cwd });
+      term.show(false);
+      term.sendText(process.platform === "win32" && /\s/.test(exe) ? `& "${exe}"` : exe.includes(" ") ? `"${exe}"` : exe);
+      vscode4.window.showInformationMessage("Accept the prompt in that terminal, exit the agent, then press Resume on the session in the Orchestrator.");
+    } else if (pick === "Open Agents") {
+      void vscode4.commands.executeCommand("agenticKanban.openProviders");
+    } else if (pick === "Open Orchestrator") {
+      void vscode4.commands.executeCommand("agenticKanban.openOrchestrator");
+    }
   }
   /** The orchestrator cannot fix this: flag the session and tell the user how to get into it. */
   escalate(sessionId, message) {
@@ -5596,15 +5802,15 @@ var FleetController = class _FleetController {
     if (!cands.length)
       lines.push("(none)");
     for (const c of cands) {
-      lines.push(`- ${c.ticket.id || path13.basename(c.ticket.path)} \u2014 ${c.ticket.title} [${c.ticket.priority}] (${c.ticket.path}) assignee: ${c.ticket.assignee || "unassigned"}`);
+      lines.push(`- ${c.ticket.id || path14.basename(c.ticket.path)} \u2014 ${c.ticket.title} [${c.ticket.priority}] (${c.ticket.path}) assignee: ${c.ticket.assignee || "unassigned"}`);
     }
-    fs10.mkdirSync(path13.dirname(this.briefPath), { recursive: true });
-    fs10.writeFileSync(this.briefPath, lines.join("\n"), "utf8");
+    fs11.mkdirSync(path14.dirname(this.briefPath), { recursive: true });
+    fs11.writeFileSync(this.briefPath, lines.join("\n"), "utf8");
     const planTicket = {
       id: "ORCHESTRATE",
-      filename: path13.basename(this.briefPath),
+      filename: path14.basename(this.briefPath),
       path: this.briefPath,
-      relativePath: path13.relative(board.rootPath, this.briefPath),
+      relativePath: path14.relative(board.rootPath, this.briefPath),
       column: "Backlog",
       subfolder: null,
       title: "Orchestration planning",
@@ -5761,8 +5967,8 @@ var KanbanWebviewManager = class _KanbanWebviewManager {
         try {
           const board = boardManager.getBoard(message.boardId);
           if (board) {
-            const configPath = path14.join(board.rootPath, "config.md");
-            if (fs11.existsSync(configPath)) {
+            const configPath = path15.join(board.rootPath, "config.md");
+            if (fs12.existsSync(configPath)) {
               const doc = await vscode5.workspace.openTextDocument(vscode5.Uri.file(configPath));
               await vscode5.window.showTextDocument(doc, { viewColumn: vscode5.ViewColumn.Beside });
             } else {
@@ -5840,7 +6046,7 @@ Instructions:
           const allBoards = boardManager.getAllBoards();
           if (t && t.path) {
             const foundBoard = allBoards.find(
-              (b) => path14.resolve(t.path).toLowerCase().startsWith(path14.resolve(b.rootPath).toLowerCase())
+              (b) => path15.resolve(t.path).toLowerCase().startsWith(path15.resolve(b.rootPath).toLowerCase())
             );
             if (foundBoard)
               targetBoard2 = foundBoard;
@@ -5872,7 +6078,7 @@ Instructions:
           const allBoards = boardManager.getAllBoards();
           if (message.ticketPath) {
             const foundBoard = allBoards.find(
-              (b) => path14.resolve(message.ticketPath).toLowerCase().startsWith(path14.resolve(b.rootPath).toLowerCase())
+              (b) => path15.resolve(message.ticketPath).toLowerCase().startsWith(path15.resolve(b.rootPath).toLowerCase())
             );
             if (foundBoard)
               targetBoard2 = foundBoard;
@@ -5904,7 +6110,7 @@ Instructions:
               let ticketObj = null;
               for (const col of reloadedBoard.columns) {
                 const found = col.tickets.find(
-                  (t) => path14.resolve(t.path).toLowerCase() === path14.resolve(message.ticketPath).toLowerCase() || message.ticketId && t.id === message.ticketId || t.filename.toLowerCase() === path14.basename(message.ticketPath).toLowerCase()
+                  (t) => path15.resolve(t.path).toLowerCase() === path15.resolve(message.ticketPath).toLowerCase() || message.ticketId && t.id === message.ticketId || t.filename.toLowerCase() === path15.basename(message.ticketPath).toLowerCase()
                 );
                 if (found) {
                   ticketObj = found;
@@ -5913,7 +6119,7 @@ Instructions:
               }
               if (!ticketObj) {
                 const sourcePath = boardManager.resolveTicketPathOnDisk(targetBoard2, message.ticketPath) || message.ticketPath;
-                const fileContent = await fs11.promises.readFile(sourcePath, "utf8");
+                const fileContent = await fs12.promises.readFile(sourcePath, "utf8");
                 ticketObj = TicketParser.parse(sourcePath, fileContent, targetBoard2.rootPath, "", null);
                 if (ticketObj) {
                   ticketObj.assignee = targetName;
@@ -6046,7 +6252,7 @@ Instructions:
   }
   getHtmlForWebview(webview) {
     let webviewDir = vscode5.Uri.joinPath(this.extensionUri, "dist", "webview");
-    if (!fs11.existsSync(webviewDir.fsPath)) {
+    if (!fs12.existsSync(webviewDir.fsPath)) {
       webviewDir = vscode5.Uri.joinPath(this.extensionUri, "src", "webview");
     }
     const v = Date.now();
@@ -6366,7 +6572,7 @@ Instructions:
 
 // src/fleet/panels.ts
 var vscode6 = __toESM(require("vscode"));
-var fs12 = __toESM(require("fs"));
+var fs13 = __toESM(require("fs"));
 var TITLES = {
   providers: "Agent Providers",
   orchestrator: "Orchestrator",
@@ -6430,7 +6636,7 @@ var FleetPanel = class _FleetPanel {
           fleet.registry.add(m.kindId);
           break;
         case "openFile": {
-          if (m.path && fs12.existsSync(m.path)) {
+          if (m.path && fs13.existsSync(m.path)) {
             const doc = await vscode6.workspace.openTextDocument(vscode6.Uri.file(m.path));
             await vscode6.window.showTextDocument(doc, { viewColumn: vscode6.ViewColumn.Beside });
           }
@@ -6453,7 +6659,7 @@ var FleetPanel = class _FleetPanel {
         }
         case "reply": {
           const text = await vscode6.window.showInputBox({ prompt: "Your reply (signed as Bj\xF6rn, Agentic Kanban UI)" });
-          if (text?.trim() && m.path && fs12.existsSync(m.path))
+          if (text?.trim() && m.path && fs13.existsSync(m.path))
             replyToThread(m.path, "Bj\xF6rn", "Agentic Kanban UI", text);
           break;
         }
@@ -6463,6 +6669,12 @@ var FleetPanel = class _FleetPanel {
             release(dir, m.key, "Agentic Kanban UI", true);
           break;
         }
+        case "trustWorkspace":
+          vscode6.window.showInformationMessage(await fleet.trustWorkspace());
+          break;
+        case "untrustWorkspace":
+          vscode6.window.showInformationMessage(await fleet.untrustWorkspace());
+          break;
         case "openMessageBoard":
           _FleetPanel.show(this.extensionUri, "messageboard");
           return;
@@ -6555,7 +6767,7 @@ var FleetPanel = class _FleetPanel {
           await fleet.requestReview(m.id);
           break;
         case "openTicket": {
-          if (m.path && fs12.existsSync(m.path)) {
+          if (m.path && fs13.existsSync(m.path)) {
             const doc = await vscode6.workspace.openTextDocument(vscode6.Uri.file(m.path));
             await vscode6.window.showTextDocument(doc, { viewColumn: vscode6.ViewColumn.Beside });
           }
@@ -6602,6 +6814,7 @@ var FleetPanel = class _FleetPanel {
     this.panel.webview.postMessage({
       ...base,
       settings: fleet.settings,
+      workspace: fleet.workspaceTrust(),
       sessions: fleet.sessions.list().sort((a, b) => (b.startedAt || b.queuedAt) - (a.startedAt || a.queuedAt)),
       plan: fleet.plan()
     });
@@ -6609,7 +6822,7 @@ var FleetPanel = class _FleetPanel {
   html() {
     const webview = this.panel.webview;
     let dir = vscode6.Uri.joinPath(this.extensionUri, "dist", "webview");
-    if (!fs12.existsSync(dir.fsPath))
+    if (!fs13.existsSync(dir.fsPath))
       dir = vscode6.Uri.joinPath(this.extensionUri, "src", "webview");
     const v = Date.now();
     const css = webview.asWebviewUri(vscode6.Uri.joinPath(dir, "fleet.css")).with({ query: `v=${v}` });
@@ -6647,6 +6860,11 @@ async function activate(context) {
     }),
     vscode7.commands.registerCommand("agenticKanban.openProviders", () => {
       FleetPanel.show(context.extensionUri, "providers");
+    }),
+    vscode7.commands.registerCommand("agenticKanban.trustWorkspace", async () => {
+      const ctl = FleetController.get();
+      if (ctl)
+        vscode7.window.showInformationMessage(await ctl.trustWorkspace());
     }),
     vscode7.commands.registerCommand("agenticKanban.importModels", async () => {
       const ctl = FleetController.get();
@@ -6745,10 +6963,10 @@ async function activate(context) {
           return;
         board = pick.board;
       }
-      const configPath = path15.join(board.rootPath, "config.md");
-      if (!fs13.existsSync(configPath)) {
+      const configPath = path16.join(board.rootPath, "config.md");
+      if (!fs14.existsSync(configPath)) {
         const defaultConfig = ConfigParser.generateDefaultConfig(board.name);
-        await fs13.promises.writeFile(configPath, defaultConfig, "utf8");
+        await fs14.promises.writeFile(configPath, defaultConfig, "utf8");
       }
       const doc = await vscode7.workspace.openTextDocument(vscode7.Uri.file(configPath));
       await vscode7.window.showTextDocument(doc);
@@ -6774,29 +6992,29 @@ async function activate(context) {
       const res = await boardManager.generateAgentRules(board.id);
       if (!res)
         return;
-      if (fs13.existsSync(res.targetPath)) {
+      if (fs14.existsSync(res.targetPath)) {
         const choice = await vscode7.window.showQuickPick(
           [
-            { label: "Overwrite", description: `Replace entire ${path15.basename(res.targetPath)}` },
-            { label: "Append", description: `Append Kanban rules to existing ${path15.basename(res.targetPath)}` },
+            { label: "Overwrite", description: `Replace entire ${path16.basename(res.targetPath)}` },
+            { label: "Append", description: `Append Kanban rules to existing ${path16.basename(res.targetPath)}` },
             { label: "Cancel", description: "Keep existing file unchanged" }
           ],
-          { placeHolder: `${path15.basename(res.targetPath)} already exists. What would you like to do?` }
+          { placeHolder: `${path16.basename(res.targetPath)} already exists. What would you like to do?` }
         );
         if (!choice || choice.label === "Cancel")
           return;
         if (choice.label === "Append") {
-          const existing = await fs13.promises.readFile(res.targetPath, "utf8");
-          await fs13.promises.writeFile(res.targetPath, `${existing}
+          const existing = await fs14.promises.readFile(res.targetPath, "utf8");
+          await fs14.promises.writeFile(res.targetPath, `${existing}
 
 ${res.content}`, "utf8");
         } else {
-          await fs13.promises.writeFile(res.targetPath, res.content, "utf8");
+          await fs14.promises.writeFile(res.targetPath, res.content, "utf8");
         }
       } else {
-        await fs13.promises.writeFile(res.targetPath, res.content, "utf8");
+        await fs14.promises.writeFile(res.targetPath, res.content, "utf8");
       }
-      vscode7.window.showInformationMessage(`Agent rules generated at ${path15.basename(res.targetPath)}`);
+      vscode7.window.showInformationMessage(`Agent rules generated at ${path16.basename(res.targetPath)}`);
       const doc = await vscode7.workspace.openTextDocument(vscode7.Uri.file(res.targetPath));
       await vscode7.window.showTextDocument(doc);
     }),
@@ -6821,8 +7039,8 @@ ${res.content}`, "utf8");
       const created = await boardManager.initTemplates(board.id);
       if (created && created.length > 0) {
         vscode7.window.showInformationMessage(`Initialized templates: ${created.join(", ")} in ${board.name}/.templates/`);
-        const firstTemplate = path15.join(board.rootPath, ".templates", created[0]);
-        if (fs13.existsSync(firstTemplate)) {
+        const firstTemplate = path16.join(board.rootPath, ".templates", created[0]);
+        if (fs14.existsSync(firstTemplate)) {
           const doc = await vscode7.workspace.openTextDocument(vscode7.Uri.file(firstTemplate));
           await vscode7.window.showTextDocument(doc);
         }

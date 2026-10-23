@@ -23,10 +23,10 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 ));
 
 // test/fleetTests.ts
-var fs5 = __toESM(require("fs"));
-var os2 = __toESM(require("os"));
+var fs6 = __toESM(require("fs"));
+var os3 = __toESM(require("os"));
 var http2 = __toESM(require("http"));
-var path7 = __toESM(require("path"));
+var path8 = __toESM(require("path"));
 
 // src/fleet/detect.ts
 var fs = __toESM(require("fs"));
@@ -110,14 +110,14 @@ function parseOllamaList(text) {
   return lines.map((l) => l.split(/\s+/)[0]).filter(Boolean);
 }
 function httpGetJson(url, timeoutMs) {
-  return new Promise((resolve3, reject) => {
+  return new Promise((resolve4, reject) => {
     const req = http.get(url, { timeout: timeoutMs }, (res) => {
       let body = "";
       res.setEncoding("utf8");
       res.on("data", (d) => body += d);
       res.on("end", () => {
         try {
-          resolve3(JSON.parse(body));
+          resolve4(JSON.parse(body));
         } catch (e) {
           reject(e);
         }
@@ -138,9 +138,9 @@ async function detectOllamaModels(host = "127.0.0.1:11434", exePath) {
   const exe = exePath || findExecutable(["ollama"]);
   if (!exe)
     return [];
-  return new Promise((resolve3) => {
+  return new Promise((resolve4) => {
     (0, import_child_process.execFile)(exe, ["list"], { timeout: 4e3, windowsHide: true, shell: isWin() && /\.(cmd|bat)$/i.test(exe) }, (err, stdout) => {
-      resolve3(err ? [] : parseOllamaList(String(stdout)));
+      resolve4(err ? [] : parseOllamaList(String(stdout)));
     });
   });
 }
@@ -202,8 +202,8 @@ function escapeForDoubleQuotes(value, shell) {
 }
 
 // src/agentRunner.ts
-var path3 = __toESM(require("path"));
-var fs2 = __toESM(require("fs"));
+var path4 = __toESM(require("path"));
+var fs3 = __toESM(require("fs"));
 
 // src/orchestrator/config/orchestrationConfig.ts
 var OrchestrationConfigParser = class {
@@ -606,6 +606,68 @@ var ConfigParser = class {
   }
 };
 
+// src/fleet/trust.ts
+var fs2 = __toESM(require("fs"));
+var os2 = __toESM(require("os"));
+var path3 = __toESM(require("path"));
+function isTrusted(trustedRoots, cwd) {
+  return trustedRoots.some((r) => isInside(r, cwd));
+}
+var same = (a, b) => path3.resolve(a).toLowerCase() === path3.resolve(b).toLowerCase();
+function readCopilotConfig(home) {
+  const file = path3.join(home, ".copilot", "config.json");
+  let text = "";
+  try {
+    text = fs2.readFileSync(file, "utf8");
+  } catch {
+  }
+  const lines = text.split(/\r?\n/);
+  const header = [];
+  while (lines.length && /^\s*\/\//.test(lines[0]))
+    header.push(lines.shift());
+  let json = {};
+  try {
+    json = JSON.parse(lines.join("\n") || "{}");
+  } catch {
+    throw new Error(`Could not parse ${file}; not changing it.`);
+  }
+  return { header: header.join("\n"), json, file };
+}
+function writeCopilotConfig(c) {
+  fs2.mkdirSync(path3.dirname(c.file), { recursive: true });
+  const body = JSON.stringify(c.json, null, 2);
+  const tmp = c.file + ".tmp";
+  fs2.writeFileSync(tmp, (c.header ? c.header + "\n" : "") + body + "\n", "utf8");
+  fs2.renameSync(tmp, c.file);
+}
+function addCopilotTrustedFolder(folder, home = os2.homedir()) {
+  const c = readCopilotConfig(home);
+  const list = Array.isArray(c.json.trustedFolders) ? c.json.trustedFolders : [];
+  if (list.some((f) => same(f, folder)))
+    return { changed: false, file: c.file };
+  c.json.trustedFolders = [...list, folder];
+  writeCopilotConfig(c);
+  return { changed: true, file: c.file };
+}
+function removeCopilotTrustedFolder(folder, home = os2.homedir()) {
+  const c = readCopilotConfig(home);
+  const list = Array.isArray(c.json.trustedFolders) ? c.json.trustedFolders : [];
+  const next = list.filter((f) => !same(f, folder));
+  if (next.length === list.length)
+    return { changed: false, file: c.file };
+  c.json.trustedFolders = next;
+  writeCopilotConfig(c);
+  return { changed: true, file: c.file };
+}
+function copilotTrusts(folder, home = os2.homedir()) {
+  try {
+    const c = readCopilotConfig(home);
+    return Array.isArray(c.json.trustedFolders) && c.json.trustedFolders.some((f) => same(f, folder));
+  } catch {
+    return false;
+  }
+}
+
 // src/agentRunner.ts
 var DEFAULT_TASK = "Review requirements and implement ticket {ticket_path}: {ticket_title}";
 var SESSION_ID_PATTERN = /^[0-9a-fA-F-]{8,64}$/;
@@ -653,27 +715,27 @@ var AgentRunner = class {
     if (process.platform === "win32") {
       const localAppData = process.env.LOCALAPPDATA;
       if (localAppData) {
-        candidates.push(path3.join(localAppData, "agy", "bin", "agy.exe"));
+        candidates.push(path4.join(localAppData, "agy", "bin", "agy.exe"));
       }
       const userProfile = process.env.USERPROFILE;
       if (userProfile) {
-        candidates.push(path3.join(userProfile, "AppData", "Local", "agy", "bin", "agy.exe"));
+        candidates.push(path4.join(userProfile, "AppData", "Local", "agy", "bin", "agy.exe"));
       }
       const programFiles = process.env.ProgramFiles;
       if (programFiles) {
-        candidates.push(path3.join(programFiles, "agy", "bin", "agy.exe"));
+        candidates.push(path4.join(programFiles, "agy", "bin", "agy.exe"));
       }
     } else {
       const home = process.env.HOME;
       if (home) {
-        candidates.push(path3.join(home, ".agy", "bin", "agy"));
-        candidates.push(path3.join(home, ".local", "bin", "agy"));
+        candidates.push(path4.join(home, ".agy", "bin", "agy"));
+        candidates.push(path4.join(home, ".local", "bin", "agy"));
       }
       candidates.push("/usr/local/bin/agy");
       candidates.push("/usr/bin/agy");
     }
     for (const candidate of candidates) {
-      if (candidate && fs2.existsSync(candidate)) {
+      if (candidate && fs3.existsSync(candidate)) {
         return candidate;
       }
     }
@@ -690,14 +752,14 @@ var AgentRunner = class {
     const vscode = getVsCode();
     const shell = options.shell || detectShellKind(vscode?.env?.shell);
     const esc = (v) => escapeForDoubleQuotes(v, shell);
-    const workspaceFolder = vscode?.workspace?.workspaceFolders?.[0]?.uri.fsPath || path3.dirname(boardRoot);
+    const workspaceFolder = vscode?.workspace?.workspaceFolders?.[0]?.uri.fsPath || path4.dirname(boardRoot);
     const content = rawTicketContent ?? ticket.summary ?? ticket.title;
     let effectiveBoardConfig = boardConfig;
     if (!effectiveBoardConfig) {
-      const configPath = path3.join(boardRoot, "config.md");
-      if (fs2.existsSync(configPath)) {
+      const configPath = path4.join(boardRoot, "config.md");
+      if (fs3.existsSync(configPath)) {
         try {
-          const cfgText = fs2.readFileSync(configPath, "utf8");
+          const cfgText = fs3.readFileSync(configPath, "utf8");
           effectiveBoardConfig = ConfigParser.parse(cfgText, "board");
         } catch {
         }
@@ -747,6 +809,9 @@ var AgentRunner = class {
     if (modelArgs && !command.includes("{model_args}") && !command.includes("{model}")) {
       command = `${command.trimEnd()} ${modelArgs}`;
     }
+    if (options.trusted && options.trustFlag && /^[\w =.-]+$/.test(options.trustFlag) && !command.includes(options.trustFlag)) {
+      command = `${command.trimEnd()} ${options.trustFlag}`;
+    }
     if (effortArgs && !command.includes("{effort_args}")) {
       command = `${command.trimEnd()} ${effortArgs}`;
     }
@@ -754,7 +819,7 @@ var AgentRunner = class {
     command = command.replace(/ {2,}/g, " ").trim();
     const exePath = config.path || config.executable;
     const first = command.match(/^([A-Za-z][\w.-]*)(?=\s|$)/);
-    if (exePath && first && path3.basename(exePath).replace(/\.[^.]+$/, "").toLowerCase() === first[1].toLowerCase()) {
+    if (exePath && first && path4.basename(exePath).replace(/\.[^.]+$/, "").toLowerCase() === first[1].toLowerCase()) {
       const quoted = `"${exePath}"`;
       command = (shell === "powershell" ? "& " : "") + quoted + command.slice(first[1].length);
     }
@@ -774,16 +839,17 @@ var AgentRunner = class {
       return null;
     }
     const config = assignee.agentConfig;
-    const workspaceFolder = vscode?.workspace?.workspaceFolders?.[0]?.uri.fsPath || path3.dirname(boardRoot);
+    const workspaceFolder = vscode?.workspace?.workspaceFolders?.[0]?.uri.fsPath || path4.dirname(boardRoot);
     let ticketContent = "";
     try {
-      ticketContent = await fs2.promises.readFile(ticket.path, "utf8");
+      ticketContent = await fs3.promises.readFile(ticket.path, "utf8");
     } catch {
       ticketContent = ticket.summary || ticket.title;
     }
     if (config.type === "cli") {
-      const command = this.formatCliCommand(ticket, assignee, boardRoot, boardConfig, ticketContent, options);
       const cwd = config.workingDir ? config.workingDir.replace("{workspace_root}", workspaceFolder).replace("{board_root}", boardRoot) : workspaceFolder;
+      const trusted = options.trustedRoots ? isTrusted(options.trustedRoots, cwd) : options.trusted;
+      const command = this.formatCliCommand(ticket, assignee, boardRoot, boardConfig, ticketContent, { ...options, trusted });
       return { kind: "cli", ticket, assignee, command, cwd, model: options.model };
     }
     if (config.type === "vscode-command") {
@@ -849,11 +915,11 @@ ${ticket.summary}`;
 };
 
 // src/ticketParser.ts
-var path4 = __toESM(require("path"));
+var path5 = __toESM(require("path"));
 var TicketParser = class {
   static parse(filePath, content, boardRoot, column, subfolder, mtime = Date.now()) {
-    const filename = path4.basename(filePath);
-    const relativePath = path4.relative(boardRoot, filePath).replace(/\\/g, "/");
+    const filename = path5.basename(filePath);
+    const relativePath = path5.relative(boardRoot, filePath).replace(/\\/g, "/");
     const { frontmatter, bodyWithoutFrontmatter } = this.extractFrontmatter(content);
     const tableFields = this.extractMarkdownTable(bodyWithoutFrontmatter);
     const { id, title } = this.extractIdAndTitle(filename, bodyWithoutFrontmatter, frontmatter, tableFields);
@@ -1213,8 +1279,8 @@ var TicketParser = class {
 };
 
 // src/fleet/providers.ts
-var fs3 = __toESM(require("fs"));
-var path5 = __toESM(require("path"));
+var fs4 = __toESM(require("fs"));
+var path6 = __toESM(require("path"));
 var PROVIDER_PRESETS = [
   {
     kind: "claude-code",
@@ -1236,6 +1302,7 @@ var PROVIDER_PRESETS = [
     type: "cli",
     command: `devin {model_args} -p "{task}"`,
     modelFlag: "--model",
+    trustFlag: "--respect-workspace-trust false",
     models: [],
     defaultModel: "",
     maxParallel: 2,
@@ -1424,6 +1491,7 @@ function sanitizeProvider(raw, existingIds = []) {
     type: raw?.type === "vscode-command" ? "vscode-command" : raw?.type === "cli" ? "cli" : preset.type,
     command: String(raw?.command ?? preset.command),
     defaultReasoning: ["none", "minimal", "low", "medium", "high", "xhigh", "max"].includes(String(raw?.defaultReasoning)) ? String(raw.defaultReasoning) : "",
+    trustFlag: raw?.trustFlag !== void 0 ? String(raw.trustFlag).trim() || void 0 : getPreset(kind).trustFlag,
     effortFlag: raw?.effortFlag !== void 0 ? String(raw.effortFlag).trim() || void 0 : getPreset(kind).effortFlag,
     pinnedModels: Array.isArray(raw?.pinnedModels) ? raw.pinnedModels.map((m) => String(m).trim()).filter(Boolean) : [],
     listCommand: raw?.listCommand ? String(raw.listCommand).slice(0, 300) : void 0,
@@ -1525,7 +1593,7 @@ function migrateProvider(raw) {
 var ProviderRegistry = class {
   constructor(workspaceRoot) {
     this.workspaceRoot = workspaceRoot;
-    this.filePath = path5.join(workspaceRoot, ".agentic-kanban", "providers.json");
+    this.filePath = path6.join(workspaceRoot, ".agentic-kanban", "providers.json");
     this.load();
   }
   providers = [];
@@ -1536,7 +1604,7 @@ var ProviderRegistry = class {
   }
   load() {
     try {
-      const raw = JSON.parse(fs3.readFileSync(this.filePath, "utf8"));
+      const raw = JSON.parse(fs4.readFileSync(this.filePath, "utf8"));
       const list = Array.isArray(raw) ? raw : raw?.providers || [];
       const ids = [];
       this.providers = list.map((r) => {
@@ -1639,17 +1707,17 @@ var ProviderRegistry = class {
     return added.length;
   }
   save() {
-    fs3.mkdirSync(path5.dirname(this.filePath), { recursive: true });
+    fs4.mkdirSync(path6.dirname(this.filePath), { recursive: true });
     const tmp = `${this.filePath}.tmp`;
-    fs3.writeFileSync(tmp, JSON.stringify({ version: 1, providers: this.providers }, null, 2), "utf8");
-    fs3.renameSync(tmp, this.filePath);
+    fs4.writeFileSync(tmp, JSON.stringify({ version: 1, providers: this.providers }, null, 2), "utf8");
+    fs4.renameSync(tmp, this.filePath);
     this.listeners.forEach((fn) => fn());
   }
 };
 
 // src/fleet/sessions.ts
-var fs4 = __toESM(require("fs"));
-var path6 = __toESM(require("path"));
+var fs5 = __toESM(require("fs"));
+var path7 = __toESM(require("path"));
 
 // src/fleet/cost.ts
 function ticketPoints(t) {
@@ -1713,7 +1781,7 @@ var JsonFleetStore = class {
   }
   load() {
     try {
-      const raw = JSON.parse(fs4.readFileSync(this.file, "utf8"));
+      const raw = JSON.parse(fs5.readFileSync(this.file, "utf8"));
       return {
         starts: raw?.starts && typeof raw.starts === "object" ? raw.starts : {},
         sessions: Array.isArray(raw?.sessions) ? raw.sessions : [],
@@ -1726,10 +1794,10 @@ var JsonFleetStore = class {
   }
   save(data) {
     try {
-      fs4.mkdirSync(path6.dirname(this.file), { recursive: true });
+      fs5.mkdirSync(path7.dirname(this.file), { recursive: true });
       const tmp = this.file + ".tmp";
-      fs4.writeFileSync(tmp, JSON.stringify(data), "utf8");
-      fs4.renameSync(tmp, this.file);
+      fs5.writeFileSync(tmp, JSON.stringify(data), "utf8");
+      fs5.renameSync(tmp, this.file);
     } catch {
     }
   }
@@ -1791,8 +1859,8 @@ var SessionManager = class {
     return this.sessions.filter((s) => s.status === "running" || s.status === "queued");
   }
   activeForTicket(ticketPath) {
-    const key = path6.resolve(ticketPath).toLowerCase();
-    return this.active().find((s) => path6.resolve(s.ticketPath).toLowerCase() === key);
+    const key = path7.resolve(ticketPath).toLowerCase();
+    return this.active().find((s) => path7.resolve(s.ticketPath).toLowerCase() === key);
   }
   startsInWindow(p, now) {
     const since = now - p.windowMinutes * 6e4;
@@ -1978,6 +2046,7 @@ var SessionManager = class {
       attempt: req.attempt ?? 1,
       resumedFrom: req.resumedFrom,
       hidden: req.hidden,
+      cwd: req.cwd,
       reasoning: req.reasoning,
       points: req.points,
       estCost: req.estCost,
@@ -2559,6 +2628,32 @@ function detectLimit(text, models = [], now = Date.now()) {
     excerpt: clean.slice(Math.max(0, m.index - 20), m.index + 140).replace(/\s+/g, " ").trim()
   };
 }
+function detectFatal(text) {
+  const clean = stripAnsi(text);
+  const rules = [
+    {
+      re: /(?:refusing to run in an )?untrusted workspace|workspace (?:is )?not trusted|trust this (?:folder|workspace|directory)/i,
+      kind: "workspace-trust",
+      message: "The agent refuses to run in a folder it does not trust. Open the agent interactively in that folder once to trust it (or turn off workspace trust in the agent's config)."
+    },
+    {
+      re: /not (?:logged|signed) in|please (?:log ?in|sign ?in)|authentication (?:required|failed)|invalid (?:api key|token)|\b401 unauthorized/i,
+      kind: "auth",
+      message: "The agent is not signed in (or its token expired). Sign in from its terminal, then resume."
+    },
+    {
+      re: /is not recognized as an internal or external command|command not found|no such file or directory.*(?:devin|claude|gemini|agy|copilot|codex|aider)|cannot find the path specified/i,
+      kind: "missing-cli",
+      message: "The agent command was not found. Check the executable path in Agent Providers (use Detect)."
+    }
+  ];
+  for (const r of rules) {
+    const m = r.re.exec(clean);
+    if (m)
+      return { kind: r.kind, message: r.message, excerpt: clean.slice(Math.max(0, m.index - 10), m.index + 140).replace(/\s+/g, " ").trim() };
+  }
+  return null;
+}
 var ATTENTION_RE = [
   /\(y\/n\)|\[y\/n\]|\[yes\/no\]/i,
   /do you want to (?:proceed|continue|allow|make this edit|run)/i,
@@ -2661,7 +2756,7 @@ function mkTicket(over = {}) {
   return {
     id: "T-1",
     filename: "t-1.md",
-    path: path7.join(os2.tmpdir(), "Tickets", "Backlog", "Ready", "t-1.md"),
+    path: path8.join(os3.tmpdir(), "Tickets", "Backlog", "Ready", "t-1.md"),
     relativePath: "Backlog/Ready/t-1.md",
     column: "Backlog",
     subfolder: "Ready",
@@ -2700,10 +2795,10 @@ var FakeLauncher = class {
 };
 async function main() {
   console.log("\n--- pathUtils ---");
-  const root = path7.join(os2.tmpdir(), "board");
-  check(isInside(root, path7.join(root, "Backlog", "a.md")), "child path is inside");
+  const root = path8.join(os3.tmpdir(), "board");
+  check(isInside(root, path8.join(root, "Backlog", "a.md")), "child path is inside");
   check(!isInside(root, root + "2"), "sibling with shared prefix is NOT inside");
-  check(safeJoin(root, "Backlog", "Ready") === path7.join(root, "Backlog", "Ready"), "safeJoin accepts normal names");
+  check(safeJoin(root, "Backlog", "Ready") === path8.join(root, "Backlog", "Ready"), "safeJoin accepts normal names");
   check(safeJoin(root, "..", "x") === null, "safeJoin rejects ..");
   check(safeJoin(root, "Backlog", "../../etc") === null, "safeJoin rejects nested traversal");
   check(safeJoin(root, "C:\\Windows") === null && safeJoin(root, "/etc") === null, "safeJoin rejects absolute segments");
@@ -2724,7 +2819,7 @@ async function main() {
     agentConfig: { type: "cli", command: 'claude {model_args} -p "{task}" # {ticket_title}' }
   };
   const evilTicket = mkTicket({ title: 'Fix $(calc) "now" {model}', id: "E-1" });
-  const cmd = AgentRunner.formatCliCommand(evilTicket, agent, os2.tmpdir(), void 0, "body", {
+  const cmd = AgentRunner.formatCliCommand(evilTicket, agent, os3.tmpdir(), void 0, "body", {
     shell: "powershell",
     model: "opus",
     modelFlag: "--model"
@@ -2732,7 +2827,7 @@ async function main() {
   check(cmd.startsWith('claude --model opus -p "'), "model_args expands to --model opus");
   check(cmd.includes("`$(calc)") && cmd.includes('`"now`"'), "ticket title is escaped inside the command");
   check(cmd.includes("{model}"), "placeholder-looking text in a ticket stays literal (single pass)");
-  const badModel = AgentRunner.formatCliCommand(mkTicket(), agent, os2.tmpdir(), void 0, "b", {
+  const badModel = AgentRunner.formatCliCommand(mkTicket(), agent, os3.tmpdir(), void 0, "b", {
     shell: "posix",
     model: "opus; rm -rf ~",
     modelFlag: "--model"
@@ -2743,7 +2838,7 @@ async function main() {
     name: "X",
     type: "agent",
     agentConfig: { type: "cli", command: 'mytool "{ticket_title}"' }
-  }, os2.tmpdir(), void 0, "b", { shell: "posix", model: "big", modelFlag: "-m" });
+  }, os3.tmpdir(), void 0, "b", { shell: "posix", model: "big", modelFlag: "-m" });
   check(appended.endsWith("-m big"), "model flag is appended when the template has no placeholder");
   console.log("\n--- ticket parser: replacement specials ---");
   const md = "# T\n\n| Field | Value |\n|---|---|\n| **Status** | Backlog | extra |\n| **Assignee** | Bob |\n";
@@ -2752,7 +2847,7 @@ async function main() {
   const as = TicketParser.updateTicketAssignee(md, "Dev$`in");
   check(as.includes("| **Assignee** | Dev$`in |"), "assignee keeps $-patterns literal");
   console.log("\n--- providers ---");
-  const tmp = fs5.mkdtempSync(path7.join(os2.tmpdir(), "fleet-"));
+  const tmp = fs6.mkdtempSync(path8.join(os3.tmpdir(), "fleet-"));
   const reg = new ProviderRegistry(tmp);
   const d1 = reg.add("devin", "Devin (work)");
   const d2 = reg.add("devin", "Devin (personal)");
@@ -2762,7 +2857,7 @@ async function main() {
   check(new ProviderRegistry(tmp).list().length === 2, "registry persists to disk");
   const weird = sanitizeProvider({ kind: "claude-code", name: "  ", maxParallel: 999, safetyMarginPct: 99, models: ["a", "b"], defaultModel: "zzz" });
   check(weird.maxParallel === 32 && weird.safetyMarginPct === 50 && weird.defaultModel === "a", "sanitize clamps limits and fixes default model");
-  const seeded = new ProviderRegistry(fs5.mkdtempSync(path7.join(os2.tmpdir(), "fleet-")));
+  const seeded = new ProviderRegistry(fs6.mkdtempSync(path8.join(os3.tmpdir(), "fleet-")));
   check(seeded.seedFromAssignees([agent, { id: "bj", name: "Bj", type: "human" }]) === 1 && seeded.list()[0].kind === "claude-code", "legacy agents are imported, humans ignored");
   check(providerToAssignee(d1).id === d1.id && providerToAssignee(d1).type === "agent", "provider converts to an assignee");
   console.log("\n--- sessions: parallel, window, spacing, cooldown ---");
@@ -2781,7 +2876,7 @@ async function main() {
     provider: p,
     model: "m",
     role: "worker",
-    ticketPath: path7.join(tmp, `t${n}.md`),
+    ticketPath: path8.join(tmp, `t${n}.md`),
     ticketId: `T${n}`,
     ticketTitle: `T${n}`,
     boardId: "b",
@@ -2834,11 +2929,11 @@ async function main() {
   provs2.p1 = p1;
   provs2.p2 = p2;
   const cands = [
-    { ticket: mkTicket({ id: "L", path: path7.join(tmp, "l.md"), priority: "Low", mtime: 1 }), boardId: "b", boardRoot: tmp },
-    { ticket: mkTicket({ id: "H", path: path7.join(tmp, "h.md"), priority: "P0", mtime: 2, labels: ["model:opus"] }), boardId: "b", boardRoot: tmp },
-    { ticket: mkTicket({ id: "D", path: path7.join(tmp, "d.md"), priority: "P0", unresolvedDependencies: ["X"] }), boardId: "b", boardRoot: tmp },
-    { ticket: mkTicket({ id: "N", path: path7.join(tmp, "n.md"), priority: "P1", assignee: "Bj\xF6rn" }), boardId: "b", boardRoot: tmp },
-    { ticket: mkTicket({ id: "A", path: path7.join(tmp, "a.md"), priority: "P2", assignee: "Gemini" }), boardId: "b", boardRoot: tmp }
+    { ticket: mkTicket({ id: "L", path: path8.join(tmp, "l.md"), priority: "Low", mtime: 1 }), boardId: "b", boardRoot: tmp },
+    { ticket: mkTicket({ id: "H", path: path8.join(tmp, "h.md"), priority: "P0", mtime: 2, labels: ["model:opus"] }), boardId: "b", boardRoot: tmp },
+    { ticket: mkTicket({ id: "D", path: path8.join(tmp, "d.md"), priority: "P0", unresolvedDependencies: ["X"] }), boardId: "b", boardRoot: tmp },
+    { ticket: mkTicket({ id: "N", path: path8.join(tmp, "n.md"), priority: "P1", assignee: "Bj\xF6rn" }), boardId: "b", boardRoot: tmp },
+    { ticket: mkTicket({ id: "A", path: path8.join(tmp, "a.md"), priority: "P2", assignee: "Gemini" }), boardId: "b", boardRoot: tmp }
   ];
   const plan = planWork(cands, [p1, p2], sm2, { now: now2 });
   const byId = Object.fromEntries(plan.map((d) => [d.ticketId, d]));
@@ -2852,12 +2947,12 @@ async function main() {
   const rev = pickReviewer([{ ...p1, roles: ["worker", "reviewer"] }, { ...p2, roles: ["worker", "reviewer"] }], sm2, "p1", now2);
   check(rev?.id === "p2", "reviewer prefers a different provider than the author");
   console.log("\n--- auto-detect & ollama ---");
-  const bin = fs5.mkdtempSync(path7.join(os2.tmpdir(), "bin-"));
+  const bin = fs6.mkdtempSync(path8.join(os3.tmpdir(), "bin-"));
   const exeName = process.platform === "win32" ? "claude.cmd" : "claude";
-  fs5.writeFileSync(path7.join(bin, exeName), process.platform === "win32" ? "@echo off\r\n" : "#!/bin/sh\n");
+  fs6.writeFileSync(path8.join(bin, exeName), process.platform === "win32" ? "@echo off\r\n" : "#!/bin/sh\n");
   const fakeEnv = { PATH: "", PATHEXT: ".CMD;.EXE" };
-  check(findExecutable(["claude"], fakeEnv, [bin]) === path7.join(bin, exeName), "findExecutable finds a CLI in an extra install folder");
-  check(findExecutable(["claude"], { ...fakeEnv, PATH: bin }, []) === path7.join(bin, exeName), "findExecutable finds a CLI on PATH");
+  check(findExecutable(["claude"], fakeEnv, [bin]) === path8.join(bin, exeName), "findExecutable finds a CLI in an extra install folder");
+  check(findExecutable(["claude"], { ...fakeEnv, PATH: bin }, []) === path8.join(bin, exeName), "findExecutable finds a CLI on PATH");
   check(findExecutable(["definitely-not-installed-xyz"], fakeEnv, [bin]) === void 0, "missing tools return undefined");
   check(JSON.stringify(parseOllamaList("NAME  ID  SIZE  MODIFIED\nllama3.2:3b  abc  2 GB  1 day ago\nqwen2.5-coder:7b  def  4 GB  2 days ago\n")) === '["llama3.2:3b","qwen2.5-coder:7b"]', "parses `ollama list` output");
   const srv = http2.createServer((req2, res) => {
@@ -2869,30 +2964,30 @@ async function main() {
   const models = await detectOllamaModels(`127.0.0.1:${port}`);
   srv.close();
   check(models.length === 2 && models[0] === "llama3.2:3b", "detects models from the Ollama HTTP API");
-  check((await detectOllamaModels("127.0.0.1:1", path7.join(bin, "nonexistent"))).length === 0, "unreachable Ollama yields an empty list, not an error");
-  const oreg = new ProviderRegistry(fs5.mkdtempSync(path7.join(os2.tmpdir(), "fleet-")));
-  const addedP = oreg.addDetected([{ kind: "ollama", path: path7.join(bin, "ollama.exe"), models: ["llama3.2:3b", "codestral:22b"] }, { kind: "claude-code", path: path7.join(bin, exeName) }]);
+  check((await detectOllamaModels("127.0.0.1:1", path8.join(bin, "nonexistent"))).length === 0, "unreachable Ollama yields an empty list, not an error");
+  const oreg = new ProviderRegistry(fs6.mkdtempSync(path8.join(os3.tmpdir(), "fleet-")));
+  const addedP = oreg.addDetected([{ kind: "ollama", path: path8.join(bin, "ollama.exe"), models: ["llama3.2:3b", "codestral:22b"] }, { kind: "claude-code", path: path8.join(bin, exeName) }]);
   const oll = addedP.find((p) => p.kind === "ollama");
   check(addedP.length === 2 && oll.models.length === 2 && oll.defaultModel === "llama3.2:3b" && oll.path.includes("ollama"), "addDetected creates providers with path and detected models");
   check(oreg.addDetected([{ kind: "ollama", path: "x" }]).length === 0, "addDetected does not duplicate an existing kind");
   const keepPath = oreg.applyDetection(oll.id, { kind: "ollama", path: "other", models: ["phi4:14b"] });
   check(keepPath.path === oll.path && keepPath.defaultModel === "phi4:14b", "applyDetection keeps an existing path and fixes the default model");
-  const ollCmd = AgentRunner.formatCliCommand(mkTicket({ title: "Say hi" }), providerToAssignee({ ...oll, path: void 0 }), os2.tmpdir(), void 0, "b", { shell: "posix", model: "llama3.2:3b", modelFlag: oll.modelFlag });
+  const ollCmd = AgentRunner.formatCliCommand(mkTicket({ title: "Say hi" }), providerToAssignee({ ...oll, path: void 0 }), os3.tmpdir(), void 0, "b", { shell: "posix", model: "llama3.2:3b", modelFlag: oll.modelFlag });
   check(ollCmd.startsWith('ollama run llama3.2:3b "'), 'ollama preset builds `ollama run <model> "<task>"`');
-  const viaPath = AgentRunner.formatCliCommand(mkTicket(), providerToAssignee({ ...oll, path: "C:/Tools/ollama.exe" }), os2.tmpdir(), void 0, "b", { shell: "powershell", model: "m" });
+  const viaPath = AgentRunner.formatCliCommand(mkTicket(), providerToAssignee({ ...oll, path: "C:/Tools/ollama.exe" }), os3.tmpdir(), void 0, "b", { shell: "powershell", model: "m" });
   check(viaPath.startsWith('& "C:/Tools/ollama.exe" run m'), "a detected path replaces the bare tool name (PATH-independent)");
-  const noSwap = AgentRunner.formatCliCommand(mkTicket(), { id: "x", name: "X", type: "agent", agentConfig: { type: "cli", command: 'othertool "{ticket_title}"', path: "C:/Tools/ollama.exe" } }, os2.tmpdir(), void 0, "b", { shell: "posix" });
+  const noSwap = AgentRunner.formatCliCommand(mkTicket(), { id: "x", name: "X", type: "agent", agentConfig: { type: "cli", command: 'othertool "{ticket_title}"', path: "C:/Tools/ollama.exe" } }, os3.tmpdir(), void 0, "b", { shell: "posix" });
   check(noSwap.startsWith("othertool "), "path is only substituted when it matches the command's tool name");
   const sm3 = new SessionManager(() => void 0, new FakeLauncher(), void 0, () => 1);
-  check(planWork([{ ticket: mkTicket({ path: path7.join(tmp, "o.md") }), boardId: "b", boardRoot: tmp }], [oll], sm3, { now: 1 }).length === 0, "autopilot never hands tickets to answer-only Ollama");
+  check(planWork([{ ticket: mkTicket({ path: path8.join(tmp, "o.md") }), boardId: "b", boardRoot: tmp }], [oll], sm3, { now: 1 }).length === 0, "autopilot never hands tickets to answer-only Ollama");
   console.log("\n--- recovery: persisted sessions survive a restart ---");
-  const storeFile = path7.join(tmp, "fleet-usage.json");
+  const storeFile = path8.join(tmp, "fleet-usage.json");
   let t0 = 1e7;
   const rp = { ...createProvider("claude-code", []), id: "rp", name: "RP", maxParallel: 3, maxSessionsPerWindow: 0, minSpacingSeconds: 0, models: ["opus", "sonnet", "haiku"], defaultModel: "opus" };
   const rmap = { rp };
   const smA = new SessionManager((id) => rmap[id], new FakeLauncher(), new JsonFleetStore(storeFile), () => t0);
-  const run1 = await smA.request({ provider: rp, model: "opus", role: "worker", ticketPath: path7.join(tmp, "r1.md"), ticketId: "R1", ticketTitle: "R1", boardId: "b", payload: {}, agentSessionId: "aaaaaaaa-1111-2222-3333-444444444444", hidden: true });
-  const queuedOnly = await smA.request({ provider: { ...rp, maxParallel: 1 }, model: "opus", role: "worker", ticketPath: path7.join(tmp, "r2.md"), ticketId: "R2", ticketTitle: "R2", boardId: "b", payload: {} });
+  const run1 = await smA.request({ provider: rp, model: "opus", role: "worker", ticketPath: path8.join(tmp, "r1.md"), ticketId: "R1", ticketTitle: "R1", boardId: "b", payload: {}, agentSessionId: "aaaaaaaa-1111-2222-3333-444444444444", hidden: true });
+  const queuedOnly = await smA.request({ provider: { ...rp, maxParallel: 1 }, model: "opus", role: "worker", ticketPath: path8.join(tmp, "r2.md"), ticketId: "R2", ticketTitle: "R2", boardId: "b", payload: {} });
   check(run1.status === "running" && queuedOnly.status === "queued", 'one session running, one queued before the "crash"');
   t0 += 5 * 6e4;
   const smB = new SessionManager((id) => rmap[id], new FakeLauncher(), new JsonFleetStore(storeFile), () => t0);
@@ -2905,10 +3000,10 @@ async function main() {
   check(smB.resumable().length === 1, "once resumed, a session stops offering Resume");
   smB.dismiss(queuedOnly.id);
   check(smB.get(queuedOnly.id).status === "finished" && smB.resumable().length === 0, "Dismiss removes it from the recovery list");
-  const fresh = await smB.request({ provider: rp, model: "sonnet", role: "worker", ticketPath: path7.join(tmp, "r3.md"), ticketId: "R3", ticketTitle: "R3", boardId: "b", payload: {} });
+  const fresh = await smB.request({ provider: rp, model: "sonnet", role: "worker", ticketPath: path8.join(tmp, "r3.md"), ticketId: "R3", ticketTitle: "R3", boardId: "b", payload: {} });
   smB.ended(fresh.id, void 0, void 0, true);
   check(smB.get(fresh.id).status === "interrupted" && smB.get(fresh.id).interruptKind === "user-closed", 'a terminal closed without an exit code is "interrupted", never "finished"');
-  const fresh2 = await smB.request({ provider: rp, model: "sonnet", role: "worker", ticketPath: path7.join(tmp, "r4.md"), ticketId: "R4", ticketTitle: "R4", boardId: "b", payload: {} });
+  const fresh2 = await smB.request({ provider: rp, model: "sonnet", role: "worker", ticketPath: path8.join(tmp, "r4.md"), ticketId: "R4", ticketTitle: "R4", boardId: "b", payload: {} });
   smB.shutdown();
   check(smB.get(fresh2.id).interruptKind === "host-closed", "shutdown() marks live sessions host-closed");
   check(new SessionManager((id) => rmap[id], new FakeLauncher(), new JsonFleetStore(storeFile), () => t0).get(fresh2.id).status === "interrupted", "shutdown state is persisted");
@@ -2927,6 +3022,42 @@ async function main() {
   check(!!l5 && l5.model === "gemini-2.5-pro" && l5.resetAt === NOW + 9e4, 'strips ANSI colour codes and reads "retry after 90s"');
   check(detectLimit("Compiled 429 files, no rate problems at all, all good", [], NOW) === null, "ordinary output (even containing 429) is not a limit");
   check(!!detectAttention("Do you want to proceed? (y/n)") && !!detectAttention("Press Enter to continue") && detectAttention("Reading src/index.ts") === void 0, "detects prompts that need a human");
+  console.log("\n--- fatal setup errors (need a human, never retry) ---");
+  const trustErr = "Error: Refusing to run in an untrusted workspace: C:\\Aptic\nStart `devin.exe` interactively in this directory to trust it, or set `respect_workspace_trust: false` in your config to restore the previous behavior.";
+  const fa = detectFatal(trustErr);
+  check(!!fa && fa.kind === "workspace-trust" && /trust/i.test(fa.message), `recognises Devin's "untrusted workspace" refusal`);
+  check(detectFatal("Please log in first: run devin auth login")?.kind === "auth" && detectFatal("Error 401 Unauthorized")?.kind === "auth", "recognises a signed-out CLI");
+  check(detectFatal("'agy' is not recognized as an internal or external command")?.kind === "missing-cli", "recognises a missing executable");
+  check(detectFatal("Reading src/index.ts\nRunning tests... 12 passed") === null && detectFatal("I trusted the tests and signed the release notes") === null, "ordinary output is not flagged");
+  console.log("\n--- workspace trust ---");
+  const trustHome = fs6.mkdtempSync(path8.join(os3.tmpdir(), "home-"));
+  fs6.mkdirSync(path8.join(trustHome, ".copilot"));
+  const cfgFile = path8.join(trustHome, ".copilot", "config.json");
+  fs6.writeFileSync(cfgFile, '// User settings belong in settings.json.\n// This file is managed automatically.\n{\n  "firstLaunchAt": "2026-08-21T12:55:20.970Z",\n  "trustedFolders": ["C:\\\\Aptic"],\n  "recentModelIds": ["kimi-k3"]\n}\n');
+  const r1 = addCopilotTrustedFolder("C:\\Work\\Proj", trustHome);
+  const txt = fs6.readFileSync(cfgFile, "utf8");
+  check(r1.changed && txt.startsWith("// User settings belong in settings.json.\n// This file is managed automatically.\n"), "Copilot config: the folder is added and the comment header is kept");
+  const parsed = JSON.parse(txt.split("\n").filter((l) => !l.startsWith("//")).join("\n"));
+  check(parsed.trustedFolders.length === 2 && parsed.recentModelIds[0] === "kimi-k3" && parsed.firstLaunchAt === "2026-08-21T12:55:20.970Z", "other settings are untouched");
+  check(addCopilotTrustedFolder("c:\\work\\proj", trustHome).changed === false && copilotTrusts("C:\\WORK\\PROJ", trustHome), "adding again (any letter case) changes nothing");
+  check(removeCopilotTrustedFolder("C:\\Work\\Proj", trustHome).changed && !copilotTrusts("C:\\Work\\Proj", trustHome) && copilotTrusts("C:\\Aptic", trustHome), "removing only removes that folder");
+  fs6.writeFileSync(cfgFile, "{ not json");
+  let threw = false;
+  try {
+    addCopilotTrustedFolder("C:\\x", trustHome);
+  } catch {
+    threw = true;
+  }
+  check(threw && fs6.readFileSync(cfgFile, "utf8") === "{ not json", "an unreadable config is never overwritten");
+  fs6.rmSync(trustHome, { recursive: true, force: true });
+  check(isTrusted(["C:\\Aptic"], "C:\\Aptic\\sub\\dir") && isTrusted(["c:\\aptic"], "C:\\APTIC") && !isTrusted(["C:\\Aptic"], "C:\\Aptic2"), "trust covers the folder and its subfolders, not look-alike siblings");
+  const devinAssignee = { id: "devin", name: "Devin", type: "agent", agentConfig: { type: "cli", command: 'devin {model_args} -p "{task}"', workingDir: "C:\\Aptic" } };
+  const trustedCmd = await AgentRunner.prepareLaunch(mkTicket(), devinAssignee, "C:\\Aptic\\Tickets", void 0, { trustedRoots: ["C:\\Aptic"], trustFlag: "--respect-workspace-trust false", model: "swe-2-high", modelFlag: "--model" });
+  check(trustedCmd.command.endsWith("--respect-workspace-trust false") && trustedCmd.command.includes("--model swe-2-high"), "Devin sessions in a trusted workspace get --respect-workspace-trust false");
+  const untrustedCmd = await AgentRunner.prepareLaunch(mkTicket(), devinAssignee, "C:\\Aptic\\Tickets", void 0, { trustedRoots: ["D:\\Other"], trustFlag: "--respect-workspace-trust false" });
+  check(!untrustedCmd.command.includes("respect-workspace-trust"), "no flag in a workspace that was not marked trusted");
+  const evilFlag = await AgentRunner.prepareLaunch(mkTicket(), devinAssignee, "C:\\Aptic\\Tickets", void 0, { trustedRoots: ["C:\\Aptic"], trustFlag: "--x; rm -rf ~" });
+  check(!evilFlag.command.includes("rm -rf"), "a malformed trust flag is never put on the command line");
   console.log("\n--- usage limits: block, fallback, wait ---");
   const fclock = () => t0;
   const claude = { ...createProvider("claude-code", []), id: "cc", name: "Claude", maxParallel: 2, maxSessionsPerWindow: 0, minSpacingSeconds: 0, models: ["opus", "sonnet", "haiku"], defaultModel: "opus" };
@@ -2934,7 +3065,7 @@ async function main() {
   const olla = { ...createProvider("ollama", []), id: "ol", name: "Ollama", models: ["llama3.2:3b"], defaultModel: "llama3.2:3b" };
   const pm = { cc: claude, gm: gem, ol: olla };
   const sm5 = new SessionManager((id) => pm[id], new FakeLauncher(), void 0, fclock);
-  const lim = await sm5.request({ provider: claude, model: "opus", role: "worker", ticketPath: path7.join(tmp, "l1.md"), ticketId: "L1", ticketTitle: "L1", boardId: "b", payload: {} });
+  const lim = await sm5.request({ provider: claude, model: "opus", role: "worker", ticketPath: path8.join(tmp, "l1.md"), ticketId: "L1", ticketTitle: "L1", boardId: "b", payload: {} });
   const resetAt = t0 + 90 * 6e4;
   sm5.limitHit(lim.id, { model: "opus", resetAt });
   check(sm5.get(lim.id).status === "interrupted" && sm5.get(lim.id).interruptKind === "usage-limit" && sm5.get(lim.id).resumeAfter === resetAt, "limitHit interrupts the session and records the reset time");
@@ -2963,13 +3094,13 @@ async function main() {
   check(sm5.canStart(claude).ok && sm5.blockedModels("cc").length === 0, "blocks expire at the reset time");
   const unk = sm5.blockModel("gm", "gemini-2.5-flash");
   check(unk.unknown === true && unk.until === t0 + 30 * 6e4, "an unknown reset is assumed ~30 min and re-probed");
-  const planModel = planWork([{ ticket: mkTicket({ path: path7.join(tmp, "pm.md") }), boardId: "b", boardRoot: tmp }], [claude], (() => {
+  const planModel = planWork([{ ticket: mkTicket({ path: path8.join(tmp, "pm.md") }), boardId: "b", boardRoot: tmp }], [claude], (() => {
     const m = new SessionManager((id) => pm[id], new FakeLauncher(), void 0, fclock);
     m.blockModel("cc", "opus", t0 + 6e4);
     return m;
   })(), { now: t0 });
   check(planModel.length === 1 && planModel[0].model !== "opus", "the planner avoids a model that is at its limit");
-  fs5.rmSync(tmp, { recursive: true, force: true });
+  fs6.rmSync(tmp, { recursive: true, force: true });
   if (failures) {
     console.error(`
 ${failures} fleet check(s) FAILED`);

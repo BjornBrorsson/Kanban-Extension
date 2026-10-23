@@ -81,6 +81,40 @@ export function detectLimit(text: string, models: string[] = [], now: number = D
   };
 }
 
+export type FatalKind = 'workspace-trust' | 'auth' | 'missing-cli';
+
+export interface FatalInfo { kind: FatalKind; message: string; excerpt: string }
+
+/**
+ * Setup problems no retry can fix (they need you): an untrusted workspace, a signed-out CLI, a missing executable.
+ * Detected early so the session stops cleanly instead of failing and retrying in a loop.
+ */
+export function detectFatal(text: string): FatalInfo | null {
+  const clean = stripAnsi(text);
+  const rules: { re: RegExp; kind: FatalKind; message: string }[] = [
+    {
+      re: /(?:refusing to run in an )?untrusted workspace|workspace (?:is )?not trusted|trust this (?:folder|workspace|directory)/i,
+      kind: 'workspace-trust',
+      message: 'The agent refuses to run in a folder it does not trust. Open the agent interactively in that folder once to trust it (or turn off workspace trust in the agent\'s config).'
+    },
+    {
+      re: /not (?:logged|signed) in|please (?:log ?in|sign ?in)|authentication (?:required|failed)|invalid (?:api key|token)|\b401 unauthorized/i,
+      kind: 'auth',
+      message: 'The agent is not signed in (or its token expired). Sign in from its terminal, then resume.'
+    },
+    {
+      re: /is not recognized as an internal or external command|command not found|no such file or directory.*(?:devin|claude|gemini|agy|copilot|codex|aider)|cannot find the path specified/i,
+      kind: 'missing-cli',
+      message: 'The agent command was not found. Check the executable path in Agent Providers (use Detect).'
+    }
+  ];
+  for (const r of rules) {
+    const m = r.re.exec(clean);
+    if (m) return { kind: r.kind, message: r.message, excerpt: clean.slice(Math.max(0, m.index - 10), m.index + 140).replace(/\s+/g, ' ').trim() };
+  }
+  return null;
+}
+
 const ATTENTION_RE = [
   /\(y\/n\)|\[y\/n\]|\[yes\/no\]/i,
   /do you want to (?:proceed|continue|allow|make this edit|run)/i,

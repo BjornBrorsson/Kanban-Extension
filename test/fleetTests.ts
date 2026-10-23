@@ -10,7 +10,8 @@ import { TicketParser } from '../src/ticketParser';
 import { Assignee, Ticket } from '../src/types';
 import { ProviderRegistry, createProvider, providerToAssignee, sanitizeProvider, AgentProvider } from '../src/fleet/providers';
 import { SessionLauncher, SessionManager, Session, JsonFleetStore } from '../src/fleet/sessions';
-import { detectLimit, detectAttention, modelTier, requiredTier, pickFallback } from '../src/fleet/limits';
+import { addCopilotTrustedFolder, removeCopilotTrustedFolder, copilotTrusts, isTrusted } from '../src/fleet/trust';
+import { detectFatal, detectLimit, detectAttention, modelTier, requiredTier, pickFallback } from '../src/fleet/limits';
 import { modelFor, pickReviewer, planWork, priorityRank } from '../src/fleet/scheduler';
 
 let failures = 0;
@@ -265,6 +266,41 @@ async function main() {
   check(!!l5 && l5.model === 'gemini-2.5-pro' && l5.resetAt === NOW + 90_000, 'strips ANSI colour codes and reads "retry after 90s"');
   check(detectLimit('Compiled 429 files, no rate problems at all, all good', [], NOW) === null, 'ordinary output (even containing 429) is not a limit');
   check(!!detectAttention('Do you want to proceed? (y/n)') && !!detectAttention('Press Enter to continue') && detectAttention('Reading src/index.ts') === undefined, 'detects prompts that need a human');
+
+  console.log('\n--- fatal setup errors (need a human, never retry) ---');
+  const trustErr = 'Error: Refusing to run in an untrusted workspace: C:\\Aptic\nStart `devin.exe` interactively in this directory to trust it, or set `respect_workspace_trust: false` in your config to restore the previous behavior.';
+  const fa = detectFatal(trustErr);
+  check(!!fa && fa.kind === 'workspace-trust' && /trust/i.test(fa.message), 'recognises Devin\'s "untrusted workspace" refusal');
+  check(detectFatal('Please log in first: run devin auth login')?.kind === 'auth' && detectFatal('Error 401 Unauthorized')?.kind === 'auth', 'recognises a signed-out CLI');
+  check(detectFatal("'agy' is not recognized as an internal or external command")?.kind === 'missing-cli', 'recognises a missing executable');
+  check(detectFatal('Reading src/index.ts\nRunning tests... 12 passed') === null && detectFatal('I trusted the tests and signed the release notes') === null, 'ordinary output is not flagged');
+
+  console.log('\n--- workspace trust ---');
+  const trustHome = fs.mkdtempSync(path.join(os.tmpdir(), 'home-'));
+  fs.mkdirSync(path.join(trustHome, '.copilot'));
+  const cfgFile = path.join(trustHome, '.copilot', 'config.json');
+  fs.writeFileSync(cfgFile, '// User settings belong in settings.json.\n// This file is managed automatically.\n{\n  "firstLaunchAt": "2026-08-21T12:55:20.970Z",\n  "trustedFolders": ["C:\\\\Aptic"],\n  "recentModelIds": ["kimi-k3"]\n}\n');
+  const r1 = addCopilotTrustedFolder('C:\\Work\\Proj', trustHome);
+  const txt = fs.readFileSync(cfgFile, 'utf8');
+  check(r1.changed && txt.startsWith('// User settings belong in settings.json.\n// This file is managed automatically.\n'), 'Copilot config: the folder is added and the comment header is kept');
+  const parsed = JSON.parse(txt.split('\n').filter(l => !l.startsWith('//')).join('\n'));
+  check(parsed.trustedFolders.length === 2 && parsed.recentModelIds[0] === 'kimi-k3' && parsed.firstLaunchAt === '2026-08-21T12:55:20.970Z', 'other settings are untouched');
+  check(addCopilotTrustedFolder('c:\\work\\proj', trustHome).changed === false && copilotTrusts('C:\\WORK\\PROJ', trustHome), 'adding again (any letter case) changes nothing');
+  check(removeCopilotTrustedFolder('C:\\Work\\Proj', trustHome).changed && !copilotTrusts('C:\\Work\\Proj', trustHome) && copilotTrusts('C:\\Aptic', trustHome), 'removing only removes that folder');
+  fs.writeFileSync(cfgFile, '{ not json');
+  let threw = false;
+  try { addCopilotTrustedFolder('C:\\x', trustHome); } catch { threw = true; }
+  check(threw && fs.readFileSync(cfgFile, 'utf8') === '{ not json', 'an unreadable config is never overwritten');
+  fs.rmSync(trustHome, { recursive: true, force: true });
+
+  check(isTrusted(['C:\\Aptic'], 'C:\\Aptic\\sub\\dir') && isTrusted(['c:\\aptic'], 'C:\\APTIC') && !isTrusted(['C:\\Aptic'], 'C:\\Aptic2'), 'trust covers the folder and its subfolders, not look-alike siblings');
+  const devinAssignee: Assignee = { id: 'devin', name: 'Devin', type: 'agent', agentConfig: { type: 'cli', command: 'devin {model_args} -p "{task}"', workingDir: 'C:\\Aptic' } };
+  const trustedCmd = (await AgentRunner.prepareLaunch(mkTicket(), devinAssignee, 'C:\\Aptic\\Tickets', undefined, { trustedRoots: ['C:\\Aptic'], trustFlag: '--respect-workspace-trust false', model: 'swe-2-high', modelFlag: '--model' }))!;
+  check(trustedCmd.command.endsWith('--respect-workspace-trust false') && trustedCmd.command.includes('--model swe-2-high'), 'Devin sessions in a trusted workspace get --respect-workspace-trust false');
+  const untrustedCmd = (await AgentRunner.prepareLaunch(mkTicket(), devinAssignee, 'C:\\Aptic\\Tickets', undefined, { trustedRoots: ['D:\\Other'], trustFlag: '--respect-workspace-trust false' }))!;
+  check(!untrustedCmd.command.includes('respect-workspace-trust'), 'no flag in a workspace that was not marked trusted');
+  const evilFlag = (await AgentRunner.prepareLaunch(mkTicket(), devinAssignee, 'C:\\Aptic\\Tickets', undefined, { trustedRoots: ['C:\\Aptic'], trustFlag: '--x; rm -rf ~' }))!;
+  check(!evilFlag.command.includes('rm -rf'), 'a malformed trust flag is never put on the command line');
 
   console.log('\n--- usage limits: block, fallback, wait ---');
   const fclock = () => t0;
