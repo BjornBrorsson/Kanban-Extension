@@ -70,6 +70,8 @@ export interface CatalogModel {
   speedVariants: string[];
   /** Every raw model id grouped into this entry (all efforts, fast variants, fusion combos...). */
   members: string[];
+  /** Prices of members that differ from the representative's (e.g. each fusion combination). */
+  memberPricing?: Record<string, Pricing>;
   hidden: boolean;
   hiddenReason?: string;
 }
@@ -235,6 +237,51 @@ export function parseCopilotPolicy(text: string): RawModel[] {
   return out;
 }
 
+/**
+ * Parses a hand-made list, one model per line, fields separated by ";" (or tab / "|"):
+ *   Anthropic; Claude Sonnet 5.5; Enabled; $2.00 in / $10.00 out
+ * Vendor, name, Enabled/Disabled and an optional price ("N/A" = unknown, "free" = free) are recognised in any order after the name.
+ */
+export function parseDelimitedModels(text: string): RawModel[] {
+  const out: RawModel[] = [];
+  for (const line of text.replace(/^\uFEFF/, '').split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    const delim = line.includes(';') ? ';' : line.includes('\t') ? '\t' : line.includes('|') ? '|' : '';
+    if (!delim) continue;
+    const cells = line.split(delim).map(c => c.trim()).filter(c => c.length);
+    if (cells.length < 2) continue;
+    const stateIdx = cells.findIndex(c => /^(enabled|disabled|on|off)$/i.test(c));
+    const priceCells = cells.filter(c => /\$\s*[\d.]+|^free$/i.test(c) || /^n\/?a\b/i.test(c));
+    const rest = cells.filter((c, i) => i !== stateIdx && !priceCells.includes(c));
+    // "Vendor; Model name" -> the model name is the last remaining cell; a lone cell is the name itself
+    const name = rest[rest.length - 1];
+    if (!name) continue;
+    const enabled = stateIdx >= 0 ? /^(enabled|on)$/i.test(cells[stateIdx]) : undefined;
+    let pricing: Pricing | undefined;
+    const priceText = priceCells.join(' ');
+    if (/^free$/i.test(priceText.trim())) {
+      pricing = { free: true, inPerM: 0, outPerM: 0, source: 'listed' };
+    } else {
+      const inp = priceText.match(/\$\s*([\d.]+)\s*(?:\/\s*1M\s*)?in\b/i);
+      const outp = priceText.match(/\$\s*([\d.]+)\s*(?:\/\s*1M\s*)?out\b/i);
+      const cached = priceText.match(/\$\s*([\d.]+)\s*(?:\/\s*1M\s*)?cach\w*/i);
+      if (inp || outp) pricing = { inPerM: inp ? Number(inp[1]) : undefined, outPerM: outp ? Number(outp[1]) : undefined, cachedPerM: cached ? Number(cached[1]) : undefined, source: 'listed' };
+    }
+    const id = slugFromDisplayName(name);
+    if (id) out.push({ id, label: name, enabled, pricing, idGuessed: true });
+  }
+  return out;
+}
+
+/** Any supported hand-made / pasted list: Copilot policy page, delimited lines, or one id per line. */
+export function parseImportedList(text: string): RawModel[] {
+  const policy = parseCopilotPolicy(text);
+  if (policy.length) return policy;
+  const delimited = parseDelimitedModels(text);
+  if (delimited.length) return delimited;
+  return parseGenericModels(text);
+}
+
 /** Copilot CLI has no list command: collect the model ids it has actually used on this machine. */
 export function listCopilotLearned(home: string = os.homedir()): RawModel[] {
   const ids = new Set<string>();
@@ -276,8 +323,7 @@ export async function listProviderModels(p: AgentProvider, env: NodeJS.ProcessEn
   if (importsDir) {
     try {
       const text = fs.readFileSync(path.join(importsDir, `${p.id}.txt`), 'utf8');
-      const policy = parseCopilotPolicy(text);
-      const models = policy.length ? policy : parseGenericModels(text);
+      const models = parseImportedList(text);
       if (models.length) return { ...base, source: 'import', command: `imports/${p.id}.txt`, ok: true, models };
     } catch { /* no import file */ }
   }
@@ -477,6 +523,14 @@ export function curate(raws: RawFile[], opts: CurateOptions = {}): Catalog {
         effortVariants,
         speedVariants: g.items.filter(i => i.speed).map(i => i.raw.id),
         members: g.items.map(i => i.raw.id),
+        memberPricing: (() => {
+          const mp: Record<string, Pricing> = {};
+          for (const i of g.items) {
+            const p = i.raw.pricing;
+            if (p && !p.free && (p.inPerM !== repItem.raw.pricing?.inPerM || p.outPerM !== repItem.raw.pricing?.outPerM)) mp[i.raw.id] = p;
+          }
+          return Object.keys(mp).length ? mp : undefined;
+        })(),
         hidden: false
       });
       if (repItem.raw.enabled === false) {
@@ -638,8 +692,31 @@ export class CatalogIndex {
     }
   }
   public get(providerId: string, modelId: string): CatalogModel | undefined { return this.byKey.get(`${providerId}::${modelId}`); }
+  /** Price of this exact id: its own listed price when it differs from the family's (fusion combos), else the entry's. */
+  public pricingFor(providerId: string, modelId: string): Pricing | undefined {
+    const e = this.get(providerId, modelId);
+    return e?.memberPricing?.[modelId] || e?.pricing;
+  }
   public visible(providerId: string): CatalogModel[] { return (this.catalog?.models || []).filter(m => m.providerId === providerId && !m.hidden); }
   public hasData(): boolean { return !!this.catalog?.models.length; }
+}
+
+export interface FusionCombo { id: string; main: string; side: string; inPerM?: number; outPerM?: number; contextTokens?: number }
+
+/** Devin fusion models pair a main model with a side-kick (id: fusion-<main>-sidekick-<side>, label: "Fusion (A + B)"). */
+export function fusionCombos(raw: RawFile): FusionCombo[] {
+  return raw.models.filter(m => m.family === 'fusion' || /^fusion-/.test(m.id)).map(m => {
+    const label = m.label || m.id;
+    const lm = label.match(/^Fusion\s*\((.+?)\s\+\s(.+)\)\s*$/i);
+    let main = lm?.[1];
+    let side = lm?.[2];
+    if (!main || !side) {
+      const im = m.id.match(/^fusion-(.+?)-sidekick-(.+)$/);
+      main = im?.[1] || label;
+      side = im?.[2] || '';
+    }
+    return { id: m.id, main, side, inPerM: m.pricing?.inPerM, outPerM: m.pricing?.outPerM, contextTokens: m.contextTokens };
+  });
 }
 
 // ---------------------------------------------------------------- readable exports

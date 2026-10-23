@@ -706,6 +706,8 @@ var AgentRunner = class {
     const agyPath = this.resolveAntigravityPath(config.path || config.executable, effectiveBoardConfig);
     const model = options.model && MODEL_ID_PATTERN.test(options.model) ? options.model : "";
     const modelArgs = model && options.modelFlag ? `${options.modelFlag} ${model}` : "";
+    const effort = options.effort && /^[a-z]+$/.test(options.effort) ? options.effort : "";
+    const effortArgs = effort && options.effortFlag ? `${options.effortFlag} ${effort}` : "";
     const rawTask = (options.task || DEFAULT_TASK).replace(/\{ticket_path\}/g, () => ticket.path).replace(/\{ticket_title\}/g, () => ticket.title).replace(/\{ticket_id\}/g, () => ticket.id);
     const replacements = {
       "{task}": esc(rawTask),
@@ -722,6 +724,7 @@ var AgentRunner = class {
       "{model}": model,
       "{session_id}": options.sessionId && SESSION_ID_PATTERN.test(options.sessionId) ? options.sessionId : "",
       "{model_args}": modelArgs,
+      "{effort_args}": effortArgs,
       "{agy_path}": agyPath,
       "{antigravity_path}": agyPath,
       "{executable}": config.path || config.executable || agyPath,
@@ -743,6 +746,9 @@ var AgentRunner = class {
     }
     if (modelArgs && !command.includes("{model_args}") && !command.includes("{model}")) {
       command = `${command.trimEnd()} ${modelArgs}`;
+    }
+    if (effortArgs && !command.includes("{effort_args}")) {
+      command = `${command.trimEnd()} ${effortArgs}`;
     }
     command = command.replace(/\{[a-z_]+\}/g, (m) => m in replacements ? replacements[m] : m);
     command = command.replace(/ {2,}/g, " ").trim();
@@ -1243,6 +1249,7 @@ var PROVIDER_PRESETS = [
     type: "cli",
     command: `& "{agy_path}" {model_args} -p "{task}" --dangerously-skip-permissions`,
     modelFlag: "--model",
+    effortFlag: "--effort",
     models: [],
     defaultModel: "",
     maxParallel: 2,
@@ -1296,6 +1303,7 @@ var PROVIDER_PRESETS = [
     type: "cli",
     command: `copilot {model_args} -p "{task}"`,
     modelFlag: "--model",
+    effortFlag: "--reasoning-effort",
     models: [],
     defaultModel: "",
     maxParallel: 1,
@@ -1415,6 +1423,8 @@ function sanitizeProvider(raw, existingIds = []) {
     enabled: raw?.enabled !== false,
     type: raw?.type === "vscode-command" ? "vscode-command" : raw?.type === "cli" ? "cli" : preset.type,
     command: String(raw?.command ?? preset.command),
+    defaultReasoning: ["none", "minimal", "low", "medium", "high", "xhigh", "max"].includes(String(raw?.defaultReasoning)) ? String(raw.defaultReasoning) : "",
+    effortFlag: raw?.effortFlag !== void 0 ? String(raw.effortFlag).trim() || void 0 : getPreset(kind).effortFlag,
     pinnedModels: Array.isArray(raw?.pinnedModels) ? raw.pinnedModels.map((m) => String(m).trim()).filter(Boolean) : [],
     listCommand: raw?.listCommand ? String(raw.listCommand).slice(0, 300) : void 0,
     agentic: raw?.agentic !== void 0 ? !!raw.agentic : kind !== "ollama" && kind !== "ide-chat",
@@ -1968,6 +1978,7 @@ var SessionManager = class {
       attempt: req.attempt ?? 1,
       resumedFrom: req.resumedFrom,
       hidden: req.hidden,
+      reasoning: req.reasoning,
       points: req.points,
       estCost: req.estCost,
       estMinutes: req.estMinutes
@@ -2194,6 +2205,61 @@ function priorMinutes(points, tps) {
   return generation + 2 + points;
 }
 
+// src/fleet/reasoning.ts
+var REASONING_LEVELS = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
+var REASONING_FACTOR = { none: 0.55, minimal: 0.65, low: 0.75, medium: 1, high: 1.4, xhigh: 1.9, max: 2.5 };
+function isLevel(v) {
+  return !!v && REASONING_LEVELS.includes(v);
+}
+var order = (l) => REASONING_LEVELS.indexOf(l);
+function supportedLevels(provider, entry) {
+  const variants = Object.keys(entry?.effortVariants || {}).filter(isLevel);
+  if (variants.length >= 2)
+    return variants.sort((a, b) => order(a) - order(b));
+  if (provider.effortFlag)
+    return ["low", "medium", "high", "xhigh", "max"];
+  return [];
+}
+function pickReasoning(ticket, provider, entry, objective = "balanced") {
+  const levels = supportedLevels(provider, entry);
+  if (!levels.length)
+    return "";
+  const label = (ticket.labels || []).map((l) => l.replace(/[`\s]/g, "")).find((l) => /^reasoning:/i.test(l));
+  if (label) {
+    const wanted = label.split(":")[1].toLowerCase();
+    if (levels.includes(wanted))
+      return wanted;
+  }
+  const baseline = isLevel(provider.defaultReasoning) && levels.includes(provider.defaultReasoning) ? provider.defaultReasoning : levels.includes("medium") ? "medium" : levels[Math.floor(levels.length / 2)];
+  let shift = 0;
+  const need = requiredTier(ticket);
+  if (need >= 5)
+    shift += 2;
+  else if (need === 4)
+    shift += 1;
+  if (priorityRank(ticket.priority) === 3 || /^(xs|s\b|small)/i.test(ticket.estimate || ""))
+    shift -= 1;
+  if (priorityRank(ticket.priority) === 0)
+    shift += 1;
+  if (/^(l|xl|large)\b/i.test(ticket.estimate || ""))
+    shift += 1;
+  if (objective === "cost" || objective === "speed")
+    shift -= 1;
+  shift = Math.max(-2, Math.min(2, shift));
+  const idx = Math.max(0, Math.min(levels.length - 1, levels.indexOf(baseline) + shift));
+  return levels[idx];
+}
+function resolveReasoning(provider, entry, model, level) {
+  if (!level || !isLevel(level))
+    return { model, level: "" };
+  const variants = entry?.effortVariants || {};
+  if (variants[level])
+    return { model: variants[level], level };
+  if (provider.effortFlag)
+    return { model, effort: level, level };
+  return { model, level: "" };
+}
+
 // src/fleet/optimizer.ts
 var OBJECTIVES = {
   balanced: { timeValuePerMin: 0.2, quotaValue: 50 },
@@ -2226,20 +2292,21 @@ function quotaPressure(p, sessions, now) {
   }
   return { lambdaCount, lambdaBudget, share };
 }
-function estimateRun(ticket, p, model, ctx) {
+function estimateRun(ticket, p, model, ctx, level = "") {
   const points = ticketPoints(ticket);
   const entry = ctx.catalog.get(p.id, model);
   const local = entry ? entry.local : p.kind === "ollama" || p.kind === "ollama-aider";
   const hasOverride = parseTierOverrides(p.modelTiers)[model.toLowerCase()] !== void 0;
   const tier = entry && !hasOverride ? entry.tier : modelTier(p, model);
-  const pricing = entry?.pricing || estimatePricing(tier, local);
+  const pricing = ctx.catalog.pricingFor(p.id, model) || entry?.pricing || estimatePricing(tier, local);
+  const factor = REASONING_FACTOR[level] ?? 1;
   const tps = priorTps(tier, local, entry?.sizeB, ctx.bench?.[`${p.id}::${model}`]?.tps);
   return {
     points,
     tier,
     local,
-    estCost: estimateCost(pricing, points),
-    estMinutes: ctx.speed.predict(p.id, model, points, priorMinutes(points, tps))
+    estCost: estimateCost(pricing, points) * factor,
+    estMinutes: ctx.speed.predict(p.id, model, points, priorMinutes(points, tps)) * factor
   };
 }
 function candidateModels(p, catalog) {
@@ -2258,7 +2325,12 @@ function rankOptions(ticket, providers, sessions, ctx, restrictTo) {
     for (const model of candidateModels(p, ctx.catalog)) {
       if (sessions.modelBlock(p.id, model, now))
         continue;
-      const run = estimateRun(ticket, p, model, ctx);
+      const entry = ctx.catalog.get(p.id, model);
+      const wanted = pickReasoning(ticket, p, entry, ctx.objective || "balanced");
+      const resolved = resolveReasoning(p, entry, model, wanted);
+      if (resolved.model !== model && sessions.modelBlock(p.id, resolved.model, now))
+        continue;
+      const run = estimateRun(ticket, p, resolved.model, ctx, resolved.level);
       const { tier, estCost, estMinutes } = run;
       if (tier < needed)
         continue;
@@ -2280,16 +2352,18 @@ function rankOptions(ticket, providers, sessions, ctx, restrictTo) {
       const startsNow = waitMinutes === 0;
       options.push({
         provider: p,
-        model,
+        model: resolved.model,
         tier,
         points,
         estMinutes,
         estCost,
+        reasoning: resolved.level,
+        effort: resolved.effort,
         waitMinutes,
         lambda,
         score,
         startsNow,
-        summary: `${p.name}${model ? " \xB7 " + model : ""}: ~${Math.round(estMinutes)} min${estCost > 0 ? `, ~$${estCost.toFixed(2)}` : ", free"}${waitMinutes > 0 ? `, starts in ~${Math.round(waitMinutes)} min` : ""}${lambda > 0.5 ? `, quota ${lambda >= 2 ? "scarce" : "tight"}` : ""}`
+        summary: `${p.name}${resolved.model ? " \xB7 " + resolved.model : ""}${resolved.level && !resolved.model.endsWith(resolved.level) ? " (" + resolved.level + ")" : ""}: ~${Math.round(estMinutes)} min${estCost > 0 ? `, ~$${estCost.toFixed(2)}` : ", free"}${waitMinutes > 0 ? `, starts in ~${Math.round(waitMinutes)} min` : ""}${lambda > 0.5 ? `, quota ${lambda >= 2 ? "scarce" : "tight"}` : ""}`
       });
     }
   }
@@ -2375,6 +2449,7 @@ function planWork(candidates, providers, sessions, opts = {}) {
         estMinutes: best.estMinutes,
         estCost: best.estCost,
         points: best.points,
+        reasoning: best.reasoning,
         alternatives: ranked.slice(1, 4).map((o) => o.summary)
       });
       continue;

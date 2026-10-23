@@ -1376,6 +1376,16 @@ body.is-dragging-card .kanban-column {
 }
 
 
+.assign-reasoning {
+  max-width: 78px;
+  font-size: 11px;
+  margin-left: 4px;
+  background: var(--vscode-input-background, #1e1e1e);
+  color: var(--vscode-input-foreground, #ddd);
+  border: 1px solid var(--vscode-widget-border, #555);
+  border-radius: 4px;
+  padding: 2px 4px;
+}
 .assign-model {
   margin-left: auto;
   max-width: 130px;

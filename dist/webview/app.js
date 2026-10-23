@@ -800,6 +800,9 @@
         const modelSel = p.models && p.models.length
           ? `<select class="assign-model" title="Model">${p.models.map(m => `<option value="${esc(m)}" ${m === p.defaultModel ? 'selected' : ''}>${esc(m)}</option>`).join('')}</select>`
           : '';
+        const reasonSel = p.reasoningLevels && p.reasoningLevels.length
+          ? `<select class="assign-reasoning" title="Reasoning level"><option value="auto">auto</option><option value="default">default</option>${p.reasoningLevels.map(l => `<option value="${esc(l)}">${esc(l)}</option>`).join('')}</select>`
+          : '';
         const stateLabel = p.state && p.state !== 'ready' ? ` · ${esc(p.state)}` : '';
         html += `
           <div class="assign-item ${isCurrent ? 'selected' : ''}" data-assign-type="agent" data-provider="1" data-id="${esc(p.id)}" data-name="${esc(p.name)}">
@@ -808,7 +811,7 @@
               <div class="assign-item-name">${esc(p.name)}</div>
               <div class="assign-item-detail">${esc(p.account ? p.account + ' · ' : '')}${p.running}/${p.maxParallel} running${stateLabel}</div>
             </div>
-            ${modelSel}
+            ${modelSel}${reasonSel}
           </div>
         `;
       });
@@ -911,10 +914,12 @@
       item.addEventListener('click', e => {
         e.stopPropagation();
         // Changing the model must not trigger the assignment itself.
-        if (e.target.closest('.assign-model')) return;
+        if (e.target.closest('.assign-model') || e.target.closest('.assign-reasoning')) return;
         const type = item.dataset.assignType;
         const id = item.dataset.id;
         const name = item.dataset.name;
+        const reasonSelect = item.querySelector('.assign-reasoning');
+        const reasoning = reasonSelect ? reasonSelect.value : 'auto';
         const modelSelect = item.querySelector('.assign-model');
         const model = modelSelect ? modelSelect.value : '';
 
@@ -951,6 +956,7 @@
               assigneeName: name || '',
               providerId: item.dataset.provider ? id : '',
               model,
+              reasoning,
               runCli: true
             });
           } else {

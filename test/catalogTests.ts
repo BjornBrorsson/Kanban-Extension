@@ -2,12 +2,15 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { Ticket } from '../src/types';
-import { CatalogIndex, CatalogStore, RawFile, curate, listProviderModels, parseCopilotPolicy, parseAgyModels, parseDevinModels, parseGenericModels, parseModelId, providerPatches } from '../src/fleet/catalog';
+import { CatalogIndex, CatalogStore, RawFile, curate, listProviderModels, parseCopilotPolicy, parseImportedList, fusionCombos, parseAgyModels, parseDevinModels, parseGenericModels, parseModelId, providerPatches } from '../src/fleet/catalog';
 import { createProvider, AgentProvider } from '../src/fleet/providers';
 import { SessionLauncher, SessionManager, Session, FleetData } from '../src/fleet/sessions';
 import { SpeedBook } from '../src/fleet/speed';
 import { estimateCost, periodEnd, periodStart, ticketPoints } from '../src/fleet/cost';
-import { rankOptions, quotaPressure } from '../src/fleet/optimizer';
+import { rankOptions, quotaPressure, estimateRun } from '../src/fleet/optimizer';
+import { supportedLevels, pickReasoning, resolveReasoning } from '../src/fleet/reasoning';
+import { AgentRunner } from '../src/agentRunner';
+const order5 = (l: string) => ['low', 'medium', 'high', 'xhigh', 'max'].indexOf(l);
 import { planWork } from '../src/fleet/scheduler';
 
 let failures = 0;
@@ -221,6 +224,75 @@ async function main() {
   const viaFile = await listProviderModels({ ...createProvider('copilot-cli', []), id: 'cp' } as AgentProvider, process.env, impStore.importsDir);
   check(viaFile.source === 'import' && viaFile.models.length === 26 && viaFile.ok, 'listing a provider prefers its imported model list');
   fs.rmSync(impTmp, { recursive: true, force: true });
+
+  console.log('\n--- semicolon-separated list with prices ---');
+  const dl = parseImportedList(read('copilot-priced.txt'));
+  check(dl.length === 26, `parses all 26 lines (${dl.length})`);
+  check(dl.filter(m => m.enabled).length === 11, 'reads Enabled / Disabled');
+  const s55 = dl.find(m => m.id === 'claude-sonnet-5.5')!;
+  check(s55.enabled === true && s55.pricing?.inPerM === 2 && s55.pricing?.outPerM === 10 && s55.pricing?.source === 'listed', 'reads "$2.00 in / $10.00 out" as listed prices');
+  check(dl.find(m => m.id === 'gpt-5-mini')!.pricing === undefined && dl.find(m => m.id === 'grok-code-fast-1')!.pricing === undefined, '"N/A" leaves the price unknown');
+  check(dl.find(m => m.id === 'kimi-k3')!.label === 'Kimi K3' && dl.find(m => m.id === 'mai-code-1.1-flash')!.enabled === true, 'vendor is dropped; multi-word vendors work (Moonshot AI)');
+  check(dl.find(m => m.id === 'claude-opus-4.8-fast')!.enabled === false, '"(fast mode) Preview" becomes -fast');
+  const dRaw: RawFile = { providerId: 'cp', providerName: 'Copilot', kind: 'copilot-cli', fetchedAt: 1, source: 'import', command: 'imports/cp.txt', ok: true, models: dl };
+  const dCat = curate([dRaw], { keepVersionsPerFamily: 2 });
+  const dUse = dCat.models.filter(m => !m.hidden);
+  check(dUse.every(m => dl.find(r => r.id === m.id)?.enabled === true) && dUse.length >= 8, `only the enabled models are shown (${dUse.length})`);
+  check(dUse.find(m => m.id === 'claude-sonnet-5.5')!.pricing?.outPerM === 10 && dUse.find(m => m.id === 'claude-sonnet-5.5')!.pricing?.source === 'listed', 'your prices are used instead of estimates');
+  check(parseImportedList('claude-sonnet-5.5\ngpt-5.6-luna\n').length === 2, 'a plain list of ids still works');
+  check(parseImportedList(read('copilot.txt')).length === 26, 'the Copilot settings-page format still works');
+
+  console.log('\n--- reasoning level ---');
+  const opusEntry = dev.find(m => m.family === 'claude-opus' && m.version === 5.5)!;
+  const dvp: AgentProvider = { ...createProvider('devin', []), id: 'devin', name: 'Devin', agentic: true, defaultReasoning: 'medium', maxParallel: 5, minSpacingSeconds: 0, maxSessionsPerWindow: 0 } as AgentProvider;
+  check(supportedLevels(dvp, opusEntry).join() === 'low,medium,high,xhigh,max', 'levels come from the model\'s effort variants, in order');
+  check(supportedLevels(dvp, undefined).length === 0, 'a model without effort variants or a flag has no reasoning control');
+  check(supportedLevels({ ...dvp, effortFlag: '--effort' } as AgentProvider, undefined).join() === 'low,medium,high,xhigh,max', 'a provider effort flag enables the standard levels');
+  const easyT = mkTicket({ priority: 'Low', estimate: 'S' });
+  const normT = mkTicket({ priority: 'Normal', estimate: 'M' });
+  const hardT = mkTicket({ priority: 'P0', type: 'Architecture', estimate: 'L' });
+  check(pickReasoning(easyT, dvp, opusEntry) === 'low', 'easy ticket: one step below the default (low)');
+  check(pickReasoning(normT, dvp, opusEntry) === 'medium', 'normal ticket: the default level');
+  check(['high', 'xhigh', 'max'].includes(pickReasoning(hardT, dvp, opusEntry)) && order5(pickReasoning(hardT, dvp, opusEntry)) >= order5('high'), 'critical architecture ticket: raised at least to high');
+  check(pickReasoning(normT, { ...dvp, defaultReasoning: 'high' } as AgentProvider, opusEntry) === 'high', 'the provider default level is the starting point');
+  check(pickReasoning(normT, dvp, opusEntry, 'cost') === 'low' && pickReasoning(normT, dvp, opusEntry, 'speed') === 'low', 'cost and speed objectives lower it');
+  check(pickReasoning(mkTicket({ labels: ['reasoning:max'] }), dvp, opusEntry) === 'max' && pickReasoning(mkTicket({ labels: ['reasoning:bogus'] }), dvp, opusEntry) === 'medium', 'a reasoning:<level> label pins the level (unsupported ones are ignored)');
+  const r1 = resolveReasoning(dvp, opusEntry, 'claude-opus-5-5-medium', 'high');
+  check(r1.model === 'claude-opus-5-5-high' && r1.level === 'high' && r1.effort === undefined, 'effort variants are selected by model id (claude-opus-5-5-high)');
+  const r2 = resolveReasoning({ ...dvp, effortFlag: '--reasoning-effort' } as AgentProvider, undefined, 'gpt-x', 'high');
+  check(r2.model === 'gpt-x' && r2.effort === 'high', 'without variants the level goes to the CLI flag');
+  check(resolveReasoning(dvp, undefined, 'plain', 'high').level === '', 'unsupported models ignore the level');
+
+  const effCmd = AgentRunner.formatCliCommand(mkTicket(), { id: 'cp', name: 'Copilot', type: 'agent', agentConfig: { type: 'cli', command: 'copilot {model_args} -p "{task}"' } }, os.tmpdir(), undefined, 'b', { shell: 'posix', model: 'claude-sonnet-5.5', modelFlag: '--model', effort: 'high', effortFlag: '--reasoning-effort' });
+  check(effCmd.includes('--model claude-sonnet-5.5') && effCmd.endsWith('--reasoning-effort high'), 'the effort flag is appended to the command');
+  check(!AgentRunner.formatCliCommand(mkTicket(), { id: 'cp', name: 'C', type: 'agent', agentConfig: { type: 'cli', command: 'copilot -p "x"' } }, os.tmpdir(), undefined, 'b', { shell: 'posix', effort: 'high; rm -rf ~', effortFlag: '--reasoning-effort' }).includes('rm -rf'), 'effort values are validated before reaching a shell');
+
+  // the optimizer picks the level per task and prices it
+  const dvIdx = new CatalogIndex(curate([rawDevin]));
+  const dvSm = new SessionManager(() => dvp, new NullLauncher(), storeWith({}), () => clockNow);
+  const hiOpts = rankOptions(hardT, [dvp], dvSm, { catalog: dvIdx, speed: new SpeedBook(), now: clockNow });
+  const loOpts = rankOptions(easyT, [dvp], dvSm, { catalog: dvIdx, speed: new SpeedBook(), now: clockNow });
+  const hiOpus = hiOpts.find(o => o.model.startsWith('claude-opus-5-5'))!;
+  const loOpus = loOpts.find(o => o.model.startsWith('claude-opus-5-5'));
+  check(!!hiOpus && ['high', 'xhigh', 'max'].includes(hiOpus.reasoning) && hiOpus.model.endsWith(hiOpus.reasoning), 'hard ticket on Opus runs the high-reasoning variant id');
+  check(!loOpus || loOpus.reasoning === 'low', 'easy ticket never gets more than low');
+  const mediumCost = estimateRun(normT, dvp, 'claude-opus-5-5-medium', { catalog: dvIdx, speed: new SpeedBook() }, 'medium');
+  const maxCost = estimateRun(normT, dvp, 'claude-opus-5-5-max', { catalog: dvIdx, speed: new SpeedBook() }, 'max');
+  check(maxCost.estCost > mediumCost.estCost * 2 && maxCost.estMinutes > mediumCost.estMinutes * 2, 'max reasoning costs ~2.5x the tokens and time of medium');
+
+  console.log('\n--- Devin Fusion picker data ---');
+  const combos = fusionCombos(rawDevin);
+  check(combos.length === 575, `finds every fusion combination (${combos.length})`);
+  const mains = [...new Set(combos.map(c => c.main))];
+  check(mains.length > 5 && mains.length < 200 && combos.every(c => c.main && c.side), `step 1 offers distinct main models (${mains.length}); every combo has a main and a side-kick`);
+  const sw = combos.filter(c => c.side === 'SWE-2 Medium');
+  check(sw.length === 80 || sw.length > 40, `step 2 can offer SWE-2 Medium as side-kick (${sw.length} mains)`);
+  const pick = combos.find(c => c.id === 'fusion-claude-opus-5-5-medium-sidekick-swe-2-medium')!;
+  check(!!pick && pick.main === 'Claude Opus 5.5 Medium' && pick.side === 'SWE-2 Medium' && pick.outPerM === 20, 'main + side-kick resolve to the exact Devin model id with its own price');
+  const fCat = new CatalogIndex(curate([rawDevin]));
+  check(fCat.get('devin', pick.id) !== undefined, 'a pinned fusion id is recognised by the catalog');
+  const otherFusion = combos.find(c => c.outPerM !== undefined && c.outPerM !== 20 && c.outPerM !== undefined)!;
+  check(fCat.pricingFor('devin', otherFusion.id)?.outPerM === otherFusion.outPerM, 'each fusion id is priced by its own listing, not the family average');
 
   fs.rmSync(tmp, { recursive: true, force: true });
   if (failures) { console.error(`\n${failures} catalog check(s) FAILED`); process.exit(1); }

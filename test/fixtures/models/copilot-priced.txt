@@ -1,0 +1,31 @@
+Anthropic; Claude Sonnet 4; Disabled; $3.00 in / $15.00 out
+Anthropic; Claude Haiku 4.5; Disabled; $1.00 in / $5.00 out
+Anthropic; Claude Fable 5; Disabled; $10.00 in / $50.00 out
+Anthropic; Claude Fable 5.1; Enabled; $10.00 in / $50.00 out
+Anthropic; Claude Haiku 5.5; Disabled; $0.10 in / $0.50 out
+Anthropic; Claude Opus 4.8; Enabled; $5.00 in / $25.00 out
+Anthropic; Claude Opus 4.8 (fast mode) Preview; Disabled; $10.00 in / $50.00 out
+Anthropic; Claude Opus 5; Disabled; $5.00 in / $25.00 out
+Anthropic; Claude Opus 5.5; Disabled; $4.00 in / $20.00 out
+Anthropic; Claude Sonnet 5; Enabled; $2.00 in / $10.00 out
+Anthropic; Claude Sonnet 5.5; Enabled; $2.00 in / $10.00 out
+
+Google; Gemini 3.8 Flash; Enabled; $0.75 in / $3.75 out
+Google; Gemini 4 Argon; Disabled; $2.00 in / $10.00 out
+
+OpenAI; GPT-5.6 Luna; Enabled; $0.20 in / $1.20 out
+OpenAI; GPT-5.6 Sol; Disabled; $4.00 in / $20.00 out
+OpenAI; GPT-5.6 Terra; Enabled; $2.00 in / $12.00 out
+OpenAI; GPT-6 Astra; Disabled; $10.00 in / $50.00 out
+OpenAI; GPT-6 Luna; Enabled; $0.10 in / $0.50 out
+OpenAI; GPT-6 Sol; Disabled; $2.00 in / $10.00 out
+OpenAI; GPT-6.1 Sol; Enabled; $2.00 in / $10.00 out
+OpenAI; GPT-5 mini; Disabled; N/A (not listed on current pricing page)
+
+xAI; Grok Code Fast 1; Disabled; N/A
+xAI; Grok 4.6; Disabled; $2.00 in / $6.00 out
+xAI; Grok 4.7; Disabled; $2.00 in / $6.00 out
+
+Microsoft; MAI-Code-1.1-Flash; Enabled; $0.20 in / $1.20 out
+
+Moonshot AI; Kimi K3; Enabled; $3.00 in / $15.00 out

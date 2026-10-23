@@ -10,9 +10,10 @@ import { JsonFleetStore, ProviderUsage, Session, SessionLauncher, SessionManager
 import { detectAll, detectOne } from './detect';
 import { claim, findMessageBoard, readClaims, release } from './messageBoard';
 import { LimitInfo, detectAttention, detectLimit, pickFallback } from './limits';
-import { CatalogIndex, CatalogStore, parseCopilotPolicy, providerPatches } from './catalog';
+import { CatalogIndex, CatalogStore, FusionCombo, fusionCombos, parseImportedList, providerPatches } from './catalog';
 import { JsonSpeedStore, SpeedBook } from './speed';
 import { Objective, OptimizerContext, estimateRun } from './optimizer';
+import { pickReasoning, resolveReasoning } from './reasoning';
 import { PlanCandidate, PlanDecision, matchProvider, pickReviewer, planWork } from './scheduler';
 
 export interface FleetSettings {
@@ -394,9 +395,16 @@ export class FleetController {
     prebuilt?: LaunchRequest,
     task?: string,
     queueIfBusy = true,
-    extra: { agentSessionId?: string; attempt?: number; resumedFrom?: string; assignee?: ReturnType<typeof providerToAssignee>; hidden?: boolean } = {}
+    extra: { agentSessionId?: string; attempt?: number; resumedFrom?: string; assignee?: ReturnType<typeof providerToAssignee>; hidden?: boolean; reasoning?: string } = {}
   ): Promise<Session | undefined> {
     const agentSessionId = extra.agentSessionId || randomUUID();
+    // Reasoning: 'auto' lets the orchestrator pick for this task, '' keeps the model's own default, or an explicit level.
+    const entry = this.catalog.get(provider.id, model);
+    const wanted = extra.reasoning === undefined || extra.reasoning === 'auto'
+      ? pickReasoning(ticket, provider, entry, this.settings.objective)
+      : extra.reasoning === 'default' ? '' : extra.reasoning;
+    const resolved = resolveReasoning(provider, entry, model, wanted);
+    model = resolved.model;
     const holder = this.claimedByOther(ticket, provider.name);
     if (holder && holder !== provider.name) {
       vscode.window.showWarningMessage(`"${ticket.title}" is claimed by ${holder} on the Message Board. Release the claim there (or pick another ticket) before starting ${provider.name}.`);
@@ -426,15 +434,18 @@ export class FleetController {
       payload = (await AgentRunner.prepareLaunch(ticket, extra.assignee || providerToAssignee(provider), boardRoot, board?.config, {
         model,
         modelFlag: provider.modelFlag,
+        effort: resolved.effort,
+        effortFlag: provider.effortFlag,
         task,
         sessionId: agentSessionId
       })) || undefined;
     }
     if (!payload) return undefined;
 
-    const run = estimateRun(ticket, provider, model, this.optimizerBase());
+    const run = estimateRun(ticket, provider, model, this.optimizerBase(), resolved.level);
     const session = await this.sessions.request({
       provider, model, role,
+      reasoning: resolved.level,
       points: run.points,
       estCost: run.estCost,
       estMinutes: Math.round(run.estMinutes),
@@ -461,7 +472,7 @@ export class FleetController {
   }
 
   /** Assign menu / card action: run a ticket on a specific provider + model. */
-  public async dispatchTicket(boardId: string, ticket: Ticket, providerId: string, model?: string): Promise<boolean> {
+  public async dispatchTicket(boardId: string, ticket: Ticket, providerId: string, model?: string, reasoning?: string): Promise<boolean> {
     const provider = this.registry.get(providerId);
     if (!provider) {
       vscode.window.showErrorMessage(`Agent provider "${providerId}" not found. Open Agent Providers to configure it.`);
@@ -472,7 +483,7 @@ export class FleetController {
       return false;
     }
     const chosen = model && (provider.models.length === 0 || provider.models.includes(model)) ? model : provider.defaultModel;
-    return !!(await this.startSession(provider, chosen, 'worker', ticket, boardId));
+    return !!(await this.startSession(provider, chosen, 'worker', ticket, boardId, undefined, undefined, true, { reasoning: reasoning || 'auto' }));
   }
 
   // ---------------------------------------------------------------- planning
@@ -541,13 +552,28 @@ export class FleetController {
   public async importModels(providerId: string, text: string): Promise<string> {
     const p = this.registry.get(providerId);
     if (!p) return 'Provider not found.';
-    const probe = parseCopilotPolicy(text);
-    const n = probe.length || text.split(/\r?\n/).filter(l => l.trim()).length;
-    if (!text.trim() || !n) return 'The clipboard has no model list to import.';
+    const probe = parseImportedList(text);
+    if (!text.trim()) return 'The clipboard is empty. Copy your model list first, then click Import models.';
+    if (!probe.length) return 'Could not find any models in the clipboard text. Expected lines like: Anthropic; Claude Sonnet 5.5; Enabled; $2.00 in / $10.00 out (or the Copilot settings page text, or one model id per line).';
     this.catalogStore.saveImport(p.id, text);
     const summary = await this.refreshCatalog(false);
-    const on = probe.filter(m => m.enabled).length;
-    return `Imported ${probe.length ? `${probe.length} models for ${p.name} (${on} enabled)` : `a model list for ${p.name}`}. ${summary}`;
+    const on = probe.filter(m => m.enabled !== false).length;
+    return `Imported ${probe.length} models for ${p.name} (${on} enabled, ${probe.length - on} disabled). ${summary}`;
+  }
+
+  /**
+   * Devin "fusion" models pair a main model with a side-kick (id: fusion-<main>-sidekick-<side>). Returns every valid
+   * combination Devin reported, per Devin provider, so the UI can offer them as a main -> side-kick picker.
+   */
+  public fusionOptions(): Record<string, FusionCombo[]> {
+    const out: Record<string, FusionCombo[]> = {};
+    const raws = this.catalogStore.loadRaws();
+    for (const p of this.registry.list().filter(x => x.kind === 'devin')) {
+      const raw = raws.find(r => r.providerId === p.id);
+      const list = raw ? fusionCombos(raw) : [];
+      if (list.length) out[p.id] = list;
+    }
+    return out;
   }
 
   /** Compact view of the catalog for the UI. */
@@ -595,7 +621,7 @@ export class FleetController {
         ticket = this.findTicket(path.join(found.board.rootPath, ongoing.name, path.basename(found.ticket.path)))?.ticket || ticket;
       }
     }
-    return !!(await this.startSession(provider, decision.model, 'worker', ticket, found.board.id, undefined, undefined, true, { hidden: this.settings.backgroundTerminals }));
+    return !!(await this.startSession(provider, decision.model, 'worker', ticket, found.board.id, undefined, undefined, true, { hidden: this.settings.backgroundTerminals, reasoning: decision.reasoning ?? 'auto' }));
   }
 
   public async runPlan(): Promise<number> {
@@ -764,7 +790,8 @@ export class FleetController {
       attempt: (s.attempt || 1) + 1,
       resumedFrom: s.id,
       assignee,
-      hidden: opts.background ?? s.hidden
+      hidden: opts.background ?? s.hidden,
+      reasoning: s.reasoning === undefined ? 'default' : (s.reasoning || 'default')
     });
     if (next) this.sessions.markResumed(s.id, next.id);
     return !!next;

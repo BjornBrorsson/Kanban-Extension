@@ -24,6 +24,8 @@ export interface PlanDecision {
   estMinutes?: number;
   estCost?: number;
   points?: number;
+  /** Reasoning level the optimizer chose for this task ('' = not controllable). */
+  reasoning?: string;
   /** The runners-up and what they would have cost, for transparency. */
   alternatives?: string[];
 }
@@ -124,6 +126,7 @@ export function planWork(
         estMinutes: best.estMinutes,
         estCost: best.estCost,
         points: best.points,
+        reasoning: best.reasoning,
         alternatives: ranked.slice(1, 4).map(o => o.summary)
       });
       continue;

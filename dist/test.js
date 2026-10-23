@@ -1029,6 +1029,8 @@ var AgentRunner = class {
     const agyPath = this.resolveAntigravityPath(config.path || config.executable, effectiveBoardConfig);
     const model = options.model && MODEL_ID_PATTERN.test(options.model) ? options.model : "";
     const modelArgs = model && options.modelFlag ? `${options.modelFlag} ${model}` : "";
+    const effort = options.effort && /^[a-z]+$/.test(options.effort) ? options.effort : "";
+    const effortArgs = effort && options.effortFlag ? `${options.effortFlag} ${effort}` : "";
     const rawTask = (options.task || DEFAULT_TASK).replace(/\{ticket_path\}/g, () => ticket.path).replace(/\{ticket_title\}/g, () => ticket.title).replace(/\{ticket_id\}/g, () => ticket.id);
     const replacements = {
       "{task}": esc(rawTask),
@@ -1045,6 +1047,7 @@ var AgentRunner = class {
       "{model}": model,
       "{session_id}": options.sessionId && SESSION_ID_PATTERN.test(options.sessionId) ? options.sessionId : "",
       "{model_args}": modelArgs,
+      "{effort_args}": effortArgs,
       "{agy_path}": agyPath,
       "{antigravity_path}": agyPath,
       "{executable}": config.path || config.executable || agyPath,
@@ -1066,6 +1069,9 @@ var AgentRunner = class {
     }
     if (modelArgs && !command.includes("{model_args}") && !command.includes("{model}")) {
       command = `${command.trimEnd()} ${modelArgs}`;
+    }
+    if (effortArgs && !command.includes("{effort_args}")) {
+      command = `${command.trimEnd()} ${effortArgs}`;
     }
     command = command.replace(/\{[a-z_]+\}/g, (m) => m in replacements ? replacements[m] : m);
     command = command.replace(/ {2,}/g, " ").trim();

@@ -23,9 +23,9 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 ));
 
 // test/catalogTests.ts
-var fs3 = __toESM(require("fs"));
+var fs4 = __toESM(require("fs"));
 var os3 = __toESM(require("os"));
-var path4 = __toESM(require("path"));
+var path5 = __toESM(require("path"));
 
 // src/fleet/catalog.ts
 var fs2 = __toESM(require("fs"));
@@ -280,6 +280,50 @@ function parseCopilotPolicy(text) {
   }
   return out;
 }
+function parseDelimitedModels(text) {
+  const out = [];
+  for (const line of text.replace(/^\uFEFF/, "").split(/\r?\n/)) {
+    if (!line.trim())
+      continue;
+    const delim = line.includes(";") ? ";" : line.includes("	") ? "	" : line.includes("|") ? "|" : "";
+    if (!delim)
+      continue;
+    const cells = line.split(delim).map((c) => c.trim()).filter((c) => c.length);
+    if (cells.length < 2)
+      continue;
+    const stateIdx = cells.findIndex((c) => /^(enabled|disabled|on|off)$/i.test(c));
+    const priceCells = cells.filter((c) => /\$\s*[\d.]+|^free$/i.test(c) || /^n\/?a\b/i.test(c));
+    const rest = cells.filter((c, i) => i !== stateIdx && !priceCells.includes(c));
+    const name = rest[rest.length - 1];
+    if (!name)
+      continue;
+    const enabled = stateIdx >= 0 ? /^(enabled|on)$/i.test(cells[stateIdx]) : void 0;
+    let pricing;
+    const priceText2 = priceCells.join(" ");
+    if (/^free$/i.test(priceText2.trim())) {
+      pricing = { free: true, inPerM: 0, outPerM: 0, source: "listed" };
+    } else {
+      const inp = priceText2.match(/\$\s*([\d.]+)\s*(?:\/\s*1M\s*)?in\b/i);
+      const outp = priceText2.match(/\$\s*([\d.]+)\s*(?:\/\s*1M\s*)?out\b/i);
+      const cached = priceText2.match(/\$\s*([\d.]+)\s*(?:\/\s*1M\s*)?cach\w*/i);
+      if (inp || outp)
+        pricing = { inPerM: inp ? Number(inp[1]) : void 0, outPerM: outp ? Number(outp[1]) : void 0, cachedPerM: cached ? Number(cached[1]) : void 0, source: "listed" };
+    }
+    const id = slugFromDisplayName(name);
+    if (id)
+      out.push({ id, label: name, enabled, pricing, idGuessed: true });
+  }
+  return out;
+}
+function parseImportedList(text) {
+  const policy = parseCopilotPolicy(text);
+  if (policy.length)
+    return policy;
+  const delimited = parseDelimitedModels(text);
+  if (delimited.length)
+    return delimited;
+  return parseGenericModels(text);
+}
 function listCopilotLearned(home = os2.homedir()) {
   const ids = /* @__PURE__ */ new Set();
   const dir = path2.join(home, ".copilot");
@@ -325,8 +369,7 @@ async function listProviderModels(p, env = process.env, importsDir) {
   if (importsDir) {
     try {
       const text = fs2.readFileSync(path2.join(importsDir, `${p.id}.txt`), "utf8");
-      const policy = parseCopilotPolicy(text);
-      const models = policy.length ? policy : parseGenericModels(text);
+      const models = parseImportedList(text);
       if (models.length)
         return { ...base, source: "import", command: `imports/${p.id}.txt`, ok: true, models };
     } catch {
@@ -526,6 +569,15 @@ function curate(raws, opts = {}) {
         effortVariants,
         speedVariants: g.items.filter((i) => i.speed).map((i) => i.raw.id),
         members: g.items.map((i) => i.raw.id),
+        memberPricing: (() => {
+          const mp = {};
+          for (const i of g.items) {
+            const p = i.raw.pricing;
+            if (p && !p.free && (p.inPerM !== repItem.raw.pricing?.inPerM || p.outPerM !== repItem.raw.pricing?.outPerM))
+              mp[i.raw.id] = p;
+          }
+          return Object.keys(mp).length ? mp : void 0;
+        })(),
         hidden: false
       });
       if (repItem.raw.enabled === false) {
@@ -696,6 +748,11 @@ var CatalogIndex = class {
   get(providerId, modelId) {
     return this.byKey.get(`${providerId}::${modelId}`);
   }
+  /** Price of this exact id: its own listed price when it differs from the family's (fusion combos), else the entry's. */
+  pricingFor(providerId, modelId) {
+    const e = this.get(providerId, modelId);
+    return e?.memberPricing?.[modelId] || e?.pricing;
+  }
   visible(providerId) {
     return (this.catalog?.models || []).filter((m) => m.providerId === providerId && !m.hidden);
   }
@@ -703,6 +760,20 @@ var CatalogIndex = class {
     return !!this.catalog?.models.length;
   }
 };
+function fusionCombos(raw) {
+  return raw.models.filter((m) => m.family === "fusion" || /^fusion-/.test(m.id)).map((m) => {
+    const label = m.label || m.id;
+    const lm = label.match(/^Fusion\s*\((.+?)\s\+\s(.+)\)\s*$/i);
+    let main2 = lm?.[1];
+    let side = lm?.[2];
+    if (!main2 || !side) {
+      const im = m.id.match(/^fusion-(.+?)-sidekick-(.+)$/);
+      main2 = im?.[1] || label;
+      side = im?.[2] || "";
+    }
+    return { id: m.id, main: main2, side, inPerM: m.pricing?.inPerM, outPerM: m.pricing?.outPerM, contextTokens: m.contextTokens };
+  });
+}
 function priceText(p) {
   if (!p)
     return "?";
@@ -803,6 +874,7 @@ var PROVIDER_PRESETS = [
     type: "cli",
     command: `& "{agy_path}" {model_args} -p "{task}" --dangerously-skip-permissions`,
     modelFlag: "--model",
+    effortFlag: "--effort",
     models: [],
     defaultModel: "",
     maxParallel: 2,
@@ -856,6 +928,7 @@ var PROVIDER_PRESETS = [
     type: "cli",
     command: `copilot {model_args} -p "{task}"`,
     modelFlag: "--model",
+    effortFlag: "--reasoning-effort",
     models: [],
     defaultModel: "",
     maxParallel: 1,
@@ -956,6 +1029,8 @@ function sanitizeProvider(raw, existingIds = []) {
     enabled: raw?.enabled !== false,
     type: raw?.type === "vscode-command" ? "vscode-command" : raw?.type === "cli" ? "cli" : preset.type,
     command: String(raw?.command ?? preset.command),
+    defaultReasoning: ["none", "minimal", "low", "medium", "high", "xhigh", "max"].includes(String(raw?.defaultReasoning)) ? String(raw.defaultReasoning) : "",
+    effortFlag: raw?.effortFlag !== void 0 ? String(raw.effortFlag).trim() || void 0 : getPreset(kind).effortFlag,
     pinnedModels: Array.isArray(raw?.pinnedModels) ? raw.pinnedModels.map((m) => String(m).trim()).filter(Boolean) : [],
     listCommand: raw?.listCommand ? String(raw.listCommand).slice(0, 300) : void 0,
     agentic: raw?.agentic !== void 0 ? !!raw.agentic : kind !== "ollama" && kind !== "ide-chat",
@@ -1303,6 +1378,7 @@ var SessionManager = class {
       attempt: req.attempt ?? 1,
       resumedFrom: req.resumedFrom,
       hidden: req.hidden,
+      reasoning: req.reasoning,
       points: req.points,
       estCost: req.estCost,
       estMinutes: req.estMinutes
@@ -1630,6 +1706,7 @@ function planWork(candidates, providers, sessions, opts = {}) {
         estMinutes: best.estMinutes,
         estCost: best.estCost,
         points: best.points,
+        reasoning: best.reasoning,
         alternatives: ranked.slice(1, 4).map((o) => o.summary)
       });
       continue;
@@ -1725,6 +1802,61 @@ function requiredTier(ticket) {
   return Math.min(5, req);
 }
 
+// src/fleet/reasoning.ts
+var REASONING_LEVELS = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
+var REASONING_FACTOR = { none: 0.55, minimal: 0.65, low: 0.75, medium: 1, high: 1.4, xhigh: 1.9, max: 2.5 };
+function isLevel(v) {
+  return !!v && REASONING_LEVELS.includes(v);
+}
+var order = (l) => REASONING_LEVELS.indexOf(l);
+function supportedLevels(provider, entry) {
+  const variants = Object.keys(entry?.effortVariants || {}).filter(isLevel);
+  if (variants.length >= 2)
+    return variants.sort((a, b) => order(a) - order(b));
+  if (provider.effortFlag)
+    return ["low", "medium", "high", "xhigh", "max"];
+  return [];
+}
+function pickReasoning(ticket, provider, entry, objective = "balanced") {
+  const levels = supportedLevels(provider, entry);
+  if (!levels.length)
+    return "";
+  const label = (ticket.labels || []).map((l) => l.replace(/[`\s]/g, "")).find((l) => /^reasoning:/i.test(l));
+  if (label) {
+    const wanted = label.split(":")[1].toLowerCase();
+    if (levels.includes(wanted))
+      return wanted;
+  }
+  const baseline = isLevel(provider.defaultReasoning) && levels.includes(provider.defaultReasoning) ? provider.defaultReasoning : levels.includes("medium") ? "medium" : levels[Math.floor(levels.length / 2)];
+  let shift = 0;
+  const need = requiredTier(ticket);
+  if (need >= 5)
+    shift += 2;
+  else if (need === 4)
+    shift += 1;
+  if (priorityRank(ticket.priority) === 3 || /^(xs|s\b|small)/i.test(ticket.estimate || ""))
+    shift -= 1;
+  if (priorityRank(ticket.priority) === 0)
+    shift += 1;
+  if (/^(l|xl|large)\b/i.test(ticket.estimate || ""))
+    shift += 1;
+  if (objective === "cost" || objective === "speed")
+    shift -= 1;
+  shift = Math.max(-2, Math.min(2, shift));
+  const idx = Math.max(0, Math.min(levels.length - 1, levels.indexOf(baseline) + shift));
+  return levels[idx];
+}
+function resolveReasoning(provider, entry, model, level) {
+  if (!level || !isLevel(level))
+    return { model, level: "" };
+  const variants = entry?.effortVariants || {};
+  if (variants[level])
+    return { model: variants[level], level };
+  if (provider.effortFlag)
+    return { model, effort: level, level };
+  return { model, level: "" };
+}
+
 // src/fleet/optimizer.ts
 var OBJECTIVES = {
   balanced: { timeValuePerMin: 0.2, quotaValue: 50 },
@@ -1757,20 +1889,21 @@ function quotaPressure(p, sessions, now) {
   }
   return { lambdaCount, lambdaBudget, share };
 }
-function estimateRun(ticket, p, model, ctx) {
+function estimateRun(ticket, p, model, ctx, level = "") {
   const points = ticketPoints(ticket);
   const entry = ctx.catalog.get(p.id, model);
   const local = entry ? entry.local : p.kind === "ollama" || p.kind === "ollama-aider";
   const hasOverride = parseTierOverrides(p.modelTiers)[model.toLowerCase()] !== void 0;
   const tier = entry && !hasOverride ? entry.tier : modelTier(p, model);
-  const pricing = entry?.pricing || estimatePricing(tier, local);
+  const pricing = ctx.catalog.pricingFor(p.id, model) || entry?.pricing || estimatePricing(tier, local);
+  const factor = REASONING_FACTOR[level] ?? 1;
   const tps = priorTps(tier, local, entry?.sizeB, ctx.bench?.[`${p.id}::${model}`]?.tps);
   return {
     points,
     tier,
     local,
-    estCost: estimateCost(pricing, points),
-    estMinutes: ctx.speed.predict(p.id, model, points, priorMinutes(points, tps))
+    estCost: estimateCost(pricing, points) * factor,
+    estMinutes: ctx.speed.predict(p.id, model, points, priorMinutes(points, tps)) * factor
   };
 }
 function candidateModels(p, catalog) {
@@ -1789,7 +1922,12 @@ function rankOptions(ticket, providers, sessions, ctx, restrictTo) {
     for (const model of candidateModels(p, ctx.catalog)) {
       if (sessions.modelBlock(p.id, model, now))
         continue;
-      const run = estimateRun(ticket, p, model, ctx);
+      const entry = ctx.catalog.get(p.id, model);
+      const wanted = pickReasoning(ticket, p, entry, ctx.objective || "balanced");
+      const resolved = resolveReasoning(p, entry, model, wanted);
+      if (resolved.model !== model && sessions.modelBlock(p.id, resolved.model, now))
+        continue;
+      const run = estimateRun(ticket, p, resolved.model, ctx, resolved.level);
       const { tier, estCost, estMinutes } = run;
       if (tier < needed)
         continue;
@@ -1811,23 +1949,696 @@ function rankOptions(ticket, providers, sessions, ctx, restrictTo) {
       const startsNow = waitMinutes === 0;
       options.push({
         provider: p,
-        model,
+        model: resolved.model,
         tier,
         points,
         estMinutes,
         estCost,
+        reasoning: resolved.level,
+        effort: resolved.effort,
         waitMinutes,
         lambda,
         score,
         startsNow,
-        summary: `${p.name}${model ? " \xB7 " + model : ""}: ~${Math.round(estMinutes)} min${estCost > 0 ? `, ~$${estCost.toFixed(2)}` : ", free"}${waitMinutes > 0 ? `, starts in ~${Math.round(waitMinutes)} min` : ""}${lambda > 0.5 ? `, quota ${lambda >= 2 ? "scarce" : "tight"}` : ""}`
+        summary: `${p.name}${resolved.model ? " \xB7 " + resolved.model : ""}${resolved.level && !resolved.model.endsWith(resolved.level) ? " (" + resolved.level + ")" : ""}: ~${Math.round(estMinutes)} min${estCost > 0 ? `, ~$${estCost.toFixed(2)}` : ", free"}${waitMinutes > 0 ? `, starts in ~${Math.round(waitMinutes)} min` : ""}${lambda > 0.5 ? `, quota ${lambda >= 2 ? "scarce" : "tight"}` : ""}`
       });
     }
   }
   return options.sort((a, b) => a.score - b.score);
 }
 
+// src/agentRunner.ts
+var path4 = __toESM(require("path"));
+var fs3 = __toESM(require("fs"));
+
+// src/orchestrator/config/orchestrationConfig.ts
+var OrchestrationConfigParser = class {
+  /**
+   * Extracts and parses the versioned fenced YAML block from config.md content.
+   * Returns undefined if no orchestration YAML block is found or if it is disabled.
+   */
+  static extractFromMarkdown(content) {
+    if (!content || !content.trim()) {
+      return void 0;
+    }
+    const yamlBlockMatch = content.match(/```(?:yaml|yml)\s*\r?\n([\s\S]*?)\r?\n```/i);
+    if (!yamlBlockMatch) {
+      return void 0;
+    }
+    const yamlText = yamlBlockMatch[1].trim();
+    if (!yamlText.includes("schemaVersion")) {
+      return void 0;
+    }
+    return this.parseYaml(yamlText);
+  }
+  /**
+   * Parses the YAML text into a validated OrchestrationConfig structure.
+   */
+  static parseYaml(yamlText) {
+    const raw = this.parseSimpleYaml(yamlText);
+    const schemaVersion = Number(raw.schemaVersion) || 1;
+    if (schemaVersion !== 1) {
+      throw new Error(`Unsupported orchestration schemaVersion: ${raw.schemaVersion}. Supported versions: 1`);
+    }
+    const orchestrationRaw = typeof raw.orchestration === "object" && raw.orchestration !== null ? raw.orchestration : {};
+    const orchestration = {
+      enabled: Boolean(orchestrationRaw.enabled === true || orchestrationRaw.enabled === "true"),
+      profile: typeof orchestrationRaw.profile === "string" ? orchestrationRaw.profile : void 0,
+      maxConcurrentWorkers: typeof orchestrationRaw.maxConcurrentWorkers === "number" ? orchestrationRaw.maxConcurrentWorkers : orchestrationRaw.maxConcurrentWorkers ? parseInt(String(orchestrationRaw.maxConcurrentWorkers), 10) : 1,
+      completionTarget: orchestrationRaw.completionTarget === "reviewed-patch" || orchestrationRaw.completionTarget === "local-build" || orchestrationRaw.completionTarget === "pr" ? orchestrationRaw.completionTarget : "reviewed-patch",
+      retryLimit: typeof orchestrationRaw.retryLimit === "number" ? orchestrationRaw.retryLimit : 1
+    };
+    let roles;
+    if (raw.roles && typeof raw.roles === "object") {
+      roles = {
+        lead: typeof raw.roles.lead === "string" ? raw.roles.lead : void 0,
+        worker: typeof raw.roles.worker === "string" ? raw.roles.worker : void 0,
+        reviewer: typeof raw.roles.reviewer === "string" ? raw.roles.reviewer : void 0
+      };
+    }
+    let policies;
+    if (raw.policies && typeof raw.policies === "object") {
+      policies = {};
+      for (const [pName, pVal] of Object.entries(raw.policies)) {
+        if (typeof pVal === "object" && pVal !== null) {
+          const pObj = pVal;
+          const allowedExecRaw = Array.isArray(pObj.allowedExecution) ? pObj.allowedExecution : typeof pObj.allowedExecution === "string" ? pObj.allowedExecution.split(",").map((s) => s.trim()) : ["local"];
+          policies[pName] = {
+            allowedExecution: allowedExecRaw,
+            unknownDestination: pObj.unknownDestination === "allow" ? "allow" : "deny",
+            allowedDataClasses: Array.isArray(pObj.allowedDataClasses) ? pObj.allowedDataClasses : void 0,
+            allowedEndpoints: Array.isArray(pObj.allowedEndpoints) ? pObj.allowedEndpoints : void 0
+          };
+        }
+      }
+    }
+    let budgets;
+    if (raw.budgets && typeof raw.budgets === "object") {
+      const bObj = raw.budgets;
+      budgets = {
+        dailyCurrency: typeof bObj.dailyCurrency === "string" ? bObj.dailyCurrency : "EUR",
+        dailyLimit: typeof bObj.dailyLimit === "number" ? bObj.dailyLimit : parseFloat(bObj.dailyLimit) || void 0,
+        reserveForReview: typeof bObj.reserveForReview === "number" ? bObj.reserveForReview : parseFloat(bObj.reserveForReview) || 1,
+        batchCeiling: typeof bObj.batchCeiling === "number" ? bObj.batchCeiling : parseFloat(bObj.batchCeiling) || void 0,
+        maxPerTicketSpend: typeof bObj.maxPerTicketSpend === "number" ? bObj.maxPerTicketSpend : parseFloat(bObj.maxPerTicketSpend) || void 0
+      };
+    }
+    let modelTiers;
+    if (Array.isArray(raw.modelTiers)) {
+      modelTiers = raw.modelTiers.map((m) => ({
+        id: String(m.id || ""),
+        name: String(m.name || m.id || ""),
+        model: String(m.model || ""),
+        provider: m.provider || "ollama",
+        costTier: m.costTier || "low",
+        maxInputTokens: m.maxInputTokens ? Number(m.maxInputTokens) : void 0,
+        maxOutputTokens: m.maxOutputTokens ? Number(m.maxOutputTokens) : void 0,
+        temperature: m.temperature !== void 0 ? Number(m.temperature) : void 0,
+        recommendedFor: Array.isArray(m.recommendedFor) ? m.recommendedFor : void 0
+      }));
+    }
+    let subtaskRouting;
+    if (raw.subtaskRouting && typeof raw.subtaskRouting === "object") {
+      const srObj = raw.subtaskRouting;
+      subtaskRouting = {
+        defaultTier: String(srObj.defaultTier || "standard-coder"),
+        categoryRoutes: srObj.categoryRoutes && typeof srObj.categoryRoutes === "object" ? srObj.categoryRoutes : void 0,
+        fallbackTier: srObj.fallbackTier ? String(srObj.fallbackTier) : void 0
+      };
+    }
+    return {
+      schemaVersion: 1,
+      orchestration,
+      roles,
+      policies,
+      budgets,
+      modelTiers,
+      subtaskRouting
+    };
+  }
+  /**
+   * Lightweight indent-based YAML parser supporting objects, scalars, inline arrays [a, b], and list items.
+   */
+  static parseSimpleYaml(yaml) {
+    const lines = yaml.split(/\r?\n/);
+    const root = {};
+    const stack = [
+      { indent: -1, target: root }
+    ];
+    for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+      const originalLine = lines[lineIndex];
+      if (!originalLine.trim() || originalLine.trim().startsWith("#")) {
+        continue;
+      }
+      const indent = originalLine.search(/\S/);
+      const trimmed = originalLine.trim();
+      while (stack.length > 1 && stack[stack.length - 1].indent >= indent) {
+        stack.pop();
+      }
+      const currentContext = stack[stack.length - 1].target;
+      const kvMatch = trimmed.match(/^([A-Za-z0-9_-]+)\s*:\s*(.*)$/);
+      if (kvMatch) {
+        const key = kvMatch[1];
+        const valStr = kvMatch[2].trim();
+        if (valStr === "") {
+          const newObj = {};
+          if (Array.isArray(currentContext)) {
+            currentContext.push({ [key]: newObj });
+          } else {
+            currentContext[key] = newObj;
+          }
+          stack.push({ indent, target: newObj });
+        } else {
+          const parsedVal = this.parseScalarOrInlineArray(valStr);
+          if (Array.isArray(currentContext)) {
+            currentContext.push({ [key]: parsedVal });
+          } else {
+            currentContext[key] = parsedVal;
+          }
+        }
+        continue;
+      }
+      const listMatch = trimmed.match(/^-\s+(.*)$/);
+      if (listMatch) {
+        let listContext = currentContext;
+        if (!Array.isArray(listContext) && typeof listContext === "object" && Object.keys(listContext).length === 0) {
+          const parent = stack.length > 1 ? stack[stack.length - 2].target : null;
+          if (parent && typeof parent === "object" && !Array.isArray(parent)) {
+            const parentRecord = parent;
+            for (const pk of Object.keys(parentRecord)) {
+              if (parentRecord[pk] === listContext) {
+                const arr = [];
+                parentRecord[pk] = arr;
+                stack[stack.length - 1].target = arr;
+                listContext = arr;
+                break;
+              }
+            }
+          }
+        }
+        const itemContent = listMatch[1].trim();
+        const subKv = itemContent.match(/^([A-Za-z0-9_-]+)\s*:\s*(.*)$/);
+        if (subKv) {
+          const itemKey = subKv[1];
+          const itemVal = this.parseScalarOrInlineArray(subKv[2].trim());
+          const itemObj = { [itemKey]: itemVal };
+          if (Array.isArray(listContext)) {
+            listContext.push(itemObj);
+            stack.push({ indent, target: itemObj });
+          }
+        } else {
+          const val = this.parseScalarOrInlineArray(itemContent);
+          if (Array.isArray(listContext)) {
+            listContext.push(val);
+          }
+        }
+      }
+    }
+    return root;
+  }
+  static parseScalarOrInlineArray(val) {
+    if (!val)
+      return "";
+    if (val.startsWith("[") && val.endsWith("]")) {
+      const inner = val.slice(1, -1).trim();
+      if (!inner)
+        return [];
+      return inner.split(",").map((s) => this.parseScalarOrInlineArray(s.trim()));
+    }
+    if (val.startsWith('"') && val.endsWith('"') || val.startsWith("'") && val.endsWith("'")) {
+      return val.slice(1, -1);
+    }
+    if (val.toLowerCase() === "true")
+      return true;
+    if (val.toLowerCase() === "false")
+      return false;
+    if (/^-?\d+(\.\d+)?$/.test(val)) {
+      const num = Number(val);
+      if (!isNaN(num))
+        return num;
+    }
+    return val;
+  }
+};
+
+// src/configParser.ts
+var ConfigParser = class {
+  static parse(content, defaultBoardName) {
+    const config = {
+      name: defaultBoardName,
+      columnsOrder: [],
+      autoUpdateStatus: true,
+      defaultAgent: null,
+      assignees: []
+    };
+    if (!content || !content.trim()) {
+      return config;
+    }
+    const settingsMatch = content.match(/##\s+Settings\s*\r?\n([\s\S]*?)(?=\r?\n##\s+|$)/i);
+    if (settingsMatch) {
+      const settingsBlock = settingsMatch[1];
+      const lines = settingsBlock.split(/\r?\n/);
+      for (const line of lines) {
+        const kvMatch = line.match(/^[-*]\s+\*{0,2}([^:*]+)\*{0,2}\s*:\s*(.+)$/);
+        if (kvMatch) {
+          const key = kvMatch[1].trim().toLowerCase();
+          const val = kvMatch[2].trim();
+          if (key.includes("board name")) {
+            config.name = val;
+          } else if (key.includes("columns order") || key.includes("column order")) {
+            config.columnsOrder = val.split(",").map((s) => s.trim()).filter((s) => s.length > 0);
+          } else if (key.includes("auto update status")) {
+            config.autoUpdateStatus = val.toLowerCase() !== "false";
+          } else if (key.includes("default agent")) {
+            config.defaultAgent = val;
+          } else if (key.includes("antigravity path") || key.includes("agy path") || key.includes("antigravity executable") || key.includes("agy executable")) {
+            config.antigravityPath = val.replace(/^["'`](.*)["'`]$/, "$1");
+          } else if (key.includes("prompt template") || key.includes("agent prompt")) {
+            config.agentPromptTemplate = val.replace(/^["'`](.*)["'`]$/, "$1");
+          }
+        }
+      }
+    }
+    const assigneesMatch = content.match(/##\s+Assignees\s*\r?\n([\s\S]*?)(?=\r?\n##\s+|$)/i);
+    if (assigneesMatch) {
+      const assigneesBlock = assigneesMatch[1];
+      this.parseAssignees(assigneesBlock, config);
+    }
+    const promptMatch = content.match(/##\s+(?:Agent\s+|Task\s+)?Prompt\s+Template\s*\r?\n([\s\S]*?)(?=\r?\n##\s+|$)/i);
+    if (promptMatch) {
+      const templateContent = promptMatch[1].trim();
+      const codeBlockMatch = templateContent.match(/^```(?:markdown|md)?\r?\n([\s\S]*?)\r?\n```$/);
+      config.agentPromptTemplate = codeBlockMatch ? codeBlockMatch[1].trim() : templateContent;
+    }
+    try {
+      config.orchestration = OrchestrationConfigParser.extractFromMarkdown(content);
+    } catch (e) {
+      console.warn("Could not parse orchestration block in config.md:", e);
+    }
+    return config;
+  }
+  static parseAssignees(block, config) {
+    const humanMatch = block.match(/###\s+Humans\s*\r?\n([\s\S]*?)(?=\r?\n###\s+|$)/i);
+    if (humanMatch) {
+      this.parseUserList(humanMatch[1], "human", config);
+    }
+    const agentMatch = block.match(/###\s+Agents\s*\r?\n([\s\S]*?)(?=\r?\n###\s+|$)/i);
+    if (agentMatch) {
+      this.parseUserList(agentMatch[1], "agent", config);
+    }
+    if (!humanMatch && !agentMatch) {
+      this.parseUserList(block, "human", config);
+    }
+  }
+  static parseUserList(block, defaultType, config) {
+    const itemSplits = block.split(/(?=^[-*]\s+\*{0,2}[A-Za-z0-9])/m);
+    for (const item of itemSplits) {
+      const trimmed = item.trim();
+      if (!trimmed || !trimmed.startsWith("-") && !trimmed.startsWith("*"))
+        continue;
+      const lines = trimmed.split(/\r?\n/);
+      const headerLine = lines[0];
+      const nameMatch = headerLine.match(/^[-*]\s+\*{0,2}(.+?)\*{0,2}(?:\s*\(.*?\))?$/);
+      if (!nameMatch)
+        continue;
+      const name = nameMatch[1].trim();
+      let id = name.toLowerCase().replace(/[^a-z0-9_-]/g, "-");
+      let role = "";
+      let type = defaultType;
+      let agentType = "cli";
+      let command = "";
+      let workingDir;
+      let prompt;
+      let agentPath;
+      for (let i = 1; i < lines.length; i++) {
+        const subLine = lines[i].trim();
+        const kv = subLine.match(/^[-*]\s*([^:]+)\s*:\s*(.+)$/);
+        if (kv) {
+          const k = kv[1].trim().toLowerCase();
+          let v = kv[2].trim();
+          if (v.startsWith("`") && v.endsWith("`") || v.startsWith('"') && v.endsWith('"')) {
+            v = v.slice(1, -1);
+          }
+          if (k === "id") {
+            id = v;
+          } else if (k === "role") {
+            role = v;
+          } else if (k === "type" || k === "agenttype") {
+            const vLower = v.toLowerCase();
+            if (vLower === "human") {
+              type = "human";
+            } else if (vLower === "agent" || vLower === "cli" || vLower.includes("vscode")) {
+              type = "agent";
+              if (vLower.includes("vscode")) {
+                agentType = "vscode-command";
+              } else if (vLower === "cli") {
+                agentType = "cli";
+              }
+            }
+          } else if (k === "command" || k === "cmd") {
+            command = v;
+          } else if (k === "workingdir" || k === "cwd") {
+            workingDir = v;
+          } else if (k === "prompt") {
+            prompt = v;
+          } else if (k === "path" || k === "executable" || k === "bin" || k === "agentpath" || k === "exec") {
+            agentPath = v;
+          }
+        }
+      }
+      let agentConfig;
+      if (type === "agent") {
+        agentConfig = {
+          type: agentType,
+          command,
+          workingDir,
+          prompt,
+          path: agentPath,
+          executable: agentPath
+        };
+      }
+      config.assignees.push({
+        id,
+        name,
+        role: role || void 0,
+        type,
+        agentConfig
+      });
+    }
+  }
+  static generateDefaultConfig(boardName) {
+    return `# Board Configuration
+
+## Settings
+- **Board Name**: ${boardName}
+- **Columns Order**: Backlog, Ongoing, Assistance Required, Blocked, Completed
+- **Auto Update Status In File**: true
+
+## Assignees
+
+### Humans
+- **Developer**
+  - ID: dev
+  - Role: Full-stack Developer
+  - Type: human
+
+### Agents
+- **Antigravity CLI**
+  - ID: antigravity-cli
+  - Type: cli
+  - Command: \`& "{agy_path}" -p "Review requirements and implement ticket {ticket_path}: {ticket_title}" --dangerously-skip-permissions\`
+
+- **Claude Code**
+  - ID: claude-code
+  - Type: cli
+  - Command: \`claude -p "Review and implement ticket {ticket_path}"\`
+
+- **Gemini CLI**
+  - ID: gemini-cli
+  - Type: cli
+  - Command: \`gemini --prompt "Please work on ticket {ticket_path}: {ticket_title}"\`
+
+- **Aider**
+  - ID: aider
+  - Type: cli
+  - Command: \`aider --message "Implement ticket requirements in {ticket_path}" {ticket_path}\`
+
+- **IDE Chat (Antigravity / Cursor / Copilot)**
+  - ID: ide-chat
+  - Type: vscode-command
+  - Command: \`workbench.action.chat.open\`
+  - Prompt: \`Please work on ticket {ticket_title} located at: {ticket_path}\`
+`;
+  }
+};
+
+// src/shellEscape.ts
+function detectShellKind(shellPath, platform = process.platform) {
+  const name = (shellPath || "").split(/[\\/]/).pop()?.toLowerCase() || "";
+  if (name.includes("pwsh") || name.includes("powershell"))
+    return "powershell";
+  if (name === "cmd.exe" || name === "cmd")
+    return "cmd";
+  if (name)
+    return "posix";
+  return platform === "win32" ? "powershell" : "posix";
+}
+function escapeForDoubleQuotes(value, shell) {
+  const flat = String(value ?? "").replace(/[\r\n\t]+/g, " ").replace(/[\u0000-\u001f\u007f]/g, "");
+  switch (shell) {
+    case "powershell":
+      return flat.replace(/[`$"“”„]/g, (ch) => "`" + ch);
+    case "cmd":
+      return flat.replace(/"/g, '""').replace(/%/g, "%%");
+    default:
+      return flat.replace(/[\\"$`!]/g, (ch) => "\\" + ch);
+  }
+}
+
+// src/agentRunner.ts
+var DEFAULT_TASK = "Review requirements and implement ticket {ticket_path}: {ticket_title}";
+var SESSION_ID_PATTERN = /^[0-9a-fA-F-]{8,64}$/;
+var MODEL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:\/@+-]*$/;
+function getVsCode() {
+  try {
+    return require("vscode");
+  } catch {
+    return void 0;
+  }
+}
+var AgentRunner = class {
+  /**
+   * Resolves the executable path for the Antigravity CLI (agy).
+   * Resolution priority:
+   * 1. Explicitly configured path on assignee agentConfig
+   * 2. BoardConfig.antigravityPath (from Settings)
+   * 3. VS Code configuration 'agenticKanban.antigravityPath'
+   * 4. Environment variables AGY_PATH or ANTIGRAVITY_PATH
+   * 5. Standard installation paths on Windows/POSIX
+   * 6. Fallback to 'agy.exe' (Windows) or 'agy' (POSIX)
+   */
+  static resolveAntigravityPath(configuredPath, boardConfig) {
+    if (configuredPath && configuredPath.trim()) {
+      return configuredPath.trim();
+    }
+    if (boardConfig?.antigravityPath && boardConfig.antigravityPath.trim()) {
+      return boardConfig.antigravityPath.trim();
+    }
+    try {
+      const vscode = getVsCode();
+      const vscodeConfig = vscode?.workspace?.getConfiguration?.("agenticKanban")?.get("antigravityPath");
+      if (vscodeConfig && vscodeConfig.trim()) {
+        return vscodeConfig.trim();
+      }
+    } catch {
+    }
+    if (process.env.AGY_PATH && process.env.AGY_PATH.trim()) {
+      return process.env.AGY_PATH.trim();
+    }
+    if (process.env.ANTIGRAVITY_PATH && process.env.ANTIGRAVITY_PATH.trim()) {
+      return process.env.ANTIGRAVITY_PATH.trim();
+    }
+    const candidates = [];
+    if (process.platform === "win32") {
+      const localAppData = process.env.LOCALAPPDATA;
+      if (localAppData) {
+        candidates.push(path4.join(localAppData, "agy", "bin", "agy.exe"));
+      }
+      const userProfile = process.env.USERPROFILE;
+      if (userProfile) {
+        candidates.push(path4.join(userProfile, "AppData", "Local", "agy", "bin", "agy.exe"));
+      }
+      const programFiles = process.env.ProgramFiles;
+      if (programFiles) {
+        candidates.push(path4.join(programFiles, "agy", "bin", "agy.exe"));
+      }
+    } else {
+      const home = process.env.HOME;
+      if (home) {
+        candidates.push(path4.join(home, ".agy", "bin", "agy"));
+        candidates.push(path4.join(home, ".local", "bin", "agy"));
+      }
+      candidates.push("/usr/local/bin/agy");
+      candidates.push("/usr/bin/agy");
+    }
+    for (const candidate of candidates) {
+      if (candidate && fs3.existsSync(candidate)) {
+        return candidate;
+      }
+    }
+    return process.platform === "win32" ? "agy.exe" : "agy";
+  }
+  /**
+   * Formats the CLI command string for an agent, performing template substitution,
+   * path resolution, and legacy syntax upgrade.
+   */
+  static formatCliCommand(ticket, assignee, boardRoot, boardConfig, rawTicketContent, options = {}) {
+    const config = assignee.agentConfig;
+    if (!config)
+      return "";
+    const vscode = getVsCode();
+    const shell = options.shell || detectShellKind(vscode?.env?.shell);
+    const esc = (v) => escapeForDoubleQuotes(v, shell);
+    const workspaceFolder = vscode?.workspace?.workspaceFolders?.[0]?.uri.fsPath || path4.dirname(boardRoot);
+    const content = rawTicketContent ?? ticket.summary ?? ticket.title;
+    let effectiveBoardConfig = boardConfig;
+    if (!effectiveBoardConfig) {
+      const configPath = path4.join(boardRoot, "config.md");
+      if (fs3.existsSync(configPath)) {
+        try {
+          const cfgText = fs3.readFileSync(configPath, "utf8");
+          effectiveBoardConfig = ConfigParser.parse(cfgText, "board");
+        } catch {
+        }
+      }
+    }
+    const agyPath = this.resolveAntigravityPath(config.path || config.executable, effectiveBoardConfig);
+    const model = options.model && MODEL_ID_PATTERN.test(options.model) ? options.model : "";
+    const modelArgs = model && options.modelFlag ? `${options.modelFlag} ${model}` : "";
+    const effort = options.effort && /^[a-z]+$/.test(options.effort) ? options.effort : "";
+    const effortArgs = effort && options.effortFlag ? `${options.effortFlag} ${effort}` : "";
+    const rawTask = (options.task || DEFAULT_TASK).replace(/\{ticket_path\}/g, () => ticket.path).replace(/\{ticket_title\}/g, () => ticket.title).replace(/\{ticket_id\}/g, () => ticket.id);
+    const replacements = {
+      "{task}": esc(rawTask),
+      "{ticket_path}": esc(ticket.path),
+      "{ticket_rel_path}": esc(ticket.relativePath),
+      "{ticket_name}": esc(ticket.filename),
+      "{ticket_id}": esc(ticket.id),
+      "{ticket_title}": esc(ticket.title),
+      "{ticket_summary}": esc(ticket.summary),
+      "{ticket_content}": esc(content.slice(0, 1500)),
+      "{workspace_root}": esc(workspaceFolder),
+      "{board_root}": esc(boardRoot),
+      "{column}": esc(ticket.column),
+      "{model}": model,
+      "{session_id}": options.sessionId && SESSION_ID_PATTERN.test(options.sessionId) ? options.sessionId : "",
+      "{model_args}": modelArgs,
+      "{effort_args}": effortArgs,
+      "{agy_path}": agyPath,
+      "{antigravity_path}": agyPath,
+      "{executable}": config.path || config.executable || agyPath,
+      "{agent_path}": config.path || config.executable || agyPath
+    };
+    const isAntigravity = assignee.id === "antigravity-cli" || assignee.id === "agy" || assignee.name.toLowerCase().includes("antigravity");
+    let command = config.command || "";
+    if (isAntigravity) {
+      if (!command || !command.trim()) {
+        command = `& "{agy_path}" -p "Review requirements and implement ticket {ticket_path}: {ticket_title}" --dangerously-skip-permissions`;
+      } else if (/^agy\s+chat\b/i.test(command)) {
+        command = command.replace(/^agy\s+chat\b/i, `& "{agy_path}" -p`);
+        if (!command.includes("--dangerously-skip-permissions")) {
+          command += " --dangerously-skip-permissions";
+        }
+      } else if (/^agy\b/i.test(command) && !command.startsWith("&")) {
+        command = command.replace(/^agy\b/i, `& "{agy_path}"`);
+      }
+    }
+    if (modelArgs && !command.includes("{model_args}") && !command.includes("{model}")) {
+      command = `${command.trimEnd()} ${modelArgs}`;
+    }
+    if (effortArgs && !command.includes("{effort_args}")) {
+      command = `${command.trimEnd()} ${effortArgs}`;
+    }
+    command = command.replace(/\{[a-z_]+\}/g, (m) => m in replacements ? replacements[m] : m);
+    command = command.replace(/ {2,}/g, " ").trim();
+    const exePath = config.path || config.executable;
+    const first = command.match(/^([A-Za-z][\w.-]*)(?=\s|$)/);
+    if (exePath && first && path4.basename(exePath).replace(/\.[^.]+$/, "").toLowerCase() === first[1].toLowerCase()) {
+      const quoted = `"${exePath}"`;
+      command = (shell === "powershell" ? "& " : "") + quoted + command.slice(first[1].length);
+    }
+    if (process.platform === "win32" && shell === "powershell") {
+      const trimmed = command.trim();
+      if (trimmed.startsWith('"') && !trimmed.startsWith("&")) {
+        command = "& " + trimmed;
+      }
+    }
+    return command;
+  }
+  /** Resolves everything needed to start an agent for a ticket (command text, cwd, prompt) without starting it. */
+  static async prepareLaunch(ticket, assignee, boardRoot, boardConfig, options = {}) {
+    const vscode = getVsCode();
+    if (assignee.type !== "agent" || !assignee.agentConfig) {
+      vscode?.window.showWarningMessage(`Assignee "${assignee.name}" is not configured as an executable agent.`);
+      return null;
+    }
+    const config = assignee.agentConfig;
+    const workspaceFolder = vscode?.workspace?.workspaceFolders?.[0]?.uri.fsPath || path4.dirname(boardRoot);
+    let ticketContent = "";
+    try {
+      ticketContent = await fs3.promises.readFile(ticket.path, "utf8");
+    } catch {
+      ticketContent = ticket.summary || ticket.title;
+    }
+    if (config.type === "cli") {
+      const command = this.formatCliCommand(ticket, assignee, boardRoot, boardConfig, ticketContent, options);
+      const cwd = config.workingDir ? config.workingDir.replace("{workspace_root}", workspaceFolder).replace("{board_root}", boardRoot) : workspaceFolder;
+      return { kind: "cli", ticket, assignee, command, cwd, model: options.model };
+    }
+    if (config.type === "vscode-command") {
+      const replacements = {
+        "{ticket_path}": ticket.path,
+        "{ticket_rel_path}": ticket.relativePath,
+        "{ticket_name}": ticket.filename,
+        "{ticket_id}": ticket.id,
+        "{ticket_title}": ticket.title,
+        "{ticket_summary}": ticket.summary,
+        "{ticket_content}": ticketContent.slice(0, 1500),
+        "{workspace_root}": workspaceFolder,
+        "{board_root}": boardRoot,
+        "{column}": ticket.column,
+        "{model}": options.model || ""
+      };
+      let prompt = config.prompt || `Please review and work on ticket "${ticket.title}" at: ${ticket.path}
+
+Summary:
+${ticket.summary}`;
+      for (const [placeholder, value] of Object.entries(replacements)) {
+        prompt = prompt.split(placeholder).join(value);
+      }
+      return { kind: "vscode-command", ticket, assignee, command: config.command, cwd: workspaceFolder, prompt, model: options.model };
+    }
+    return null;
+  }
+  /** Optional hook (set by the fleet controller) that tracks each launch as a session. */
+  static launcher;
+  static async dispatch(ticket, assignee, boardRoot, boardConfig, options = {}) {
+    const req = await this.prepareLaunch(ticket, assignee, boardRoot, boardConfig, options);
+    if (!req)
+      return false;
+    return this.launcher ? this.launcher(req) : this.launchDefault(req);
+  }
+  /** Fallback launcher: a fresh terminal per dispatch (never type a new command into a still-running agent). */
+  static async launchDefault(req) {
+    const vscode = getVsCode();
+    if (req.kind === "cli") {
+      const base = `Agent: ${req.assignee.name} \xB7 ${req.ticket.id || req.ticket.filename}`;
+      let name = base;
+      let n = 2;
+      while (vscode?.window.terminals?.some((t) => t.name === name))
+        name = `${base} #${n++}`;
+      const terminal = vscode?.window.createTerminal({ name, cwd: req.cwd });
+      if (!terminal)
+        return false;
+      terminal.show(false);
+      await new Promise((r) => setTimeout(r, 600));
+      terminal.sendText(req.command);
+      vscode?.window.showInformationMessage(`Dispatched ticket "${req.ticket.title}" to ${req.assignee.name}.`);
+      return true;
+    }
+    await vscode?.env.clipboard.writeText(req.prompt || "");
+    vscode?.window.showInformationMessage(`Copied ticket context to clipboard! Triggering ${req.assignee.name} (${req.command})...`);
+    try {
+      await vscode?.commands.executeCommand(req.command);
+    } catch (err) {
+      vscode?.window.showErrorMessage(`Failed to execute command "${req.command}": ${err?.message || err}`);
+    }
+    return true;
+  }
+};
+
 // test/catalogTests.ts
+var order5 = (l) => ["low", "medium", "high", "xhigh", "max"].indexOf(l);
 var failures = 0;
 function check(cond, msg) {
   if (!cond) {
@@ -1837,8 +2648,8 @@ function check(cond, msg) {
     console.log("  \u2714 " + msg);
   }
 }
-var FIX = path4.join(__dirname, "..", "test", "fixtures", "models");
-var read = (f) => fs3.readFileSync(path4.join(FIX, f), "utf8");
+var FIX = path5.join(__dirname, "..", "test", "fixtures", "models");
+var read = (f) => fs4.readFileSync(path5.join(FIX, f), "utf8");
 var NullLauncher = class {
   async launch(_s) {
     return true;
@@ -1852,7 +2663,7 @@ function mkTicket(over = {}) {
   return {
     id: "T-1",
     filename: "t-1.md",
-    path: path4.join(os3.tmpdir(), "catalog-t1.md"),
+    path: path5.join(os3.tmpdir(), "catalog-t1.md"),
     relativePath: "t-1.md",
     column: "Backlog",
     subfolder: "Ready",
@@ -1939,14 +2750,14 @@ async function main() {
   const keep1 = curate([rawDevin], { keepVersionsPerFamily: 1 });
   check(keep1.models.filter((m) => m.family === "claude-opus" && !m.hidden).length === 1, "keep=1 leaves only the newest version");
   console.log("\n--- script files on disk ---");
-  const tmp = fs3.mkdtempSync(path4.join(os3.tmpdir(), "cat-"));
+  const tmp = fs4.mkdtempSync(path5.join(os3.tmpdir(), "cat-"));
   const store = new CatalogStore(tmp);
   store.saveRaw(rawDevin);
   store.saveRaw(rawOllama);
-  fs3.mkdirSync(path4.dirname(store.overridesPath), { recursive: true });
-  fs3.writeFileSync(store.overridesPath, JSON.stringify({ "ol::*": { outPerM: 0.5, inPerM: 0.1 } }));
+  fs4.mkdirSync(path5.dirname(store.overridesPath), { recursive: true });
+  fs4.writeFileSync(store.overridesPath, JSON.stringify({ "ol::*": { outPerM: 0.5, inPerM: 0.1 } }));
   const saved = store.curateSaved(2);
-  check(fs3.existsSync(store.catalogPath) && saved.models.length > 20, "curate reads the saved raw files and writes catalog.json");
+  check(fs4.existsSync(store.catalogPath) && saved.models.length > 20, "curate reads the saved raw files and writes catalog.json");
   const ovr = saved.models.find((m) => m.providerId === "ol" && m.id === "gemma4:12b");
   check(ovr.pricing?.source === "override" && ovr.pricing?.outPerM === 0.5, "pricing.overrides.json overrides listed/estimated prices");
   const patches = providerPatches([{ ...createProvider("devin", []), id: "devin" }], saved);
@@ -1976,7 +2787,7 @@ async function main() {
   check(!mMonth.canStart(budgetP, NOW, 0.3).ok && /Monthly/.test(mMonth.canStart(budgetP, NOW, 0.3).reason || ""), "monthly cap blocks too");
   const mOk = new SessionManager(() => budgetP, new NullLauncher(), storeWith({ spend: [{ providerId: "bp", model: "x", cost: 50, at: new Date(2026, 8, 1).getTime() }] }), () => NOW);
   check(mOk.canStart(budgetP, NOW, 0.3).ok, "spend from earlier periods does not count");
-  const started = await mBud.request({ provider: budgetP, model: "m", role: "worker", ticketPath: path4.join(tmp, "x.md"), ticketId: "X", ticketTitle: "X", boardId: "b", payload: {}, estCost: 0.05, points: 3 });
+  const started = await mBud.request({ provider: budgetP, model: "m", role: "worker", ticketPath: path5.join(tmp, "x.md"), ticketId: "X", ticketTitle: "X", boardId: "b", payload: {}, estCost: 0.05, points: 3 });
   check(started.status === "running" && Math.abs(mBud.spentSince("bp", periodStart("day", NOW)) - 0.95) < 1e-9, "starting a session records its estimated cost in the ledger");
   check(mBud.usage(budgetP).spend.day > 0.9 && mBud.usage(budgetP).budget.week === 5, "usage reports spend and caps per day / week / month");
   console.log("\n--- speed learning ---");
@@ -2040,7 +2851,7 @@ async function main() {
   const cheap = rankOptions(ticket, [gem, loc], smA, { ...ctxA, objective: "cost" });
   check(cheap.length === 2, 'both options are ranked under the "cost" objective');
   const smBusy = new SessionManager((id) => id === "gm" ? gem : loc, new NullLauncher(), storeWith({ starts: { gm: startsA } }), () => clockNow);
-  await smBusy.request({ provider: loc, model: "qwen2.5-coder:14b", role: "worker", ticketPath: path4.join(tmp, "busy.md"), ticketId: "B", ticketTitle: "B", boardId: "b", payload: {} });
+  await smBusy.request({ provider: loc, model: "qwen2.5-coder:14b", role: "worker", ticketPath: path5.join(tmp, "busy.md"), ticketId: "B", ticketTitle: "B", boardId: "b", payload: {} });
   const rankBusy = rankOptions(ticket, [gem, loc], smBusy, ctxA);
   check(rankBusy.find((o) => o.provider.id === "ol").waitMinutes > 0 && !rankBusy.find((o) => o.provider.id === "ol").startsNow, "a busy provider is charged for the wait");
   const hard = mkTicket({ priority: "P0", type: "Architecture" });
@@ -2066,13 +2877,76 @@ async function main() {
   check(usable.every((m) => cop.find((r) => r.id === m.id)?.enabled === true), "only models enabled on your account stay visible");
   check(usable.some((m) => m.id === "claude-opus-4.8") && !usable.some((m) => m.id === "claude-opus-5.5"), "a disabled newer model (Opus 5.5) does not hide the enabled older one (Opus 4.8)");
   check(usable.some((m) => m.id === "claude-sonnet-5.5") && usable.some((m) => m.id === "claude-sonnet-5"), "enabled Sonnet 5.5 and 5 are kept");
-  const impTmp = fs3.mkdtempSync(path4.join(os3.tmpdir(), "imp-"));
+  const impTmp = fs4.mkdtempSync(path5.join(os3.tmpdir(), "imp-"));
   const impStore = new CatalogStore(impTmp);
   impStore.saveImport("cp", read("copilot.txt"));
   const viaFile = await listProviderModels({ ...createProvider("copilot-cli", []), id: "cp" }, process.env, impStore.importsDir);
   check(viaFile.source === "import" && viaFile.models.length === 26 && viaFile.ok, "listing a provider prefers its imported model list");
-  fs3.rmSync(impTmp, { recursive: true, force: true });
-  fs3.rmSync(tmp, { recursive: true, force: true });
+  fs4.rmSync(impTmp, { recursive: true, force: true });
+  console.log("\n--- semicolon-separated list with prices ---");
+  const dl = parseImportedList(read("copilot-priced.txt"));
+  check(dl.length === 26, `parses all 26 lines (${dl.length})`);
+  check(dl.filter((m) => m.enabled).length === 11, "reads Enabled / Disabled");
+  const s55 = dl.find((m) => m.id === "claude-sonnet-5.5");
+  check(s55.enabled === true && s55.pricing?.inPerM === 2 && s55.pricing?.outPerM === 10 && s55.pricing?.source === "listed", 'reads "$2.00 in / $10.00 out" as listed prices');
+  check(dl.find((m) => m.id === "gpt-5-mini").pricing === void 0 && dl.find((m) => m.id === "grok-code-fast-1").pricing === void 0, '"N/A" leaves the price unknown');
+  check(dl.find((m) => m.id === "kimi-k3").label === "Kimi K3" && dl.find((m) => m.id === "mai-code-1.1-flash").enabled === true, "vendor is dropped; multi-word vendors work (Moonshot AI)");
+  check(dl.find((m) => m.id === "claude-opus-4.8-fast").enabled === false, '"(fast mode) Preview" becomes -fast');
+  const dRaw = { providerId: "cp", providerName: "Copilot", kind: "copilot-cli", fetchedAt: 1, source: "import", command: "imports/cp.txt", ok: true, models: dl };
+  const dCat = curate([dRaw], { keepVersionsPerFamily: 2 });
+  const dUse = dCat.models.filter((m) => !m.hidden);
+  check(dUse.every((m) => dl.find((r) => r.id === m.id)?.enabled === true) && dUse.length >= 8, `only the enabled models are shown (${dUse.length})`);
+  check(dUse.find((m) => m.id === "claude-sonnet-5.5").pricing?.outPerM === 10 && dUse.find((m) => m.id === "claude-sonnet-5.5").pricing?.source === "listed", "your prices are used instead of estimates");
+  check(parseImportedList("claude-sonnet-5.5\ngpt-5.6-luna\n").length === 2, "a plain list of ids still works");
+  check(parseImportedList(read("copilot.txt")).length === 26, "the Copilot settings-page format still works");
+  console.log("\n--- reasoning level ---");
+  const opusEntry = dev.find((m) => m.family === "claude-opus" && m.version === 5.5);
+  const dvp = { ...createProvider("devin", []), id: "devin", name: "Devin", agentic: true, defaultReasoning: "medium", maxParallel: 5, minSpacingSeconds: 0, maxSessionsPerWindow: 0 };
+  check(supportedLevels(dvp, opusEntry).join() === "low,medium,high,xhigh,max", "levels come from the model's effort variants, in order");
+  check(supportedLevels(dvp, void 0).length === 0, "a model without effort variants or a flag has no reasoning control");
+  check(supportedLevels({ ...dvp, effortFlag: "--effort" }, void 0).join() === "low,medium,high,xhigh,max", "a provider effort flag enables the standard levels");
+  const easyT = mkTicket({ priority: "Low", estimate: "S" });
+  const normT = mkTicket({ priority: "Normal", estimate: "M" });
+  const hardT = mkTicket({ priority: "P0", type: "Architecture", estimate: "L" });
+  check(pickReasoning(easyT, dvp, opusEntry) === "low", "easy ticket: one step below the default (low)");
+  check(pickReasoning(normT, dvp, opusEntry) === "medium", "normal ticket: the default level");
+  check(["high", "xhigh", "max"].includes(pickReasoning(hardT, dvp, opusEntry)) && order5(pickReasoning(hardT, dvp, opusEntry)) >= order5("high"), "critical architecture ticket: raised at least to high");
+  check(pickReasoning(normT, { ...dvp, defaultReasoning: "high" }, opusEntry) === "high", "the provider default level is the starting point");
+  check(pickReasoning(normT, dvp, opusEntry, "cost") === "low" && pickReasoning(normT, dvp, opusEntry, "speed") === "low", "cost and speed objectives lower it");
+  check(pickReasoning(mkTicket({ labels: ["reasoning:max"] }), dvp, opusEntry) === "max" && pickReasoning(mkTicket({ labels: ["reasoning:bogus"] }), dvp, opusEntry) === "medium", "a reasoning:<level> label pins the level (unsupported ones are ignored)");
+  const r1 = resolveReasoning(dvp, opusEntry, "claude-opus-5-5-medium", "high");
+  check(r1.model === "claude-opus-5-5-high" && r1.level === "high" && r1.effort === void 0, "effort variants are selected by model id (claude-opus-5-5-high)");
+  const r2 = resolveReasoning({ ...dvp, effortFlag: "--reasoning-effort" }, void 0, "gpt-x", "high");
+  check(r2.model === "gpt-x" && r2.effort === "high", "without variants the level goes to the CLI flag");
+  check(resolveReasoning(dvp, void 0, "plain", "high").level === "", "unsupported models ignore the level");
+  const effCmd = AgentRunner.formatCliCommand(mkTicket(), { id: "cp", name: "Copilot", type: "agent", agentConfig: { type: "cli", command: 'copilot {model_args} -p "{task}"' } }, os3.tmpdir(), void 0, "b", { shell: "posix", model: "claude-sonnet-5.5", modelFlag: "--model", effort: "high", effortFlag: "--reasoning-effort" });
+  check(effCmd.includes("--model claude-sonnet-5.5") && effCmd.endsWith("--reasoning-effort high"), "the effort flag is appended to the command");
+  check(!AgentRunner.formatCliCommand(mkTicket(), { id: "cp", name: "C", type: "agent", agentConfig: { type: "cli", command: 'copilot -p "x"' } }, os3.tmpdir(), void 0, "b", { shell: "posix", effort: "high; rm -rf ~", effortFlag: "--reasoning-effort" }).includes("rm -rf"), "effort values are validated before reaching a shell");
+  const dvIdx = new CatalogIndex(curate([rawDevin]));
+  const dvSm = new SessionManager(() => dvp, new NullLauncher(), storeWith({}), () => clockNow);
+  const hiOpts = rankOptions(hardT, [dvp], dvSm, { catalog: dvIdx, speed: new SpeedBook(), now: clockNow });
+  const loOpts = rankOptions(easyT, [dvp], dvSm, { catalog: dvIdx, speed: new SpeedBook(), now: clockNow });
+  const hiOpus = hiOpts.find((o) => o.model.startsWith("claude-opus-5-5"));
+  const loOpus = loOpts.find((o) => o.model.startsWith("claude-opus-5-5"));
+  check(!!hiOpus && ["high", "xhigh", "max"].includes(hiOpus.reasoning) && hiOpus.model.endsWith(hiOpus.reasoning), "hard ticket on Opus runs the high-reasoning variant id");
+  check(!loOpus || loOpus.reasoning === "low", "easy ticket never gets more than low");
+  const mediumCost = estimateRun(normT, dvp, "claude-opus-5-5-medium", { catalog: dvIdx, speed: new SpeedBook() }, "medium");
+  const maxCost = estimateRun(normT, dvp, "claude-opus-5-5-max", { catalog: dvIdx, speed: new SpeedBook() }, "max");
+  check(maxCost.estCost > mediumCost.estCost * 2 && maxCost.estMinutes > mediumCost.estMinutes * 2, "max reasoning costs ~2.5x the tokens and time of medium");
+  console.log("\n--- Devin Fusion picker data ---");
+  const combos = fusionCombos(rawDevin);
+  check(combos.length === 575, `finds every fusion combination (${combos.length})`);
+  const mains = [...new Set(combos.map((c2) => c2.main))];
+  check(mains.length > 5 && mains.length < 200 && combos.every((c2) => c2.main && c2.side), `step 1 offers distinct main models (${mains.length}); every combo has a main and a side-kick`);
+  const sw = combos.filter((c2) => c2.side === "SWE-2 Medium");
+  check(sw.length === 80 || sw.length > 40, `step 2 can offer SWE-2 Medium as side-kick (${sw.length} mains)`);
+  const pick = combos.find((c2) => c2.id === "fusion-claude-opus-5-5-medium-sidekick-swe-2-medium");
+  check(!!pick && pick.main === "Claude Opus 5.5 Medium" && pick.side === "SWE-2 Medium" && pick.outPerM === 20, "main + side-kick resolve to the exact Devin model id with its own price");
+  const fCat = new CatalogIndex(curate([rawDevin]));
+  check(fCat.get("devin", pick.id) !== void 0, "a pinned fusion id is recognised by the catalog");
+  const otherFusion = combos.find((c2) => c2.outPerM !== void 0 && c2.outPerM !== 20 && c2.outPerM !== void 0);
+  check(fCat.pricingFor("devin", otherFusion.id)?.outPerM === otherFusion.outPerM, "each fusion id is priced by its own listing, not the family average");
+  fs4.rmSync(tmp, { recursive: true, force: true });
   if (failures) {
     console.error(`
 ${failures} catalog check(s) FAILED`);

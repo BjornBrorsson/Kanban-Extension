@@ -36,6 +36,8 @@ export interface Session {
   hidden?: boolean;
   /** The agent appears to be waiting for the user (permission prompt, login, question...). */
   attention?: string;
+  /** Reasoning level the run was started with ('' = model default). */
+  reasoning?: string;
   /** Work size in points and the estimated cost (USD) / duration (min) this run was planned with. */
   points?: number;
   estCost?: number;
@@ -63,6 +65,7 @@ export interface SessionRequest {
   resumedFrom?: string;
   /** Run in a background terminal (revealed on demand). */
   hidden?: boolean;
+  reasoning?: string;
   points?: number;
   estCost?: number;
   estMinutes?: number;
@@ -408,6 +411,7 @@ export class SessionManager {
       attempt: req.attempt ?? 1,
       resumedFrom: req.resumedFrom,
       hidden: req.hidden,
+      reasoning: req.reasoning,
       points: req.points,
       estCost: req.estCost,
       estMinutes: req.estMinutes

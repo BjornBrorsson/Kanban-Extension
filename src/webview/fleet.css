@@ -33,6 +33,20 @@ label.inline { flex-direction: row; align-items: center; gap: 6px; font-size: 13
 .pill.needs { background: rgba(248,81,73,.2); color: #f85149; }
 tr.attention td { background: rgba(248,81,73,.07); }
 .blocked { font-size: 11px; color: #d29922; margin-top: 3px; }
+.modal-back { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: flex; align-items: center; justify-content: center; z-index: 50; }
+.modal { width: min(720px, 94vw); max-height: 86vh; display: flex; flex-direction: column; background: var(--vscode-editor-background); border: 1px solid var(--vscode-widget-border, #555); border-radius: 10px; padding: 16px 18px; }
+.modal h3 { margin: 0 0 4px; font-size: 16px; }
+.steps { display: flex; gap: 8px; margin: 6px 0 12px; font-size: 12px; }
+.steps span { padding: 2px 10px; border-radius: 10px; background: var(--vscode-input-background); color: var(--vscode-descriptionForeground); }
+.steps span.on { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
+.steps span.done { color: #3fb950; }
+.pick-list { overflow: auto; border: 1px solid var(--vscode-widget-border, #444); border-radius: 6px; margin: 8px 0; max-height: 44vh; }
+.pick-item { padding: 6px 10px; cursor: pointer; border-bottom: 1px solid var(--vscode-widget-border, #333); display: flex; justify-content: space-between; gap: 12px; }
+.pick-item:hover { background: var(--vscode-list-hoverBackground, rgba(255,255,255,.06)); }
+.pick-item.sel { background: var(--vscode-list-activeSelectionBackground, #094771); color: var(--vscode-list-activeSelectionForeground, #fff); }
+.pick-item .meta { color: var(--vscode-descriptionForeground); font-size: 11px; white-space: nowrap; }
+.chip { display: inline-flex; align-items: center; gap: 6px; padding: 2px 4px 2px 10px; margin: 2px 6px 2px 0; border-radius: 12px; background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); font-size: 11px; }
+.chip button { padding: 0 6px; border-radius: 10px; }
 .banner { display: flex; gap: 12px; align-items: center; padding: 10px 14px; margin: 12px 0; border-radius: 8px; border: 1px solid #d29922; background: rgba(210,153,34,.12); }
 .pill.disabled, .pill.cancelled { background: rgba(139,148,158,.2); color: #8b949e; }
 .pill.failed { background: rgba(248,81,73,.18); color: #f85149; }

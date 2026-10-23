@@ -17,6 +17,7 @@ const TITLES: Record<PanelKind, string> = {
 export class FleetPanel {
   private static panels = new Map<PanelKind, FleetPanel>();
   private readonly disposables: vscode.Disposable[] = [];
+  private lastFusionKey = '';
 
   public static show(extensionUri: vscode.Uri, kind: PanelKind): void {
     const existing = FleetPanel.panels.get(kind);
@@ -108,6 +109,19 @@ export class FleetPanel {
         case 'openMessageBoard':
           FleetPanel.show(this.extensionUri, 'messageboard');
           return;
+        case 'addFusion': {
+          const p = fleet.registry.get(m.id);
+          if (p && /^[\w.:-]+$/.test(String(m.model))) {
+            fleet.registry.upsert({ ...p, pinnedModels: [...new Set([...(p.pinnedModels || []), String(m.model)])] });
+            vscode.window.showInformationMessage(`Added fusion model ${m.model} to ${p.name}.`);
+          }
+          break;
+        }
+        case 'removePinned': {
+          const p = fleet.registry.get(m.id);
+          if (p) fleet.registry.upsert({ ...p, pinnedModels: (p.pinnedModels || []).filter(x => x !== m.model) });
+          break;
+        }
         case 'importModels': {
           const text = await vscode.env.clipboard.readText();
           vscode.window.showInformationMessage(await fleet.importModels(m.id, text));
@@ -218,7 +232,12 @@ export class FleetPanel {
       catalog: fleet.catalogSummary()
     };
     if (this.kind === 'providers') {
-      this.panel.webview.postMessage(base);
+      // Fusion combinations (hundreds) are only re-sent when the provider's model list was refreshed.
+      const fusions = fleet.fusionOptions();
+      const key = JSON.stringify(Object.keys(fusions).map(k => [k, fusions[k].length]));
+      const withFusions = key !== this.lastFusionKey ? { ...base, fusions } : base;
+      this.lastFusionKey = key;
+      this.panel.webview.postMessage(withFusions);
       return;
     }
     this.panel.webview.postMessage({

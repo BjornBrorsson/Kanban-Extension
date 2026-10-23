@@ -2,6 +2,7 @@
   const vscode = acquireVsCodeApi();
   const root = document.getElementById('root');
   let presets = [];
+  let fusions = {};
   const dirty = new Set();
 
   function el(tag, props, ...kids) {
@@ -50,6 +51,10 @@
     f.agentic = el('input', { type: 'checkbox' });
     f.agentic.checked = p.agentic !== false;
     f.agentic.addEventListener('change', mark);
+    f.defaultReasoning = el('select', {}, [['', 'Model default'], ['none', 'none'], ['minimal', 'minimal'], ['low', 'low'], ['medium', 'medium'], ['high', 'high'], ['xhigh', 'xhigh'], ['max', 'max']]
+      .map(([v, t]) => el('option', { value: v, text: t, selected: v === (p.defaultReasoning || '') })));
+    f.defaultReasoning.addEventListener('change', mark);
+    f.effortFlag = input('effortFlag', 'text', p.effortFlag, { placeholder: 'e.g. --reasoning-effort (only if no effort model variants)' });
     f.pinned = input('pinnedModels', 'text', (p.pinnedModels || []).join(', '), { placeholder: 'e.g. swe-2-medium, fusion-claude-opus-5-5-high-sidekick-swe-2-medium' });
     f.modelTiers = input('modelTiers', 'text', p.modelTiers, { placeholder: 'opus=5, sonnet=4, haiku=2' });
     f.models = input('models', 'text', p.models.join(', '), { placeholder: 'comma separated, e.g. opus, sonnet, haiku' });
@@ -91,6 +96,7 @@
         id: p.id, kind: p.kind, type: p.type,
         name: f.name.value, account: f.account.value, enabled: f.enabled.checked,
         command: f.command.value, resumeCommand: f.resumeCommand.value, modelTiers: f.modelTiers.value,
+        defaultReasoning: f.defaultReasoning.value, effortFlag: f.effortFlag.value,
         pinnedModels: f.pinned.value.split(',').map(s => s.trim()).filter(Boolean),
         budgetDaily: +f.budgetDaily.value, budgetWeekly: +f.budgetWeekly.value, budgetMonthly: +f.budgetMonthly.value,
         listCommand: f.listCommand.value, agentic: f.agentic.checked, modelFlag: f.modelFlag.value,
@@ -104,6 +110,12 @@
       vscode.postMessage({ type: 'saveProvider', provider: out });
     });
 
+    const fusionBar = p.kind === 'devin' ? el('div', { class: 'wide' },
+      el('div', { class: 'bar-row' },
+        el('button', { class: 'small primary', text: 'Add Fusion Model', title: 'Pair a main model with a side-kick model (Devin Fusion)', onclick: () => openFusionWizard(p) }),
+        el('span', { class: 'note', text: (fusions[p.id] ? fusions[p.id].length + ' combinations available' : 'Refresh models & prices to load the fusion combinations') })),
+      el('div', {}, (p.pinnedModels || []).filter(m => /^fusion-/.test(m)).map(m => el('span', { class: 'chip' }, m,
+        el('button', { class: 'small', text: '\u00d7', title: 'Remove', onclick: () => vscode.postMessage({ type: 'removePinned', id: p.id, model: m }) }))))) : null;
     const hasTask = p.command.includes('{task}');
     return el('div', { class: 'card' + (p.enabled ? '' : ' disabled'), 'data-id': p.id },
       el('div', { class: 'card-head' },
@@ -122,7 +134,10 @@
           (hasTask ? '' : 'No {task}: this provider can only work on tickets (not review or plan).'))),
         el('div', { class: 'wide' }, field('Resume command (optional)', f.resumeCommand,
           'Continues an interrupted conversation via {session_id}. Without it, a resume re-runs the command with a "check the ticket and git state, then continue" prompt.')),
+        fusionBar,
         el('div', { class: 'wide' }, field('Pinned models (always available)', f.pinned, 'Add model ids by hand (comma separated). They survive catalog refreshes even if hidden or missing, and the orchestrator considers them.')),
+        field('Default reasoning level', f.defaultReasoning, 'The orchestrator raises/lowers it per task from here'),
+        field('Reasoning flag (optional)', f.effortFlag, 'CLI flag for effort; models with -low/-high variants do not need it'),
         field('Budget per day (USD, 0 = none)', f.budgetDaily, 'Orchestrator stays under this'),
         field('Budget per week (USD)', f.budgetWeekly),
         field('Budget per month (USD)', f.budgetMonthly),
@@ -176,8 +191,58 @@
     ].filter(Boolean));
   }
 
+  // ---- Add Fusion Model: 1 Pick main model -> 2 Pick side-kick model -> 3 Confirm
+  function openFusionWizard(p) {
+    const all = fusions[p.id] || [];
+    if (!all.length) { vscode.postMessage({ type: 'refreshModels', apply: false }); return; }
+    const st = { step: 1, main: null, side: null, q: '' };
+    const back = el('div', { class: 'modal-back' });
+    const close = () => back.remove();
+    back.addEventListener('click', e => { if (e.target === back) close(); });
+    document.body.append(back);
+
+    const price = f => f.outPerM !== undefined ? '$' + (f.inPerM ?? '?') + ' / $' + f.outPerM + ' per 1M' : '';
+    const draw = () => {
+      const mains = [...new Set(all.map(f => f.main))].sort();
+      const sidesFor = m => all.filter(f => f.main === m);
+      const q = st.q.toLowerCase();
+      const stepper = el('div', { class: 'steps' }, [['1', 'Pick Main Model'], ['2', 'Pick Side-kick Model'], ['3', 'Confirm Fusion Configuration']]
+        .map(([n, t]) => el('span', { class: Number(n) === st.step ? 'on' : Number(n) < st.step ? 'done' : '', text: n + '. ' + t })));
+      let body, footer;
+      if (st.step === 1) {
+        const list = mains.filter(m => m.toLowerCase().includes(q));
+        body = [el('input', { type: 'text', placeholder: 'Search main models\u2026', value: st.q, style: 'width:100%', oninput: e => { st.q = e.target.value; draw(); } }),
+          el('div', { class: 'pick-list' }, list.map(m => el('div', { class: 'pick-item' + (m === st.main ? ' sel' : ''), onclick: () => { st.main = m; st.side = null; st.q = ''; st.step = 2; draw(); } },
+            el('span', { text: m }), el('span', { class: 'meta', text: sidesFor(m).length + ' side-kicks' }))))];
+        footer = [el('button', { text: 'Cancel', onclick: close })];
+      } else if (st.step === 2) {
+        const opts = sidesFor(st.main).filter(f => f.side.toLowerCase().includes(q));
+        body = [el('p', { class: 'sub', text: 'Main model: ' + st.main }),
+          el('input', { type: 'text', placeholder: 'Search side-kick models\u2026', value: st.q, style: 'width:100%', oninput: e => { st.q = e.target.value; draw(); } }),
+          el('div', { class: 'pick-list' }, opts.map(f => el('div', { class: 'pick-item' + (st.side && st.side.id === f.id ? ' sel' : ''), onclick: () => { st.side = f; st.step = 3; draw(); } },
+            el('span', { text: f.side }), el('span', { class: 'meta', text: price(f) }))))];
+        footer = [el('button', { text: 'Back', onclick: () => { st.step = 1; st.q = ''; draw(); } }), el('button', { text: 'Cancel', onclick: close })];
+      } else {
+        const f = st.side;
+        const already = (p.pinnedModels || []).includes(f.id);
+        body = [el('table', {}, el('tbody', {},
+          el('tr', {}, el('td', { text: 'Main model' }), el('td', {}, el('b', { text: f.main }))),
+          el('tr', {}, el('td', { text: 'Side-kick model' }), el('td', {}, el('b', { text: f.side }))),
+          el('tr', {}, el('td', { text: 'Devin model id' }), el('td', {}, el('code', { text: f.id }))),
+          el('tr', {}, el('td', { text: 'Price' }), el('td', { text: price(f) || 'not listed' })),
+          el('tr', {}, el('td', { text: 'Context' }), el('td', { text: f.contextTokens ? Math.round(f.contextTokens / 1000) + 'K tokens' : '' })))),
+          el('p', { class: 'note', text: already ? 'This fusion is already on the provider.' : 'It will be added to Pinned models, so it is always available in the Assign menu and considered by the orchestrator.' })];
+        footer = [el('button', { text: 'Back', onclick: () => { st.step = 2; st.q = ''; draw(); } }), el('span', { class: 'grow' }),
+          el('button', { class: 'primary', text: already ? 'Done' : 'Add fusion model', onclick: () => { if (!already) vscode.postMessage({ type: 'addFusion', id: p.id, model: f.id }); close(); } })];
+      }
+      back.replaceChildren(el('div', { class: 'modal' }, el('h3', { text: 'Add Fusion Model \u2014 ' + p.name }), stepper, ...body, el('div', { class: 'bar-row' }, ...footer)));
+    };
+    draw();
+  }
+
   function render(state) {
     presets = state.presets;
+    if (state.fusions) fusions = state.fusions;
     const list = document.getElementById('providerList') || (() => {
       const kindSel = el('select', { id: 'newKind' }, presets.map(p => el('option', { value: p.kind, text: p.label })));
       root.replaceChildren(

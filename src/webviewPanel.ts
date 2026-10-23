@@ -342,7 +342,7 @@ export class KanbanWebviewManager {
               if (!ticketObj) {
                 vscode.window.showErrorMessage(`Assigned, but could not locate the ticket to start the agent: ${message.ticketPath}`);
               } else if (provider && fleetCtl) {
-                await fleetCtl.dispatchTicket(targetBoard.id, ticketObj, provider.id, message.model);
+                await fleetCtl.dispatchTicket(targetBoard.id, ticketObj, provider.id, message.model, message.reasoning);
               } else if (assignee) {
                 await AgentRunner.dispatch(ticketObj, assignee, targetBoard.rootPath, targetBoard.config);
               }
@@ -436,6 +436,20 @@ export class KanbanWebviewManager {
     });
   }
 
+  /** Reasoning levels the user may pick for this provider (union over its models; empty = no control). */
+  private reasoningLevelsFor(p: any): string[] {
+    const fleet = FleetController.get();
+    const levels = new Set<string>();
+    const catalog = fleet?.catalog;
+    for (const id of p.models || []) {
+      const e = catalog?.get(p.id, id);
+      for (const l of Object.keys(e?.effortVariants || {})) levels.add(l);
+    }
+    if (p.effortFlag) ['low', 'medium', 'high', 'xhigh', 'max'].forEach(l => levels.add(l));
+    const order = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+    return [...levels].sort((a, b) => order.indexOf(a) - order.indexOf(b));
+  }
+
   private hasMessageBoard(): boolean {
     return !!FleetController.get()?.messageBoardDir();
   }
@@ -447,7 +461,8 @@ export class KanbanWebviewManager {
     return fleet.registry.list().filter(p => p.enabled).map(p => {
       const u = fleet.sessions.usage(p);
       return {
-        id: p.id, name: p.name, account: p.account || '', kind: p.kind, models: p.models, defaultModel: p.defaultModel,
+        id: p.id, name: p.name, account: p.account || '', kind: p.kind, models: [...new Set([...p.models, ...(p.pinnedModels || [])])], defaultModel: p.defaultModel,
+        reasoningLevels: this.reasoningLevelsFor(p),
         type: p.type, state: u.state, running: u.running, maxParallel: u.maxParallel
       };
     });

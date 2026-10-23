@@ -75,6 +75,7 @@ var PROVIDER_PRESETS = [
     type: "cli",
     command: `& "{agy_path}" {model_args} -p "{task}" --dangerously-skip-permissions`,
     modelFlag: "--model",
+    effortFlag: "--effort",
     models: [],
     defaultModel: "",
     maxParallel: 2,
@@ -128,6 +129,7 @@ var PROVIDER_PRESETS = [
     type: "cli",
     command: `copilot {model_args} -p "{task}"`,
     modelFlag: "--model",
+    effortFlag: "--reasoning-effort",
     models: [],
     defaultModel: "",
     maxParallel: 1,
@@ -247,6 +249,8 @@ function sanitizeProvider(raw, existingIds = []) {
     enabled: raw?.enabled !== false,
     type: raw?.type === "vscode-command" ? "vscode-command" : raw?.type === "cli" ? "cli" : preset.type,
     command: String(raw?.command ?? preset.command),
+    defaultReasoning: ["none", "minimal", "low", "medium", "high", "xhigh", "max"].includes(String(raw?.defaultReasoning)) ? String(raw.defaultReasoning) : "",
+    effortFlag: raw?.effortFlag !== void 0 ? String(raw.effortFlag).trim() || void 0 : getPreset(kind).effortFlag,
     pinnedModels: Array.isArray(raw?.pinnedModels) ? raw.pinnedModels.map((m) => String(m).trim()).filter(Boolean) : [],
     listCommand: raw?.listCommand ? String(raw.listCommand).slice(0, 300) : void 0,
     agentic: raw?.agentic !== void 0 ? !!raw.agentic : kind !== "ollama" && kind !== "ide-chat",
@@ -756,6 +760,50 @@ function parseCopilotPolicy(text) {
   }
   return out;
 }
+function parseDelimitedModels(text) {
+  const out = [];
+  for (const line of text.replace(/^\uFEFF/, "").split(/\r?\n/)) {
+    if (!line.trim())
+      continue;
+    const delim = line.includes(";") ? ";" : line.includes("	") ? "	" : line.includes("|") ? "|" : "";
+    if (!delim)
+      continue;
+    const cells = line.split(delim).map((c) => c.trim()).filter((c) => c.length);
+    if (cells.length < 2)
+      continue;
+    const stateIdx = cells.findIndex((c) => /^(enabled|disabled|on|off)$/i.test(c));
+    const priceCells = cells.filter((c) => /\$\s*[\d.]+|^free$/i.test(c) || /^n\/?a\b/i.test(c));
+    const rest = cells.filter((c, i) => i !== stateIdx && !priceCells.includes(c));
+    const name = rest[rest.length - 1];
+    if (!name)
+      continue;
+    const enabled = stateIdx >= 0 ? /^(enabled|on)$/i.test(cells[stateIdx]) : void 0;
+    let pricing;
+    const priceText2 = priceCells.join(" ");
+    if (/^free$/i.test(priceText2.trim())) {
+      pricing = { free: true, inPerM: 0, outPerM: 0, source: "listed" };
+    } else {
+      const inp = priceText2.match(/\$\s*([\d.]+)\s*(?:\/\s*1M\s*)?in\b/i);
+      const outp = priceText2.match(/\$\s*([\d.]+)\s*(?:\/\s*1M\s*)?out\b/i);
+      const cached = priceText2.match(/\$\s*([\d.]+)\s*(?:\/\s*1M\s*)?cach\w*/i);
+      if (inp || outp)
+        pricing = { inPerM: inp ? Number(inp[1]) : void 0, outPerM: outp ? Number(outp[1]) : void 0, cachedPerM: cached ? Number(cached[1]) : void 0, source: "listed" };
+    }
+    const id = slugFromDisplayName(name);
+    if (id)
+      out.push({ id, label: name, enabled, pricing, idGuessed: true });
+  }
+  return out;
+}
+function parseImportedList(text) {
+  const policy = parseCopilotPolicy(text);
+  if (policy.length)
+    return policy;
+  const delimited = parseDelimitedModels(text);
+  if (delimited.length)
+    return delimited;
+  return parseGenericModels(text);
+}
 function listCopilotLearned(home = os2.homedir()) {
   const ids = /* @__PURE__ */ new Set();
   const dir = path3.join(home, ".copilot");
@@ -801,8 +849,7 @@ async function listProviderModels(p, env = process.env, importsDir) {
   if (importsDir) {
     try {
       const text = fs3.readFileSync(path3.join(importsDir, `${p.id}.txt`), "utf8");
-      const policy = parseCopilotPolicy(text);
-      const models = policy.length ? policy : parseGenericModels(text);
+      const models = parseImportedList(text);
       if (models.length)
         return { ...base, source: "import", command: `imports/${p.id}.txt`, ok: true, models };
     } catch {
@@ -1002,6 +1049,15 @@ function curate(raws, opts = {}) {
         effortVariants,
         speedVariants: g.items.filter((i) => i.speed).map((i) => i.raw.id),
         members: g.items.map((i) => i.raw.id),
+        memberPricing: (() => {
+          const mp = {};
+          for (const i of g.items) {
+            const p = i.raw.pricing;
+            if (p && !p.free && (p.inPerM !== repItem.raw.pricing?.inPerM || p.outPerM !== repItem.raw.pricing?.outPerM))
+              mp[i.raw.id] = p;
+          }
+          return Object.keys(mp).length ? mp : void 0;
+        })(),
         hidden: false
       });
       if (repItem.raw.enabled === false) {

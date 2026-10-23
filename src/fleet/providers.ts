@@ -35,6 +35,10 @@ export interface AgentProvider {
    * Without it, a resume re-runs `command` with a recovery prompt that tells the agent to check the ticket and git state.
    */
   resumeCommand?: string;
+  /** Default reasoning level ('' = the model's own default). The orchestrator moves up or down from here per task. */
+  defaultReasoning: string;
+  /** CLI flag that sets reasoning effort (e.g. --reasoning-effort). Not needed for models that expose effort as separate ids. */
+  effortFlag?: string;
   /** Models you always want available (e.g. a specific fusion combo), kept even when the catalog hides or omits them. */
   pinnedModels: string[];
   /** Command that prints this provider's models (one per line, id first). Built-in for devin, agy and ollama. */
@@ -73,6 +77,7 @@ export interface ProviderPreset {
   command: string;
   resumeCommand?: string;
   modelFlag?: string;
+  effortFlag?: string;
   models: string[];
   defaultModel: string;
   maxParallel: number;
@@ -98,7 +103,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
   },
   {
     kind: 'antigravity', label: 'Antigravity CLI', type: 'cli',
-    command: `& "{agy_path}" {model_args} -p "{task}" --dangerously-skip-permissions`, modelFlag: '--model',
+    command: `& "{agy_path}" {model_args} -p "{task}" --dangerously-skip-permissions`, modelFlag: '--model', effortFlag: '--effort',
     models: [], defaultModel: '',
     maxParallel: 2, maxSessionsPerWindow: 0, windowMinutes: 60, minSpacingSeconds: 15
   },
@@ -123,7 +128,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
   },
   {
     kind: 'copilot-cli', label: 'GitHub Copilot CLI', type: 'cli',
-    command: `copilot {model_args} -p "{task}"`, modelFlag: '--model',
+    command: `copilot {model_args} -p "{task}"`, modelFlag: '--model', effortFlag: '--reasoning-effort',
     models: [], defaultModel: '',
     maxParallel: 1, maxSessionsPerWindow: 0, windowMinutes: 60, minSpacingSeconds: 10
   },
@@ -206,6 +211,8 @@ export function sanitizeProvider(raw: any, existingIds: string[] = []): AgentPro
     enabled: raw?.enabled !== false,
     type: raw?.type === 'vscode-command' ? 'vscode-command' : (raw?.type === 'cli' ? 'cli' : preset.type),
     command: String(raw?.command ?? preset.command),
+    defaultReasoning: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'].includes(String(raw?.defaultReasoning)) ? String(raw.defaultReasoning) : '',
+    effortFlag: raw?.effortFlag !== undefined ? (String(raw.effortFlag).trim() || undefined) : getPreset(kind).effortFlag,
     pinnedModels: Array.isArray(raw?.pinnedModels) ? raw.pinnedModels.map((m: any) => String(m).trim()).filter(Boolean) : [],
     listCommand: raw?.listCommand ? String(raw.listCommand).slice(0, 300) : undefined,
     agentic: raw?.agentic !== undefined ? !!raw.agentic : kind !== 'ollama' && kind !== 'ide-chat',

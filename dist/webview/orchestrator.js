@@ -103,7 +103,7 @@
       el('thead', {}, el('tr', {}, ['Ticket', 'Agent \u00b7 model', 'Est.', 'When', 'Why', ''].map(h => el('th', { text: h })))),
       el('tbody', {}, state.plan.map(d => el('tr', {},
         el('td', {}, el('a', { class: 'link', text: (d.ticketId ? d.ticketId + ' — ' : '') + d.title, onclick: () => send('openTicket', { path: d.ticketPath }) })),
-        el('td', { text: d.providerName + (d.model ? ' \u00b7 ' + d.model : '') }),
+        el('td', { text: d.providerName + (d.model ? ' \u00b7 ' + d.model : '') + (d.reasoning && !(d.model || '').endsWith(d.reasoning) ? ' (' + d.reasoning + ')' : '') }),
         el('td', { text: d.estMinutes !== undefined ? '~' + Math.round(d.estMinutes) + ' min \u00b7 ' + (d.estCost > 0 ? '$' + d.estCost.toFixed(2) : 'free') : '' }),
         el('td', {}, el('span', { class: 'pill ' + (d.startsNow ? 'ready' : 'queued'), text: d.startsNow ? 'now' : 'queued' })),
         el('td', {}, el('span', { class: 'note', text: d.reason }),
@@ -138,7 +138,7 @@
         const since = s.startedAt || s.queuedAt;
         return el('tr', { class: s.attention ? 'attention' : '' },
           el('td', {}, el('span', { class: 'pill ' + s.status, text: s.status }), s.attention ? el('div', {}, el('span', { class: 'pill needs', text: 'needs you', title: s.attention })) : null, s.hidden && live ? el('div', { class: 'note', text: 'background' }) : null),
-          el('td', { text: s.providerName + (s.model ? ' · ' + s.model : '') }),
+          el('td', { text: s.providerName + (s.model ? ' · ' + s.model : '') + (s.reasoning && !(s.model || '').endsWith(s.reasoning) ? ' (' + s.reasoning + ')' : '') }),
           el('td', { text: s.role }),
           el('td', {}, el('a', { class: 'link', text: (s.ticketId ? s.ticketId + ' — ' : '') + s.ticketTitle, onclick: () => send('openTicket', { path: s.ticketPath }) }),
             s.note ? el('div', { class: 'note', text: s.note }) : null,

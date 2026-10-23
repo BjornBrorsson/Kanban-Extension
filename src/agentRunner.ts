@@ -20,6 +20,9 @@ export const DEFAULT_TASK = 'Review requirements and implement ticket {ticket_pa
 export interface FormatOptions {
   /** Instruction text substituted for {task} (defaults to implementing the ticket). */
   task?: string;
+  /** Reasoning level for {effort_args}, with its CLI flag (e.g. --reasoning-effort). */
+  effort?: string;
+  effortFlag?: string;
   /** Conversation id for {session_id}; only a UUID-shaped value is accepted. */
   sessionId?: string;
   model?: string;
@@ -149,6 +152,8 @@ export class AgentRunner {
     // target shell so a title like  x"; rm -rf ~; "  or  $(cmd)  stays inert inside the quoted prompt.
     const model = options.model && MODEL_ID_PATTERN.test(options.model) ? options.model : '';
     const modelArgs = model && options.modelFlag ? `${options.modelFlag} ${model}` : '';
+    const effort = options.effort && /^[a-z]+$/.test(options.effort) ? options.effort : '';
+    const effortArgs = effort && options.effortFlag ? `${options.effortFlag} ${effort}` : '';
 
     // {task} is the instruction text (implement / review / plan). Its own placeholders are expanded with raw
     // values first, then the whole sentence is escaped once.
@@ -172,6 +177,7 @@ export class AgentRunner {
       '{model}': model,
       '{session_id}': options.sessionId && SESSION_ID_PATTERN.test(options.sessionId) ? options.sessionId : '',
       '{model_args}': modelArgs,
+      '{effort_args}': effortArgs,
       '{agy_path}': agyPath,
       '{antigravity_path}': agyPath,
       '{executable}': config.path || config.executable || agyPath,
@@ -201,6 +207,11 @@ export class AgentRunner {
     // A model was chosen but the template has no placeholder for it: append the provider's model flag.
     if (modelArgs && !command.includes('{model_args}') && !command.includes('{model}')) {
       command = `${command.trimEnd()} ${modelArgs}`;
+    }
+
+    // A reasoning level was chosen but the template has no placeholder: append the effort flag.
+    if (effortArgs && !command.includes('{effort_args}')) {
+      command = `${command.trimEnd()} ${effortArgs}`;
     }
 
     // Single pass: a substituted value is never re-scanned, so ticket text containing "{model}" etc. stays literal.

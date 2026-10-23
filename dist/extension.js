@@ -1905,6 +1905,8 @@ var AgentRunner = class {
     const agyPath = this.resolveAntigravityPath(config.path || config.executable, effectiveBoardConfig);
     const model = options.model && MODEL_ID_PATTERN.test(options.model) ? options.model : "";
     const modelArgs = model && options.modelFlag ? `${options.modelFlag} ${model}` : "";
+    const effort = options.effort && /^[a-z]+$/.test(options.effort) ? options.effort : "";
+    const effortArgs = effort && options.effortFlag ? `${options.effortFlag} ${effort}` : "";
     const rawTask = (options.task || DEFAULT_TASK).replace(/\{ticket_path\}/g, () => ticket.path).replace(/\{ticket_title\}/g, () => ticket.title).replace(/\{ticket_id\}/g, () => ticket.id);
     const replacements = {
       "{task}": esc(rawTask),
@@ -1921,6 +1923,7 @@ var AgentRunner = class {
       "{model}": model,
       "{session_id}": options.sessionId && SESSION_ID_PATTERN.test(options.sessionId) ? options.sessionId : "",
       "{model_args}": modelArgs,
+      "{effort_args}": effortArgs,
       "{agy_path}": agyPath,
       "{antigravity_path}": agyPath,
       "{executable}": config.path || config.executable || agyPath,
@@ -1942,6 +1945,9 @@ var AgentRunner = class {
     }
     if (modelArgs && !command.includes("{model_args}") && !command.includes("{model}")) {
       command = `${command.trimEnd()} ${modelArgs}`;
+    }
+    if (effortArgs && !command.includes("{effort_args}")) {
+      command = `${command.trimEnd()} ${effortArgs}`;
     }
     command = command.replace(/\{[a-z_]+\}/g, (m) => m in replacements ? replacements[m] : m);
     command = command.replace(/ {2,}/g, " ").trim();
@@ -2182,6 +2188,7 @@ var PROVIDER_PRESETS = [
     type: "cli",
     command: `& "{agy_path}" {model_args} -p "{task}" --dangerously-skip-permissions`,
     modelFlag: "--model",
+    effortFlag: "--effort",
     models: [],
     defaultModel: "",
     maxParallel: 2,
@@ -2235,6 +2242,7 @@ var PROVIDER_PRESETS = [
     type: "cli",
     command: `copilot {model_args} -p "{task}"`,
     modelFlag: "--model",
+    effortFlag: "--reasoning-effort",
     models: [],
     defaultModel: "",
     maxParallel: 1,
@@ -2354,6 +2362,8 @@ function sanitizeProvider(raw, existingIds = []) {
     enabled: raw?.enabled !== false,
     type: raw?.type === "vscode-command" ? "vscode-command" : raw?.type === "cli" ? "cli" : preset.type,
     command: String(raw?.command ?? preset.command),
+    defaultReasoning: ["none", "minimal", "low", "medium", "high", "xhigh", "max"].includes(String(raw?.defaultReasoning)) ? String(raw.defaultReasoning) : "",
+    effortFlag: raw?.effortFlag !== void 0 ? String(raw.effortFlag).trim() || void 0 : getPreset(kind).effortFlag,
     pinnedModels: Array.isArray(raw?.pinnedModels) ? raw.pinnedModels.map((m) => String(m).trim()).filter(Boolean) : [],
     listCommand: raw?.listCommand ? String(raw.listCommand).slice(0, 300) : void 0,
     agentic: raw?.agentic !== void 0 ? !!raw.agentic : kind !== "ollama" && kind !== "ide-chat",
@@ -2907,6 +2917,7 @@ var SessionManager = class {
       attempt: req.attempt ?? 1,
       resumedFrom: req.resumedFrom,
       hidden: req.hidden,
+      reasoning: req.reasoning,
       points: req.points,
       estCost: req.estCost,
       estMinutes: req.estMinutes
@@ -3139,12 +3150,12 @@ function isFile(p) {
     return false;
   }
 }
-function extraSearchDirs(env3 = process.env) {
-  const home = env3.USERPROFILE || env3.HOME || os.homedir();
+function extraSearchDirs(env4 = process.env) {
+  const home = env4.USERPROFILE || env4.HOME || os.homedir();
   const dirs = [];
   if (isWin()) {
-    const local = env3.LOCALAPPDATA || path9.join(home, "AppData", "Local");
-    const roaming = env3.APPDATA || path9.join(home, "AppData", "Roaming");
+    const local = env4.LOCALAPPDATA || path9.join(home, "AppData", "Local");
+    const roaming = env4.APPDATA || path9.join(home, "AppData", "Roaming");
     dirs.push(
       path9.join(roaming, "npm"),
       path9.join(local, "Programs", "Ollama"),
@@ -3154,10 +3165,10 @@ function extraSearchDirs(env3 = process.env) {
       path9.join(local, "Microsoft", "WindowsApps"),
       path9.join(home, ".local", "bin"),
       path9.join(home, ".claude", "local"),
-      path9.join(env3.ProgramFiles || "C:\\Program Files", "Ollama"),
-      path9.join(env3.ProgramFiles || "C:\\Program Files", "agy", "bin")
+      path9.join(env4.ProgramFiles || "C:\\Program Files", "Ollama"),
+      path9.join(env4.ProgramFiles || "C:\\Program Files", "agy", "bin")
     );
-    for (const root of [path9.join(local, "fnm_multishells"), env3.FNM_DIR ? path9.join(env3.FNM_DIR, "node-versions") : "", "C:\\fnm\\node-versions"]) {
+    for (const root of [path9.join(local, "fnm_multishells"), env4.FNM_DIR ? path9.join(env4.FNM_DIR, "node-versions") : "", "C:\\fnm\\node-versions"]) {
       if (!root || !fs6.existsSync(root))
         continue;
       try {
@@ -3180,8 +3191,8 @@ function extraSearchDirs(env3 = process.env) {
   }
   return dirs;
 }
-function findExecutable(names, env3 = process.env, extraDirs = extraSearchDirs(env3)) {
-  const pathDirs = (env3.PATH || env3.Path || "").split(path9.delimiter).filter(Boolean);
+function findExecutable(names, env4 = process.env, extraDirs = extraSearchDirs(env4)) {
+  const pathDirs = (env4.PATH || env4.Path || "").split(path9.delimiter).filter(Boolean);
   const dirs = [...pathDirs, ...extraDirs];
   const exts = pathExts();
   for (const name of names) {
@@ -3195,21 +3206,21 @@ function findExecutable(names, env3 = process.env, extraDirs = extraSearchDirs(e
   }
   return void 0;
 }
-function findForKind(kind, env3 = process.env, extraDirs) {
+function findForKind(kind, env4 = process.env, extraDirs) {
   const names = EXECUTABLE_NAMES[kind];
   if (!names)
     return void 0;
   if (kind === "antigravity") {
-    const local = env3.LOCALAPPDATA ? path9.join(env3.LOCALAPPDATA, "agy", "bin", "agy.exe") : "";
+    const local = env4.LOCALAPPDATA ? path9.join(env4.LOCALAPPDATA, "agy", "bin", "agy.exe") : "";
     if (local && isFile(local))
       return local;
     for (const key of ["AGY_PATH", "ANTIGRAVITY_PATH"]) {
-      const v = env3[key];
+      const v = env4[key];
       if (v && isFile(v))
         return v;
     }
   }
-  return findExecutable(names, env3, extraDirs);
+  return findExecutable(names, env4, extraDirs);
 }
 function parseOllamaList(text) {
   const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
@@ -3252,10 +3263,10 @@ async function detectOllamaModels(host = "127.0.0.1:11434", exePath) {
     });
   });
 }
-async function detectAll(env3 = process.env) {
+async function detectAll(env4 = process.env) {
   const out = [];
   for (const kind of Object.keys(EXECUTABLE_NAMES)) {
-    const p = findForKind(kind, env3);
+    const p = findForKind(kind, env4);
     if (!p)
       continue;
     const d = { kind, path: p };
@@ -3265,8 +3276,8 @@ async function detectAll(env3 = process.env) {
   }
   return out;
 }
-async function detectOne(kind, env3 = process.env) {
-  const p = findForKind(kind, env3);
+async function detectOne(kind, env4 = process.env) {
+  const p = findForKind(kind, env4);
   const d = { kind, path: p };
   if (kind === "ollama")
     d.models = await detectOllamaModels(void 0, p);
@@ -3653,6 +3664,50 @@ function parseCopilotPolicy(text) {
   }
   return out;
 }
+function parseDelimitedModels(text) {
+  const out = [];
+  for (const line of text.replace(/^\uFEFF/, "").split(/\r?\n/)) {
+    if (!line.trim())
+      continue;
+    const delim = line.includes(";") ? ";" : line.includes("	") ? "	" : line.includes("|") ? "|" : "";
+    if (!delim)
+      continue;
+    const cells = line.split(delim).map((c) => c.trim()).filter((c) => c.length);
+    if (cells.length < 2)
+      continue;
+    const stateIdx = cells.findIndex((c) => /^(enabled|disabled|on|off)$/i.test(c));
+    const priceCells = cells.filter((c) => /\$\s*[\d.]+|^free$/i.test(c) || /^n\/?a\b/i.test(c));
+    const rest = cells.filter((c, i) => i !== stateIdx && !priceCells.includes(c));
+    const name = rest[rest.length - 1];
+    if (!name)
+      continue;
+    const enabled = stateIdx >= 0 ? /^(enabled|on)$/i.test(cells[stateIdx]) : void 0;
+    let pricing;
+    const priceText2 = priceCells.join(" ");
+    if (/^free$/i.test(priceText2.trim())) {
+      pricing = { free: true, inPerM: 0, outPerM: 0, source: "listed" };
+    } else {
+      const inp = priceText2.match(/\$\s*([\d.]+)\s*(?:\/\s*1M\s*)?in\b/i);
+      const outp = priceText2.match(/\$\s*([\d.]+)\s*(?:\/\s*1M\s*)?out\b/i);
+      const cached = priceText2.match(/\$\s*([\d.]+)\s*(?:\/\s*1M\s*)?cach\w*/i);
+      if (inp || outp)
+        pricing = { inPerM: inp ? Number(inp[1]) : void 0, outPerM: outp ? Number(outp[1]) : void 0, cachedPerM: cached ? Number(cached[1]) : void 0, source: "listed" };
+    }
+    const id = slugFromDisplayName(name);
+    if (id)
+      out.push({ id, label: name, enabled, pricing, idGuessed: true });
+  }
+  return out;
+}
+function parseImportedList(text) {
+  const policy = parseCopilotPolicy(text);
+  if (policy.length)
+    return policy;
+  const delimited = parseDelimitedModels(text);
+  if (delimited.length)
+    return delimited;
+  return parseGenericModels(text);
+}
 function listCopilotLearned(home = os2.homedir()) {
   const ids = /* @__PURE__ */ new Set();
   const dir = path11.join(home, ".copilot");
@@ -3693,24 +3748,23 @@ function runCapture(exe, args, timeoutMs = 3e4) {
     });
   });
 }
-async function listProviderModels(p, env3 = process.env, importsDir) {
+async function listProviderModels(p, env4 = process.env, importsDir) {
   const base = { providerId: p.id, providerName: p.name, kind: p.kind, fetchedAt: Date.now() };
   if (importsDir) {
     try {
       const text = fs8.readFileSync(path11.join(importsDir, `${p.id}.txt`), "utf8");
-      const policy = parseCopilotPolicy(text);
-      const models = policy.length ? policy : parseGenericModels(text);
+      const models = parseImportedList(text);
       if (models.length)
         return { ...base, source: "import", command: `imports/${p.id}.txt`, ok: true, models };
     } catch {
     }
   }
-  const exe = p.path || findForKind(p.kind, env3);
+  const exe = p.path || findForKind(p.kind, env4);
   const fail = (command, error) => ({ ...base, source: "command", command, ok: false, error, models: [] });
   try {
     if (p.listCommand) {
       const parts = p.listCommand.trim().split(/\s+/);
-      const bin = parts[0] === p.kind || !path11.isAbsolute(parts[0]) ? findExecutable([parts[0]], env3) || parts[0] : parts[0];
+      const bin = parts[0] === p.kind || !path11.isAbsolute(parts[0]) ? findExecutable([parts[0]], env4) || parts[0] : parts[0];
       const text = await runCapture(bin, parts.slice(1));
       return { ...base, source: "command", command: p.listCommand, ok: true, models: parseGenericModels(text) };
     }
@@ -3899,6 +3953,15 @@ function curate(raws, opts = {}) {
         effortVariants,
         speedVariants: g.items.filter((i) => i.speed).map((i) => i.raw.id),
         members: g.items.map((i) => i.raw.id),
+        memberPricing: (() => {
+          const mp = {};
+          for (const i of g.items) {
+            const p = i.raw.pricing;
+            if (p && !p.free && (p.inPerM !== repItem.raw.pricing?.inPerM || p.outPerM !== repItem.raw.pricing?.outPerM))
+              mp[i.raw.id] = p;
+          }
+          return Object.keys(mp).length ? mp : void 0;
+        })(),
         hidden: false
       });
       if (repItem.raw.enabled === false) {
@@ -4019,12 +4082,12 @@ var CatalogStore = class {
     this.writeJson(this.benchPath, b);
   }
   /** Step 1: ask every provider for its models and save the raw results. */
-  async refreshRaw(providers, env3 = process.env) {
+  async refreshRaw(providers, env4 = process.env) {
     const out = [];
     for (const p of providers) {
       if (!p.enabled)
         continue;
-      const raw = await listProviderModels(p, env3, this.importsDir);
+      const raw = await listProviderModels(p, env4, this.importsDir);
       this.saveRaw(raw);
       out.push(raw);
     }
@@ -4069,6 +4132,11 @@ var CatalogIndex = class {
   get(providerId, modelId) {
     return this.byKey.get(`${providerId}::${modelId}`);
   }
+  /** Price of this exact id: its own listed price when it differs from the family's (fusion combos), else the entry's. */
+  pricingFor(providerId, modelId) {
+    const e = this.get(providerId, modelId);
+    return e?.memberPricing?.[modelId] || e?.pricing;
+  }
   visible(providerId) {
     return (this.catalog?.models || []).filter((m) => m.providerId === providerId && !m.hidden);
   }
@@ -4076,6 +4144,20 @@ var CatalogIndex = class {
     return !!this.catalog?.models.length;
   }
 };
+function fusionCombos(raw) {
+  return raw.models.filter((m) => m.family === "fusion" || /^fusion-/.test(m.id)).map((m) => {
+    const label = m.label || m.id;
+    const lm = label.match(/^Fusion\s*\((.+?)\s\+\s(.+)\)\s*$/i);
+    let main = lm?.[1];
+    let side = lm?.[2];
+    if (!main || !side) {
+      const im = m.id.match(/^fusion-(.+?)-sidekick-(.+)$/);
+      main = im?.[1] || label;
+      side = im?.[2] || "";
+    }
+    return { id: m.id, main, side, inPerM: m.pricing?.inPerM, outPerM: m.pricing?.outPerM, contextTokens: m.contextTokens };
+  });
+}
 function priceText(p) {
   if (!p)
     return "?";
@@ -4208,6 +4290,61 @@ var SpeedBook = class {
   }
 };
 
+// src/fleet/reasoning.ts
+var REASONING_LEVELS = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
+var REASONING_FACTOR = { none: 0.55, minimal: 0.65, low: 0.75, medium: 1, high: 1.4, xhigh: 1.9, max: 2.5 };
+function isLevel(v) {
+  return !!v && REASONING_LEVELS.includes(v);
+}
+var order = (l) => REASONING_LEVELS.indexOf(l);
+function supportedLevels(provider, entry) {
+  const variants = Object.keys(entry?.effortVariants || {}).filter(isLevel);
+  if (variants.length >= 2)
+    return variants.sort((a, b) => order(a) - order(b));
+  if (provider.effortFlag)
+    return ["low", "medium", "high", "xhigh", "max"];
+  return [];
+}
+function pickReasoning(ticket, provider, entry, objective = "balanced") {
+  const levels = supportedLevels(provider, entry);
+  if (!levels.length)
+    return "";
+  const label = (ticket.labels || []).map((l) => l.replace(/[`\s]/g, "")).find((l) => /^reasoning:/i.test(l));
+  if (label) {
+    const wanted = label.split(":")[1].toLowerCase();
+    if (levels.includes(wanted))
+      return wanted;
+  }
+  const baseline = isLevel(provider.defaultReasoning) && levels.includes(provider.defaultReasoning) ? provider.defaultReasoning : levels.includes("medium") ? "medium" : levels[Math.floor(levels.length / 2)];
+  let shift = 0;
+  const need = requiredTier(ticket);
+  if (need >= 5)
+    shift += 2;
+  else if (need === 4)
+    shift += 1;
+  if (priorityRank(ticket.priority) === 3 || /^(xs|s\b|small)/i.test(ticket.estimate || ""))
+    shift -= 1;
+  if (priorityRank(ticket.priority) === 0)
+    shift += 1;
+  if (/^(l|xl|large)\b/i.test(ticket.estimate || ""))
+    shift += 1;
+  if (objective === "cost" || objective === "speed")
+    shift -= 1;
+  shift = Math.max(-2, Math.min(2, shift));
+  const idx = Math.max(0, Math.min(levels.length - 1, levels.indexOf(baseline) + shift));
+  return levels[idx];
+}
+function resolveReasoning(provider, entry, model, level) {
+  if (!level || !isLevel(level))
+    return { model, level: "" };
+  const variants = entry?.effortVariants || {};
+  if (variants[level])
+    return { model: variants[level], level };
+  if (provider.effortFlag)
+    return { model, effort: level, level };
+  return { model, level: "" };
+}
+
 // src/fleet/optimizer.ts
 var OBJECTIVES = {
   balanced: { timeValuePerMin: 0.2, quotaValue: 50 },
@@ -4240,20 +4377,21 @@ function quotaPressure(p, sessions, now) {
   }
   return { lambdaCount, lambdaBudget, share };
 }
-function estimateRun(ticket, p, model, ctx) {
+function estimateRun(ticket, p, model, ctx, level = "") {
   const points = ticketPoints(ticket);
   const entry = ctx.catalog.get(p.id, model);
   const local = entry ? entry.local : p.kind === "ollama" || p.kind === "ollama-aider";
   const hasOverride = parseTierOverrides(p.modelTiers)[model.toLowerCase()] !== void 0;
   const tier = entry && !hasOverride ? entry.tier : modelTier(p, model);
-  const pricing = entry?.pricing || estimatePricing(tier, local);
+  const pricing = ctx.catalog.pricingFor(p.id, model) || entry?.pricing || estimatePricing(tier, local);
+  const factor = REASONING_FACTOR[level] ?? 1;
   const tps = priorTps(tier, local, entry?.sizeB, ctx.bench?.[`${p.id}::${model}`]?.tps);
   return {
     points,
     tier,
     local,
-    estCost: estimateCost(pricing, points),
-    estMinutes: ctx.speed.predict(p.id, model, points, priorMinutes(points, tps))
+    estCost: estimateCost(pricing, points) * factor,
+    estMinutes: ctx.speed.predict(p.id, model, points, priorMinutes(points, tps)) * factor
   };
 }
 function candidateModels(p, catalog) {
@@ -4272,7 +4410,12 @@ function rankOptions(ticket, providers, sessions, ctx, restrictTo) {
     for (const model of candidateModels(p, ctx.catalog)) {
       if (sessions.modelBlock(p.id, model, now))
         continue;
-      const run = estimateRun(ticket, p, model, ctx);
+      const entry = ctx.catalog.get(p.id, model);
+      const wanted = pickReasoning(ticket, p, entry, ctx.objective || "balanced");
+      const resolved = resolveReasoning(p, entry, model, wanted);
+      if (resolved.model !== model && sessions.modelBlock(p.id, resolved.model, now))
+        continue;
+      const run = estimateRun(ticket, p, resolved.model, ctx, resolved.level);
       const { tier, estCost, estMinutes } = run;
       if (tier < needed)
         continue;
@@ -4294,16 +4437,18 @@ function rankOptions(ticket, providers, sessions, ctx, restrictTo) {
       const startsNow = waitMinutes === 0;
       options.push({
         provider: p,
-        model,
+        model: resolved.model,
         tier,
         points,
         estMinutes,
         estCost,
+        reasoning: resolved.level,
+        effort: resolved.effort,
         waitMinutes,
         lambda,
         score,
         startsNow,
-        summary: `${p.name}${model ? " \xB7 " + model : ""}: ~${Math.round(estMinutes)} min${estCost > 0 ? `, ~$${estCost.toFixed(2)}` : ", free"}${waitMinutes > 0 ? `, starts in ~${Math.round(waitMinutes)} min` : ""}${lambda > 0.5 ? `, quota ${lambda >= 2 ? "scarce" : "tight"}` : ""}`
+        summary: `${p.name}${resolved.model ? " \xB7 " + resolved.model : ""}${resolved.level && !resolved.model.endsWith(resolved.level) ? " (" + resolved.level + ")" : ""}: ~${Math.round(estMinutes)} min${estCost > 0 ? `, ~$${estCost.toFixed(2)}` : ", free"}${waitMinutes > 0 ? `, starts in ~${Math.round(waitMinutes)} min` : ""}${lambda > 0.5 ? `, quota ${lambda >= 2 ? "scarce" : "tight"}` : ""}`
       });
     }
   }
@@ -4389,6 +4534,7 @@ function planWork(candidates, providers, sessions, opts = {}) {
         estMinutes: best.estMinutes,
         estCost: best.estCost,
         points: best.points,
+        reasoning: best.reasoning,
         alternatives: ranked.slice(1, 4).map((o) => o.summary)
       });
       continue;
@@ -4919,6 +5065,10 @@ var FleetController = class _FleetController {
   // ---------------------------------------------------------------- starting sessions
   async startSession(provider, model, role, ticket, boardId, prebuilt, task, queueIfBusy = true, extra = {}) {
     const agentSessionId = extra.agentSessionId || (0, import_crypto.randomUUID)();
+    const entry = this.catalog.get(provider.id, model);
+    const wanted = extra.reasoning === void 0 || extra.reasoning === "auto" ? pickReasoning(ticket, provider, entry, this.settings.objective) : extra.reasoning === "default" ? "" : extra.reasoning;
+    const resolved = resolveReasoning(provider, entry, model, wanted);
+    model = resolved.model;
     const holder = this.claimedByOther(ticket, provider.name);
     if (holder && holder !== provider.name) {
       vscode4.window.showWarningMessage(`"${ticket.title}" is claimed by ${holder} on the Message Board. Release the claim there (or pick another ticket) before starting ${provider.name}.`);
@@ -4946,17 +5096,20 @@ var FleetController = class _FleetController {
       payload = await AgentRunner.prepareLaunch(ticket, extra.assignee || providerToAssignee(provider), boardRoot, board?.config, {
         model,
         modelFlag: provider.modelFlag,
+        effort: resolved.effort,
+        effortFlag: provider.effortFlag,
         task,
         sessionId: agentSessionId
       }) || void 0;
     }
     if (!payload)
       return void 0;
-    const run = estimateRun(ticket, provider, model, this.optimizerBase());
+    const run = estimateRun(ticket, provider, model, this.optimizerBase(), resolved.level);
     const session = await this.sessions.request({
       provider,
       model,
       role,
+      reasoning: resolved.level,
       points: run.points,
       estCost: run.estCost,
       estMinutes: Math.round(run.estMinutes),
@@ -4981,7 +5134,7 @@ var FleetController = class _FleetController {
     return session;
   }
   /** Assign menu / card action: run a ticket on a specific provider + model. */
-  async dispatchTicket(boardId, ticket, providerId, model) {
+  async dispatchTicket(boardId, ticket, providerId, model, reasoning) {
     const provider = this.registry.get(providerId);
     if (!provider) {
       vscode4.window.showErrorMessage(`Agent provider "${providerId}" not found. Open Agent Providers to configure it.`);
@@ -4992,7 +5145,7 @@ var FleetController = class _FleetController {
       return false;
     }
     const chosen = model && (provider.models.length === 0 || provider.models.includes(model)) ? model : provider.defaultModel;
-    return !!await this.startSession(provider, chosen, "worker", ticket, boardId);
+    return !!await this.startSession(provider, chosen, "worker", ticket, boardId, void 0, void 0, true, { reasoning: reasoning || "auto" });
   }
   // ---------------------------------------------------------------- planning
   candidates() {
@@ -5060,14 +5213,30 @@ var FleetController = class _FleetController {
     const p = this.registry.get(providerId);
     if (!p)
       return "Provider not found.";
-    const probe = parseCopilotPolicy(text);
-    const n = probe.length || text.split(/\r?\n/).filter((l) => l.trim()).length;
-    if (!text.trim() || !n)
-      return "The clipboard has no model list to import.";
+    const probe = parseImportedList(text);
+    if (!text.trim())
+      return "The clipboard is empty. Copy your model list first, then click Import models.";
+    if (!probe.length)
+      return "Could not find any models in the clipboard text. Expected lines like: Anthropic; Claude Sonnet 5.5; Enabled; $2.00 in / $10.00 out (or the Copilot settings page text, or one model id per line).";
     this.catalogStore.saveImport(p.id, text);
     const summary = await this.refreshCatalog(false);
-    const on = probe.filter((m) => m.enabled).length;
-    return `Imported ${probe.length ? `${probe.length} models for ${p.name} (${on} enabled)` : `a model list for ${p.name}`}. ${summary}`;
+    const on = probe.filter((m) => m.enabled !== false).length;
+    return `Imported ${probe.length} models for ${p.name} (${on} enabled, ${probe.length - on} disabled). ${summary}`;
+  }
+  /**
+   * Devin "fusion" models pair a main model with a side-kick (id: fusion-<main>-sidekick-<side>). Returns every valid
+   * combination Devin reported, per Devin provider, so the UI can offer them as a main -> side-kick picker.
+   */
+  fusionOptions() {
+    const out = {};
+    const raws = this.catalogStore.loadRaws();
+    for (const p of this.registry.list().filter((x) => x.kind === "devin")) {
+      const raw = raws.find((r) => r.providerId === p.id);
+      const list = raw ? fusionCombos(raw) : [];
+      if (list.length)
+        out[p.id] = list;
+    }
+    return out;
   }
   /** Compact view of the catalog for the UI. */
   catalogSummary() {
@@ -5122,7 +5291,7 @@ var FleetController = class _FleetController {
         ticket = this.findTicket(path13.join(found.board.rootPath, ongoing.name, path13.basename(found.ticket.path)))?.ticket || ticket;
       }
     }
-    return !!await this.startSession(provider, decision.model, "worker", ticket, found.board.id, void 0, void 0, true, { hidden: this.settings.backgroundTerminals });
+    return !!await this.startSession(provider, decision.model, "worker", ticket, found.board.id, void 0, void 0, true, { hidden: this.settings.backgroundTerminals, reasoning: decision.reasoning ?? "auto" });
   }
   async runPlan() {
     let started = 0;
@@ -5279,7 +5448,8 @@ var FleetController = class _FleetController {
       attempt: (s.attempt || 1) + 1,
       resumedFrom: s.id,
       assignee,
-      hidden: opts.background ?? s.hidden
+      hidden: opts.background ?? s.hidden,
+      reasoning: s.reasoning === void 0 ? "default" : s.reasoning || "default"
     });
     if (next)
       this.sessions.markResumed(s.id, next.id);
@@ -5752,7 +5922,7 @@ Instructions:
               if (!ticketObj) {
                 vscode5.window.showErrorMessage(`Assigned, but could not locate the ticket to start the agent: ${message.ticketPath}`);
               } else if (provider && fleetCtl) {
-                await fleetCtl.dispatchTicket(targetBoard2.id, ticketObj, provider.id, message.model);
+                await fleetCtl.dispatchTicket(targetBoard2.id, ticketObj, provider.id, message.model, message.reasoning);
               } else if (assignee) {
                 await AgentRunner.dispatch(ticketObj, assignee, targetBoard2.rootPath, targetBoard2.config);
               }
@@ -5834,6 +6004,21 @@ Instructions:
       hasMessageBoard: this.hasMessageBoard()
     });
   }
+  /** Reasoning levels the user may pick for this provider (union over its models; empty = no control). */
+  reasoningLevelsFor(p) {
+    const fleet = FleetController.get();
+    const levels = /* @__PURE__ */ new Set();
+    const catalog = fleet?.catalog;
+    for (const id of p.models || []) {
+      const e = catalog?.get(p.id, id);
+      for (const l of Object.keys(e?.effortVariants || {}))
+        levels.add(l);
+    }
+    if (p.effortFlag)
+      ["low", "medium", "high", "xhigh", "max"].forEach((l) => levels.add(l));
+    const order2 = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
+    return [...levels].sort((a, b) => order2.indexOf(a) - order2.indexOf(b));
+  }
   hasMessageBoard() {
     return !!FleetController.get()?.messageBoardDir();
   }
@@ -5849,8 +6034,9 @@ Instructions:
         name: p.name,
         account: p.account || "",
         kind: p.kind,
-        models: p.models,
+        models: [.../* @__PURE__ */ new Set([...p.models, ...p.pinnedModels || []])],
         defaultModel: p.defaultModel,
+        reasoningLevels: this.reasoningLevelsFor(p),
         type: p.type,
         state: u.state,
         running: u.running,
@@ -6206,6 +6392,7 @@ var FleetPanel = class _FleetPanel {
   }
   static panels = /* @__PURE__ */ new Map();
   disposables = [];
+  lastFusionKey = "";
   static show(extensionUri, kind) {
     const existing = _FleetPanel.panels.get(kind);
     if (existing) {
@@ -6279,6 +6466,20 @@ var FleetPanel = class _FleetPanel {
         case "openMessageBoard":
           _FleetPanel.show(this.extensionUri, "messageboard");
           return;
+        case "addFusion": {
+          const p = fleet.registry.get(m.id);
+          if (p && /^[\w.:-]+$/.test(String(m.model))) {
+            fleet.registry.upsert({ ...p, pinnedModels: [.../* @__PURE__ */ new Set([...p.pinnedModels || [], String(m.model)])] });
+            vscode6.window.showInformationMessage(`Added fusion model ${m.model} to ${p.name}.`);
+          }
+          break;
+        }
+        case "removePinned": {
+          const p = fleet.registry.get(m.id);
+          if (p)
+            fleet.registry.upsert({ ...p, pinnedModels: (p.pinnedModels || []).filter((x) => x !== m.model) });
+          break;
+        }
         case "importModels": {
           const text = await vscode6.env.clipboard.readText();
           vscode6.window.showInformationMessage(await fleet.importModels(m.id, text));
@@ -6391,7 +6592,11 @@ var FleetPanel = class _FleetPanel {
       catalog: fleet.catalogSummary()
     };
     if (this.kind === "providers") {
-      this.panel.webview.postMessage(base);
+      const fusions = fleet.fusionOptions();
+      const key = JSON.stringify(Object.keys(fusions).map((k) => [k, fusions[k].length]));
+      const withFusions = key !== this.lastFusionKey ? { ...base, fusions } : base;
+      this.lastFusionKey = key;
+      this.panel.webview.postMessage(withFusions);
       return;
     }
     this.panel.webview.postMessage({
@@ -6442,6 +6647,25 @@ async function activate(context) {
     }),
     vscode7.commands.registerCommand("agenticKanban.openProviders", () => {
       FleetPanel.show(context.extensionUri, "providers");
+    }),
+    vscode7.commands.registerCommand("agenticKanban.importModels", async () => {
+      const ctl = FleetController.get();
+      if (!ctl)
+        return;
+      const providers = ctl.registry.list();
+      if (!providers.length) {
+        vscode7.window.showWarningMessage("No agent providers yet. Open Agents and add (or auto-detect) one first.");
+        return;
+      }
+      const preferred = providers.find((p) => p.kind === "copilot-cli");
+      const pick = providers.length === 1 ? { p: providers[0] } : await vscode7.window.showQuickPick(
+        providers.map((p) => ({ label: p.name, description: p.kind, p })),
+        { placeHolder: "Which provider is this model list for? (copy the list to the clipboard first)", ...preferred ? {} : {} }
+      );
+      if (!pick)
+        return;
+      const text = await vscode7.env.clipboard.readText();
+      vscode7.window.showInformationMessage(await ctl.importModels(pick.p.id, text));
     }),
     vscode7.commands.registerCommand("agenticKanban.openMessageBoard", () => {
       FleetPanel.show(context.extensionUri, "messageboard");

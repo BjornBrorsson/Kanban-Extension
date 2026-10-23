@@ -46,6 +46,24 @@ export async function activate(context: vscode.ExtensionContext) {
       FleetPanel.show(context.extensionUri, 'providers');
     }),
 
+    vscode.commands.registerCommand('agenticKanban.importModels', async () => {
+      const ctl = FleetController.get();
+      if (!ctl) return;
+      const providers = ctl.registry.list();
+      if (!providers.length) {
+        vscode.window.showWarningMessage('No agent providers yet. Open Agents and add (or auto-detect) one first.');
+        return;
+      }
+      const preferred = providers.find(p => p.kind === 'copilot-cli');
+      const pick = providers.length === 1 ? { p: providers[0] } : await vscode.window.showQuickPick(
+        providers.map(p => ({ label: p.name, description: p.kind, p })),
+        { placeHolder: 'Which provider is this model list for? (copy the list to the clipboard first)', ...(preferred ? {} : {}) }
+      );
+      if (!pick) return;
+      const text = await vscode.env.clipboard.readText();
+      vscode.window.showInformationMessage(await ctl.importModels(pick.p.id, text));
+    }),
+
     vscode.commands.registerCommand('agenticKanban.openMessageBoard', () => {
       FleetPanel.show(context.extensionUri, 'messageboard');
     }),

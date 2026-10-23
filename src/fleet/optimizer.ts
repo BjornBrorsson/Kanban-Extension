@@ -5,6 +5,7 @@ import { CatalogIndex, estimatePricing } from './catalog';
 import { PERIODS, budgetOf, estimateCost, periodEnd, periodStart, ticketPoints } from './cost';
 import { SpeedBook, priorMinutes, priorTps } from './speed';
 import { modelTier, parseTierOverrides, requiredTier } from './limits';
+import { REASONING_FACTOR, pickReasoning, resolveReasoning } from './reasoning';
 
 export type Objective = 'balanced' | 'cost' | 'speed';
 
@@ -40,6 +41,9 @@ export interface Option {
   points: number;
   estMinutes: number;
   estCost: number;
+  /** Reasoning level the orchestrator picked ('' = not controllable) and the CLI effort value when set by flag. */
+  reasoning: string;
+  effort?: string;
   /** Minutes until a slot/budget/quota is available (0 = start now). */
   waitMinutes: number;
   lambda: number;
@@ -88,18 +92,19 @@ export function quotaPressure(
 export interface RunEstimate { points: number; tier: number; estCost: number; estMinutes: number; local: boolean }
 
 /** Predicted size, cost and duration of running this ticket on this provider + model. */
-export function estimateRun(ticket: Ticket, p: AgentProvider, model: string, ctx: Pick<OptimizerContext, 'catalog' | 'speed' | 'bench'>): RunEstimate {
+export function estimateRun(ticket: Ticket, p: AgentProvider, model: string, ctx: Pick<OptimizerContext, 'catalog' | 'speed' | 'bench'>, level = ''): RunEstimate {
   const points = ticketPoints(ticket);
   const entry = ctx.catalog.get(p.id, model);
   const local = entry ? entry.local : p.kind === 'ollama' || p.kind === 'ollama-aider';
   const hasOverride = parseTierOverrides(p.modelTiers)[model.toLowerCase()] !== undefined;
   const tier = entry && !hasOverride ? entry.tier : modelTier(p, model);
-  const pricing = entry?.pricing || estimatePricing(tier, local);
+  const pricing = ctx.catalog.pricingFor(p.id, model) || entry?.pricing || estimatePricing(tier, local);
+  const factor = REASONING_FACTOR[level] ?? 1; // thinking harder costs more tokens and time
   const tps = priorTps(tier, local, entry?.sizeB, ctx.bench?.[`${p.id}::${model}`]?.tps);
   return {
     points, tier, local,
-    estCost: estimateCost(pricing, points),
-    estMinutes: ctx.speed.predict(p.id, model, points, priorMinutes(points, tps))
+    estCost: estimateCost(pricing, points) * factor,
+    estMinutes: ctx.speed.predict(p.id, model, points, priorMinutes(points, tps)) * factor
   };
 }
 
@@ -133,7 +138,11 @@ export function rankOptions(
     const pressure = quotaPressure(p, sessions, now);
     for (const model of candidateModels(p, ctx.catalog)) {
       if (sessions.modelBlock(p.id, model, now)) continue;
-      const run = estimateRun(ticket, p, model, ctx);
+      const entry = ctx.catalog.get(p.id, model);
+      const wanted = pickReasoning(ticket, p, entry, ctx.objective || 'balanced');
+      const resolved = resolveReasoning(p, entry, model, wanted);
+      if (resolved.model !== model && sessions.modelBlock(p.id, resolved.model, now)) continue;
+      const run = estimateRun(ticket, p, resolved.model, ctx, resolved.level);
       const { tier, estCost, estMinutes } = run;
       if (tier < needed) continue;
 
@@ -154,8 +163,9 @@ export function rankOptions(
       const score = timeCost + moneyCost + quotaCost;
       const startsNow = waitMinutes === 0;
       options.push({
-        provider: p, model, tier, points, estMinutes, estCost, waitMinutes, lambda, score, startsNow,
-        summary: `${p.name}${model ? ' · ' + model : ''}: ~${Math.round(estMinutes)} min` +
+        provider: p, model: resolved.model, tier, points, estMinutes, estCost, reasoning: resolved.level, effort: resolved.effort,
+        waitMinutes, lambda, score, startsNow,
+        summary: `${p.name}${resolved.model ? ' · ' + resolved.model : ''}${resolved.level && !resolved.model.endsWith(resolved.level) ? ' (' + resolved.level + ')' : ''}: ~${Math.round(estMinutes)} min` +
           `${estCost > 0 ? `, ~$${estCost.toFixed(2)}` : ', free'}` +
           `${waitMinutes > 0 ? `, starts in ~${Math.round(waitMinutes)} min` : ''}` +
           `${lambda > 0.5 ? `, quota ${lambda >= 2 ? 'scarce' : 'tight'}` : ''}`
