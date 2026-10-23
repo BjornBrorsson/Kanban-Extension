@@ -363,6 +363,10 @@ export class KanbanWebviewManager {
         await vscode.commands.executeCommand('agenticKanban.openProviders');
         break;
 
+      case 'openMessageBoard':
+        await vscode.commands.executeCommand('agenticKanban.openMessageBoard');
+        break;
+
       case 'openOrchestrator':
         await vscode.commands.executeCommand('agenticKanban.openOrchestrator');
         break;
@@ -392,7 +396,8 @@ export class KanbanWebviewManager {
         boards: [],
         currentBoard: null,
         overview: null,
-        providers: this.providerSummaries()
+        providers: this.providerSummaries(),
+        hasMessageBoard: this.hasMessageBoard()
       });
       return;
     }
@@ -406,7 +411,8 @@ export class KanbanWebviewManager {
         boards: boards.map(b => ({ id: b.id, name: b.name, rootPath: b.rootPath })),
         currentBoard: null,
         overview,
-        providers: this.providerSummaries()
+        providers: this.providerSummaries(),
+        hasMessageBoard: this.hasMessageBoard()
       });
       return;
     }
@@ -425,8 +431,13 @@ export class KanbanWebviewManager {
       boards: boards.map(b => ({ id: b.id, name: b.name, rootPath: b.rootPath })),
       currentBoard,
       overview: null,
-      providers: this.providerSummaries()
+      providers: this.providerSummaries(),
+      hasMessageBoard: this.hasMessageBoard()
     });
+  }
+
+  private hasMessageBoard(): boolean {
+    return !!FleetController.get()?.messageBoardDir();
   }
 
   /** Enabled agent providers for the assign menu (id/name never change together: rename-safe). */
@@ -540,6 +551,7 @@ export class KanbanWebviewManager {
 
         <button id="btnOrchestrator" class="nav-action-btn secondary" title="Orchestrator: usage, plan and running sub-agents"><span>Orchestrator</span></button>
         <button id="btnProviders" class="nav-action-btn secondary" title="Configure agent providers, models and limits"><span>Agents</span></button>
+        <button id="btnMessageBoard" class="nav-action-btn secondary" style="display:none;" title="Message Board: agent roster, claims and threads"><span>Message Board</span></button>
         <button id="btnConfig" class="icon-btn" title="Open Board Configuration">
           <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
             <circle cx="12" cy="12" r="3"/>

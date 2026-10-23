@@ -64,6 +64,7 @@
         el('label', { class: 'inline' }, auto, el('b', { text: 'Autopilot' }), ' start Ready tickets automatically'),
         el('label', { class: 'inline' }, rev, 'auto-request a review when a worker finishes'),
         el('span', { class: 'grow' }),
+        el('button', { text: 'Message Board', title: 'Agent roster, claims and threads (if the BACF Message Board add-on is installed)', onclick: () => send('openMessageBoard') }),
         el('button', { text: 'Agent providers…', onclick: () => send('openProviders') })
       ),
       el('div', { class: 'bar-row' },

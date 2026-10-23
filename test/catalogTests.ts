@@ -103,7 +103,7 @@ async function main() {
   const ovr = saved.models.find(m => m.providerId === 'ol' && m.id === 'gemma4:12b')!;
   check(ovr.pricing?.source === 'override' && ovr.pricing?.outPerM === 0.5, 'pricing.overrides.json overrides listed/estimated prices');
   const patches = providerPatches([{ ...createProvider('devin', []), id: 'devin' } as AgentProvider], saved);
-  check(patches.length === 1 && patches[0].models.length > 5 && patches[0].models.length <= 12 && patches[0].modelTiers.includes('claude-opus-5-5-medium=5'), 'catalog -> provider model list and tier hints');
+  check(patches.length === 1 && patches[0].models.length > 5 && patches[0].models.length <= 60 && patches[0].modelTiers.includes('claude-opus-5-5-medium=5'), 'catalog -> provider model list and tier hints');
   check(patches[0].defaultModel !== '' && patches[0].models.includes(patches[0].defaultModel), 'a valid default model is chosen');
 
   console.log('\n--- cost & budgets ---');

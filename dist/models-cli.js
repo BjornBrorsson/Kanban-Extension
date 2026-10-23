@@ -247,6 +247,7 @@ function sanitizeProvider(raw, existingIds = []) {
     enabled: raw?.enabled !== false,
     type: raw?.type === "vscode-command" ? "vscode-command" : raw?.type === "cli" ? "cli" : preset.type,
     command: String(raw?.command ?? preset.command),
+    pinnedModels: Array.isArray(raw?.pinnedModels) ? raw.pinnedModels.map((m) => String(m).trim()).filter(Boolean) : [],
     listCommand: raw?.listCommand ? String(raw.listCommand).slice(0, 300) : void 0,
     agentic: raw?.agentic !== void 0 ? !!raw.agentic : kind !== "ollama" && kind !== "ide-chat",
     budgetDaily: Math.max(0, Number(raw?.budgetDaily) || 0),
@@ -1000,6 +1001,7 @@ function curate(raws, opts = {}) {
         local,
         effortVariants,
         speedVariants: g.items.filter((i) => i.speed).map((i) => i.raw.id),
+        members: g.items.map((i) => i.raw.id),
         hidden: false
       });
       if (repItem.raw.enabled === false) {
@@ -1131,6 +1133,23 @@ var CatalogStore = class {
     }
     return out;
   }
+  /** Writes catalog.md (cleaned) and full/<provider>.md (complete raw lists) for human review. */
+  exportDocs() {
+    const files = [];
+    const catalog = this.loadCatalog();
+    fs3.mkdirSync(path3.join(this.dir, "full"), { recursive: true });
+    if (catalog) {
+      const f = path3.join(this.dir, "catalog.md");
+      fs3.writeFileSync(f, renderCatalogMarkdown(catalog), "utf8");
+      files.push(f);
+    }
+    for (const raw of this.loadRaws()) {
+      const f = path3.join(this.dir, "full", `${raw.providerId}.md`);
+      fs3.writeFileSync(f, renderRawMarkdown(raw), "utf8");
+      files.push(f);
+    }
+    return files;
+  }
   /** Step 2: curate the saved raw files into catalog.json. */
   curateSaved(keepVersionsPerFamily = 2) {
     const c = curate(this.loadRaws(), { keepVersionsPerFamily, overrides: this.loadOverrides() });
@@ -1138,14 +1157,61 @@ var CatalogStore = class {
     return c;
   }
 };
-function providerPatches(providers, catalog, maxModels = 12) {
+function priceText(p) {
+  if (!p)
+    return "?";
+  if (p.free)
+    return "free";
+  if (p.outPerM === void 0)
+    return "?";
+  const tag = p.source === "estimated" ? " (est.)" : p.source === "reference" ? " (ref.)" : p.source === "override" ? " (override)" : "";
+  return `$${p.inPerM ?? "?"} / $${p.outPerM}${tag}`;
+}
+function renderCatalogMarkdown(catalog) {
+  const out = [`# Model catalog (cleaned)`, "", `Generated ${new Date(catalog.generatedAt).toISOString()} \xB7 newest ${catalog.keepVersionsPerFamily} version(s) of each family kept \xB7 prices are USD per 1M tokens (input / output)`, ""];
+  const providers = [...new Set(catalog.models.map((m) => m.providerId))];
+  for (const id of providers) {
+    const list = catalog.models.filter((m) => m.providerId === id);
+    const shown = list.filter((m) => !m.hidden);
+    out.push(`## ${id} \u2014 ${shown.length} shown, ${list.length - shown.length} hidden`, "", "| Model id | Label | Category | Tier | Price | Efforts | Variants |", "|---|---|---|---|---|---|---|");
+    for (const m of shown) {
+      out.push(`| \`${m.id}\` | ${m.label} | ${m.category} | T${m.tier} | ${priceText(m.pricing)} | ${Object.keys(m.effortVariants).join(", ") || "-"} | ${m.members.length} |`);
+    }
+    const hidden = list.filter((m) => m.hidden);
+    if (hidden.length) {
+      out.push("", `### Hidden in ${id}`, "", "| Model id | Why |", "|---|---|");
+      for (const m of hidden)
+        out.push(`| \`${m.id}\` | ${m.hiddenReason || ""} |`);
+    }
+    out.push("");
+  }
+  return out.join("\n");
+}
+function renderRawMarkdown(raw) {
+  const out = [`# ${raw.providerName} \u2014 full model list (${raw.models.length})`, "", `Source: ${raw.source} (\`${raw.command}\`) \xB7 fetched ${new Date(raw.fetchedAt).toISOString()}${raw.ok ? "" : " \xB7 FAILED: " + raw.error}`, ""];
+  const byFamily = /* @__PURE__ */ new Map();
+  for (const m of raw.models)
+    byFamily.set(m.family || "(no family)", [...byFamily.get(m.family || "(no family)") || [], m]);
+  for (const [fam, list] of byFamily) {
+    out.push(`## ${fam} (${list.length})`, "");
+    for (const m of list) {
+      const price = m.pricing ? priceText(m.pricing) : "";
+      const ctx = m.contextTokens ? `${Math.round(m.contextTokens / 1e3)}K ctx` : "";
+      const enabled = m.enabled === false ? "DISABLED" : "";
+      out.push(`- \`${m.id}\`${[m.label && m.label !== m.id ? m.label : "", ctx, price, enabled].filter(Boolean).length ? " \u2014 " + [m.label && m.label !== m.id ? m.label : "", ctx, price, enabled].filter(Boolean).join(" \xB7 ") : ""}`);
+    }
+    out.push("");
+  }
+  return out.join("\n");
+}
+function providerPatches(providers, catalog, maxModels = 60) {
   const patches = [];
   for (const p of providers) {
     const visible = catalog.models.filter((m) => m.providerId === p.id && !m.hidden && m.category !== "specialist");
     if (!visible.length)
       continue;
     const sorted = [...visible].sort((a, b) => b.tier - a.tier || (a.pricing?.outPerM ?? 0) - (b.pricing?.outPerM ?? 0)).slice(0, maxModels);
-    const models = sorted.map((m) => m.id);
+    const models = [.../* @__PURE__ */ new Set([...sorted.map((m) => m.id), ...p.pinnedModels || []])];
     const strong = sorted.filter((m) => m.tier >= 4).sort((a, b) => (a.pricing?.outPerM ?? 0) - (b.pricing?.outPerM ?? 0));
     const defaultModel = models.includes(p.defaultModel) ? p.defaultModel : (strong[0] || sorted[0]).id;
     const existing = (p.modelTiers || "").split(/[,\n]/).map((s) => s.trim()).filter(Boolean);
@@ -1270,6 +1336,8 @@ async function main(argv) {
   if (args.cmd === "curate" || args.cmd === "all") {
     const c = store.curateSaved(args.keep);
     const hidden = c.models.filter((m) => m.hidden).length;
+    for (const f of store.exportDocs())
+      console.log(`  wrote ${f}`);
     console.log(`
 Catalog: ${c.models.length - hidden} models shown, ${hidden} hidden (kept the newest ${c.keepVersionsPerFamily} version(s) of each family). Saved to ${store.catalogPath}`);
   }
@@ -1306,6 +1374,11 @@ Catalog: ${c.models.length - hidden} models shown, ${hidden} hidden (kept the ne
     }
     console.log(`Applied the curated catalog to ${patches.length} provider(s) in ${registry.filePath}`);
   }
+  if (args.cmd === "export") {
+    for (const f of store.exportDocs())
+      console.log(`wrote ${f}`);
+    return 0;
+  }
   if (args.cmd === "show") {
     const c = store.loadCatalog();
     if (!c) {
@@ -1319,7 +1392,7 @@ Catalog: ${c.models.length - hidden} models shown, ${hidden} hidden (kept the ne
         console.log(`  ${m.providerId}::${m.id}  - ${m.hiddenReason}`);
     }
   }
-  if (!["list", "curate", "bench", "apply", "show", "all", "import"].includes(args.cmd)) {
+  if (!["list", "curate", "bench", "apply", "show", "all", "import", "export"].includes(args.cmd)) {
     console.error("Usage: models-cli <list|curate|bench|apply|show|all> [--dir <workspace>] [--only <provider>] [--keep <n>] [--apply] [--hidden]");
     return 2;
   }

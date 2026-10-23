@@ -68,6 +68,8 @@ export interface CatalogModel {
   effortVariants: Record<string, string>;
   /** ids of fast/priority/lightning variants (more expensive, quicker). */
   speedVariants: string[];
+  /** Every raw model id grouped into this entry (all efforts, fast variants, fusion combos...). */
+  members: string[];
   hidden: boolean;
   hiddenReason?: string;
 }
@@ -474,6 +476,7 @@ export function curate(raws: RawFile[], opts: CurateOptions = {}): Catalog {
         local,
         effortVariants,
         speedVariants: g.items.filter(i => i.speed).map(i => i.raw.id),
+        members: g.items.map(i => i.raw.id),
         hidden: false
       });
       if (repItem.raw.enabled === false) {
@@ -597,6 +600,24 @@ export class CatalogStore {
     return out;
   }
 
+  /** Writes catalog.md (cleaned) and full/<provider>.md (complete raw lists) for human review. */
+  public exportDocs(): string[] {
+    const files: string[] = [];
+    const catalog = this.loadCatalog();
+    fs.mkdirSync(path.join(this.dir, 'full'), { recursive: true });
+    if (catalog) {
+      const f = path.join(this.dir, 'catalog.md');
+      fs.writeFileSync(f, renderCatalogMarkdown(catalog), 'utf8');
+      files.push(f);
+    }
+    for (const raw of this.loadRaws()) {
+      const f = path.join(this.dir, 'full', `${raw.providerId}.md`);
+      fs.writeFileSync(f, renderRawMarkdown(raw), 'utf8');
+      files.push(f);
+    }
+    return files;
+  }
+
   /** Step 2: curate the saved raw files into catalog.json. */
   public curateSaved(keepVersionsPerFamily = 2): Catalog {
     const c = curate(this.loadRaws(), { keepVersionsPerFamily, overrides: this.loadOverrides() });
@@ -611,7 +632,7 @@ export class CatalogIndex {
   constructor(public readonly catalog: Catalog | undefined) {
     for (const m of catalog?.models || []) {
       this.byKey.set(m.key, m);
-      for (const id of [...Object.values(m.effortVariants), ...m.speedVariants]) {
+      for (const id of [...Object.values(m.effortVariants), ...m.speedVariants, ...(m.members || [])]) {
         if (!this.byKey.has(`${m.providerId}::${id}`)) this.byKey.set(`${m.providerId}::${id}`, m);
       }
     }
@@ -619,6 +640,55 @@ export class CatalogIndex {
   public get(providerId: string, modelId: string): CatalogModel | undefined { return this.byKey.get(`${providerId}::${modelId}`); }
   public visible(providerId: string): CatalogModel[] { return (this.catalog?.models || []).filter(m => m.providerId === providerId && !m.hidden); }
   public hasData(): boolean { return !!this.catalog?.models.length; }
+}
+
+// ---------------------------------------------------------------- readable exports
+
+function priceText(p?: Pricing): string {
+  if (!p) return '?';
+  if (p.free) return 'free';
+  if (p.outPerM === undefined) return '?';
+  const tag = p.source === 'estimated' ? ' (est.)' : p.source === 'reference' ? ' (ref.)' : p.source === 'override' ? ' (override)' : '';
+  return `$${p.inPerM ?? '?'} / $${p.outPerM}${tag}`;
+}
+
+/** Cleaned catalog as Markdown: what the orchestrator will offer, plus everything that was hidden and why. */
+export function renderCatalogMarkdown(catalog: Catalog): string {
+  const out: string[] = [`# Model catalog (cleaned)`, '', `Generated ${new Date(catalog.generatedAt).toISOString()} \u00b7 newest ${catalog.keepVersionsPerFamily} version(s) of each family kept \u00b7 prices are USD per 1M tokens (input / output)`, ''];
+  const providers = [...new Set(catalog.models.map(m => m.providerId))];
+  for (const id of providers) {
+    const list = catalog.models.filter(m => m.providerId === id);
+    const shown = list.filter(m => !m.hidden);
+    out.push(`## ${id} \u2014 ${shown.length} shown, ${list.length - shown.length} hidden`, '', '| Model id | Label | Category | Tier | Price | Efforts | Variants |', '|---|---|---|---|---|---|---|');
+    for (const m of shown) {
+      out.push(`| \`${m.id}\` | ${m.label} | ${m.category} | T${m.tier} | ${priceText(m.pricing)} | ${Object.keys(m.effortVariants).join(', ') || '-'} | ${m.members.length} |`);
+    }
+    const hidden = list.filter(m => m.hidden);
+    if (hidden.length) {
+      out.push('', `### Hidden in ${id}`, '', '| Model id | Why |', '|---|---|');
+      for (const m of hidden) out.push(`| \`${m.id}\` | ${m.hiddenReason || ''} |`);
+    }
+    out.push('');
+  }
+  return out.join('\n');
+}
+
+/** Every model the provider reported, untouched by curation (so you can verify nothing was lost). */
+export function renderRawMarkdown(raw: RawFile): string {
+  const out: string[] = [`# ${raw.providerName} \u2014 full model list (${raw.models.length})`, '', `Source: ${raw.source} (\`${raw.command}\`) \u00b7 fetched ${new Date(raw.fetchedAt).toISOString()}${raw.ok ? '' : ' \u00b7 FAILED: ' + raw.error}`, ''];
+  const byFamily = new Map<string, RawModel[]>();
+  for (const m of raw.models) byFamily.set(m.family || '(no family)', [...(byFamily.get(m.family || '(no family)') || []), m]);
+  for (const [fam, list] of byFamily) {
+    out.push(`## ${fam} (${list.length})`, '');
+    for (const m of list) {
+      const price = m.pricing ? priceText(m.pricing) : '';
+      const ctx = m.contextTokens ? `${Math.round(m.contextTokens / 1000)}K ctx` : '';
+      const enabled = m.enabled === false ? 'DISABLED' : '';
+      out.push(`- \`${m.id}\`${[m.label && m.label !== m.id ? m.label : '', ctx, price, enabled].filter(Boolean).length ? ' \u2014 ' + [m.label && m.label !== m.id ? m.label : '', ctx, price, enabled].filter(Boolean).join(' \u00b7 ') : ''}`);
+    }
+    out.push('');
+  }
+  return out.join('\n');
 }
 
 // ---------------------------------------------------------------- applying the catalog to providers
@@ -634,13 +704,14 @@ export interface ProviderPatch {
  * Turns the curated catalog into provider settings: visible models (strongest first), a sensible default
  * (cheapest model of tier 4+, else the strongest) and `id=tier` capability hints. User-written tier overrides win.
  */
-export function providerPatches(providers: AgentProvider[], catalog: Catalog, maxModels = 12): ProviderPatch[] {
+export function providerPatches(providers: AgentProvider[], catalog: Catalog, maxModels = 60): ProviderPatch[] {
   const patches: ProviderPatch[] = [];
   for (const p of providers) {
     const visible = catalog.models.filter(m => m.providerId === p.id && !m.hidden && m.category !== 'specialist');
     if (!visible.length) continue;
     const sorted = [...visible].sort((a, b) => b.tier - a.tier || (a.pricing?.outPerM ?? 0) - (b.pricing?.outPerM ?? 0)).slice(0, maxModels);
-    const models = sorted.map(m => m.id);
+    // pinned models (e.g. a fusion combo you picked by hand) always stay in the list
+    const models = [...new Set([...sorted.map(m => m.id), ...(p.pinnedModels || [])])];
     const strong = sorted.filter(m => m.tier >= 4).sort((a, b) => (a.pricing?.outPerM ?? 0) - (b.pricing?.outPerM ?? 0));
     const defaultModel = models.includes(p.defaultModel) ? p.defaultModel : (strong[0] || sorted[0]).id;
     const existing = (p.modelTiers || '').split(/[,\n]/).map(s => s.trim()).filter(Boolean);

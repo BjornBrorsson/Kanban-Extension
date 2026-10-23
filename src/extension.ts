@@ -46,6 +46,10 @@ export async function activate(context: vscode.ExtensionContext) {
       FleetPanel.show(context.extensionUri, 'providers');
     }),
 
+    vscode.commands.registerCommand('agenticKanban.openMessageBoard', () => {
+      FleetPanel.show(context.extensionUri, 'messageboard');
+    }),
+
     vscode.commands.registerCommand('agenticKanban.openOrchestrator', () => {
       FleetPanel.show(context.extensionUri, 'orchestrator');
     }),

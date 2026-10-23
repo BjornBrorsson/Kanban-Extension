@@ -35,6 +35,8 @@ export interface AgentProvider {
    * Without it, a resume re-runs `command` with a recovery prompt that tells the agent to check the ticket and git state.
    */
   resumeCommand?: string;
+  /** Models you always want available (e.g. a specific fusion combo), kept even when the catalog hides or omits them. */
+  pinnedModels: string[];
   /** Command that prints this provider's models (one per line, id first). Built-in for devin, agy and ollama. */
   listCommand?: string;
   /** Can this provider edit files / run tools (a real coding agent)? Plain `ollama run` cannot. */
@@ -204,6 +206,7 @@ export function sanitizeProvider(raw: any, existingIds: string[] = []): AgentPro
     enabled: raw?.enabled !== false,
     type: raw?.type === 'vscode-command' ? 'vscode-command' : (raw?.type === 'cli' ? 'cli' : preset.type),
     command: String(raw?.command ?? preset.command),
+    pinnedModels: Array.isArray(raw?.pinnedModels) ? raw.pinnedModels.map((m: any) => String(m).trim()).filter(Boolean) : [],
     listCommand: raw?.listCommand ? String(raw.listCommand).slice(0, 300) : undefined,
     agentic: raw?.agentic !== undefined ? !!raw.agentic : kind !== 'ollama' && kind !== 'ide-chat',
     budgetDaily: Math.max(0, Number(raw?.budgetDaily) || 0),

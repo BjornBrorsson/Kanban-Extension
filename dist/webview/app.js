@@ -104,6 +104,8 @@
       state.overview = message.overview || null;
       state.isOverview = !!message.isOverview;
       state.providers = message.providers || [];
+      const mbBtn = document.getElementById('btnMessageBoard');
+      if (mbBtn) mbBtn.style.display = message.hasMessageBoard ? '' : 'none';
 
       updateNavigation();
       if (state.isOverview) {
@@ -133,6 +135,8 @@
   const btnProviders = document.getElementById('btnProviders');
   if (btnOrchestrator) btnOrchestrator.addEventListener('click', () => vscode.postMessage({ type: 'openOrchestrator' }));
   if (btnProviders) btnProviders.addEventListener('click', () => vscode.postMessage({ type: 'openProviders' }));
+  const btnMessageBoard = document.getElementById('btnMessageBoard');
+  if (btnMessageBoard) btnMessageBoard.addEventListener('click', () => vscode.postMessage({ type: 'openMessageBoard' }));
 
   btnOverviewView.addEventListener('click', () => {
     vscode.postMessage({ type: 'showOverview' });

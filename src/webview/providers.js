@@ -50,6 +50,7 @@
     f.agentic = el('input', { type: 'checkbox' });
     f.agentic.checked = p.agentic !== false;
     f.agentic.addEventListener('change', mark);
+    f.pinned = input('pinnedModels', 'text', (p.pinnedModels || []).join(', '), { placeholder: 'e.g. swe-2-medium, fusion-claude-opus-5-5-high-sidekick-swe-2-medium' });
     f.modelTiers = input('modelTiers', 'text', p.modelTiers, { placeholder: 'opus=5, sonnet=4, haiku=2' });
     f.models = input('models', 'text', p.models.join(', '), { placeholder: 'comma separated, e.g. opus, sonnet, haiku' });
     // Default model is a real dropdown fed by the Models field (and refreshed as you type).
@@ -90,6 +91,7 @@
         id: p.id, kind: p.kind, type: p.type,
         name: f.name.value, account: f.account.value, enabled: f.enabled.checked,
         command: f.command.value, resumeCommand: f.resumeCommand.value, modelTiers: f.modelTiers.value,
+        pinnedModels: f.pinned.value.split(',').map(s => s.trim()).filter(Boolean),
         budgetDaily: +f.budgetDaily.value, budgetWeekly: +f.budgetWeekly.value, budgetMonthly: +f.budgetMonthly.value,
         listCommand: f.listCommand.value, agentic: f.agentic.checked, modelFlag: f.modelFlag.value,
         models, defaultModel: f.defaultModel.value,
@@ -120,6 +122,7 @@
           (hasTask ? '' : 'No {task}: this provider can only work on tickets (not review or plan).'))),
         el('div', { class: 'wide' }, field('Resume command (optional)', f.resumeCommand,
           'Continues an interrupted conversation via {session_id}. Without it, a resume re-runs the command with a "check the ticket and git state, then continue" prompt.')),
+        el('div', { class: 'wide' }, field('Pinned models (always available)', f.pinned, 'Add model ids by hand (comma separated). They survive catalog refreshes even if hidden or missing, and the orchestrator considers them.')),
         field('Budget per day (USD, 0 = none)', f.budgetDaily, 'Orchestrator stays under this'),
         field('Budget per week (USD)', f.budgetWeekly),
         field('Budget per month (USD)', f.budgetMonthly),

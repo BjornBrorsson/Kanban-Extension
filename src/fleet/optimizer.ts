@@ -106,7 +106,7 @@ export function estimateRun(ticket: Ticket, p: AgentProvider, model: string, ctx
 function candidateModels(p: AgentProvider, catalog: CatalogIndex): string[] {
   const fromCatalog = catalog.visible(p.id).map(m => m.id);
   const ids = fromCatalog.length ? fromCatalog : p.models.length ? p.models : [p.defaultModel];
-  return [...new Set(ids)];
+  return [...new Set([...ids, ...(p.pinnedModels || [])])];
 }
 
 /**

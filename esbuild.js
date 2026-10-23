@@ -229,7 +229,8 @@ async function run() {
   for (const [entry, out, stub] of [
     ['fleetTests.ts', 'fleetTests.js', false],
     ['boardManagerTests.ts', 'boardManagerTests.js', true],
-    ['catalogTests.ts', 'catalogTests.js', false]
+    ['catalogTests.ts', 'catalogTests.js', false],
+    ['messageBoardTests.ts', 'messageBoardTests.js', false]
   ]) {
     if (fs.existsSync(path.join(__dirname, 'test', entry))) {
       await esbuild.build({

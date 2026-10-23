@@ -1415,6 +1415,7 @@ function sanitizeProvider(raw, existingIds = []) {
     enabled: raw?.enabled !== false,
     type: raw?.type === "vscode-command" ? "vscode-command" : raw?.type === "cli" ? "cli" : preset.type,
     command: String(raw?.command ?? preset.command),
+    pinnedModels: Array.isArray(raw?.pinnedModels) ? raw.pinnedModels.map((m) => String(m).trim()).filter(Boolean) : [],
     listCommand: raw?.listCommand ? String(raw.listCommand).slice(0, 300) : void 0,
     agentic: raw?.agentic !== void 0 ? !!raw.agentic : kind !== "ollama" && kind !== "ide-chat",
     budgetDaily: Math.max(0, Number(raw?.budgetDaily) || 0),
@@ -2244,7 +2245,7 @@ function estimateRun(ticket, p, model, ctx) {
 function candidateModels(p, catalog) {
   const fromCatalog = catalog.visible(p.id).map((m) => m.id);
   const ids = fromCatalog.length ? fromCatalog : p.models.length ? p.models : [p.defaultModel];
-  return [...new Set(ids)];
+  return [.../* @__PURE__ */ new Set([...ids, ...p.pinnedModels || []])];
 }
 function rankOptions(ticket, providers, sessions, ctx, restrictTo) {
   const now = ctx.now ?? Date.now();

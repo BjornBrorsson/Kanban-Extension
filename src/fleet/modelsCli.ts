@@ -89,6 +89,7 @@ export async function main(argv: string[]): Promise<number> {
   if (args.cmd === 'curate' || args.cmd === 'all') {
     const c = store.curateSaved(args.keep);
     const hidden = c.models.filter(m => m.hidden).length;
+    for (const f of store.exportDocs()) console.log(`  wrote ${f}`);
     console.log(`\nCatalog: ${c.models.length - hidden} models shown, ${hidden} hidden (kept the newest ${c.keepVersionsPerFamily} version(s) of each family). Saved to ${store.catalogPath}`);
   }
 
@@ -124,6 +125,11 @@ export async function main(argv: string[]): Promise<number> {
     console.log(`Applied the curated catalog to ${patches.length} provider(s) in ${registry.filePath}`);
   }
 
+  if (args.cmd === 'export') {
+    for (const f of store.exportDocs()) console.log(`wrote ${f}`);
+    return 0;
+  }
+
   if (args.cmd === 'show') {
     const c = store.loadCatalog();
     if (!c) { console.error('No catalog yet. Run "all" first.'); return 1; }
@@ -134,7 +140,7 @@ export async function main(argv: string[]): Promise<number> {
     }
   }
 
-  if (!['list', 'curate', 'bench', 'apply', 'show', 'all', 'import'].includes(args.cmd)) {
+  if (!['list', 'curate', 'bench', 'apply', 'show', 'all', 'import', 'export'].includes(args.cmd)) {
     console.error('Usage: models-cli <list|curate|bench|apply|show|all> [--dir <workspace>] [--only <provider>] [--keep <n>] [--apply] [--hidden]');
     return 2;
   }

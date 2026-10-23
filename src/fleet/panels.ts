@@ -3,12 +3,14 @@ import * as fs from 'fs';
 import { BoardManager } from '../boardManager';
 import { FleetController } from './fleetController';
 import { PROVIDER_PRESETS, ProviderKind } from './providers';
+import { createThread, readMessageBoard, release, replyToThread } from './messageBoard';
 
-type PanelKind = 'providers' | 'orchestrator';
+type PanelKind = 'providers' | 'orchestrator' | 'messageboard';
 
 const TITLES: Record<PanelKind, string> = {
   providers: 'Agent Providers',
-  orchestrator: 'Orchestrator'
+  orchestrator: 'Orchestrator',
+  messageboard: 'Message Board'
 };
 
 /** One webview panel class for both fleet screens; the script file decides what is rendered. */
@@ -44,6 +46,11 @@ export class FleetPanel {
 
     const fleet = FleetController.get();
     if (fleet) this.disposables.push(fleet.onDidChange(() => this.push()));
+    if (kind === 'messageboard') {
+      // The board is plain files other agents edit at any time: poll while the panel is open.
+      const timer = setInterval(() => this.push(), 5000);
+      this.disposables.push({ dispose: () => clearInterval(timer) });
+    }
     this.disposables.push(BoardManager.getInstance().onDidChangeBoard(() => this.push()));
   }
 
@@ -69,6 +76,38 @@ export class FleetPanel {
         case 'addProvider':
           fleet.registry.add(m.kindId as ProviderKind);
           break;
+        case 'openFile': {
+          if (m.path && fs.existsSync(m.path)) {
+            const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(m.path));
+            await vscode.window.showTextDocument(doc, { viewColumn: vscode.ViewColumn.Beside });
+          }
+          return;
+        }
+        case 'newThread': {
+          const dir = fleet.messageBoardDir();
+          if (!dir) break;
+          const title = await vscode.window.showInputBox({ prompt: 'Thread title', placeHolder: 'e.g. Who owns the auth refactor?' });
+          if (!title?.trim()) return;
+          const msg = await vscode.window.showInputBox({ prompt: 'First message (what do you want the agents to know or decide?)' });
+          if (msg === undefined) return;
+          const file = createThread(dir, title, 'Björn', 'Agentic Kanban UI', msg || title);
+          const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(file));
+          await vscode.window.showTextDocument(doc, { viewColumn: vscode.ViewColumn.Beside });
+          break;
+        }
+        case 'reply': {
+          const text = await vscode.window.showInputBox({ prompt: 'Your reply (signed as Björn, Agentic Kanban UI)' });
+          if (text?.trim() && m.path && fs.existsSync(m.path)) replyToThread(m.path, 'Björn', 'Agentic Kanban UI', text);
+          break;
+        }
+        case 'releaseClaim': {
+          const dir = fleet.messageBoardDir();
+          if (dir && m.key) release(dir, m.key, 'Agentic Kanban UI', true);
+          break;
+        }
+        case 'openMessageBoard':
+          FleetPanel.show(this.extensionUri, 'messageboard');
+          return;
         case 'importModels': {
           const text = await vscode.env.clipboard.readText();
           vscode.window.showInformationMessage(await fleet.importModels(m.id, text));
@@ -164,6 +203,11 @@ export class FleetPanel {
   private push(): void {
     const fleet = FleetController.get();
     if (!fleet) return;
+    if (this.kind === 'messageboard') {
+      const dir = fleet.messageBoardDir();
+      this.panel.webview.postMessage({ type: 'state', board: dir ? readMessageBoard(dir) : null });
+      return;
+    }
     const providers = fleet.registry.list();
     const base = {
       type: 'state',

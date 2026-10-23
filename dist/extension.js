@@ -35,8 +35,8 @@ __export(extension_exports, {
 });
 module.exports = __toCommonJS(extension_exports);
 var vscode7 = __toESM(require("vscode"));
-var path14 = __toESM(require("path"));
-var fs12 = __toESM(require("fs"));
+var path15 = __toESM(require("path"));
+var fs13 = __toESM(require("fs"));
 
 // src/boardManager.ts
 var vscode2 = __toESM(require("vscode"));
@@ -220,9 +220,9 @@ var TicketParser = class {
         extracted.forEach((item) => labels.add(item.replace(/`/g, "").trim()));
       } else {
         tableLabelStr.split(",").forEach((item) => {
-          const clean = item.replace(/[`"']/g, "").trim();
-          if (clean && clean !== "\u2014")
-            labels.add(clean);
+          const clean2 = item.replace(/[`"']/g, "").trim();
+          if (clean2 && clean2 !== "\u2014")
+            labels.add(clean2);
         });
       }
     }
@@ -1123,8 +1123,8 @@ function safeJoin(root, ...segments) {
   return isInside(root, current) ? current : null;
 }
 function slugify(title, maxLen = 40) {
-  const slug = title.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9_-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "").slice(0, maxLen).replace(/-$/, "");
-  return slug || "untitled";
+  const slug2 = title.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9_-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "").slice(0, maxLen).replace(/-$/, "");
+  return slug2 || "untitled";
 }
 
 // src/boardManager.ts
@@ -1425,21 +1425,21 @@ var BoardManager = class _BoardManager {
     if (!fs2.existsSync(targetDir)) {
       await fs2.promises.mkdir(targetDir, { recursive: true });
     }
-    const slug = slugify(title);
+    const slug2 = slugify(title);
     const dateStr = (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
-    let filename = `ticket-${dateStr}-${slug}.md`;
+    let filename = `ticket-${dateStr}-${slug2}.md`;
     let fullPath = path4.join(targetDir, filename);
     let counter = 1;
     let idSuffix = "";
     while (fs2.existsSync(fullPath)) {
-      filename = `ticket-${dateStr}-${slug}-${counter}.md`;
+      filename = `ticket-${dateStr}-${slug2}-${counter}.md`;
       idSuffix = `-${counter}`;
       fullPath = path4.join(targetDir, filename);
       counter++;
     }
     let defaultContent = initialContent;
     if (defaultContent) {
-      const generatedId = `T-${slug.toUpperCase()}${idSuffix}`;
+      const generatedId = `T-${slug2.toUpperCase()}${idSuffix}`;
       defaultContent = defaultContent.split("{id}").join(generatedId).split("{title}").join(title).split("{column}").join(targetColumn).split("{date}").join(dateStr).split("{user}").join("Unassigned").split("{assignee}").join("Unassigned");
     } else {
       defaultContent = `# ${title}
@@ -1775,8 +1775,8 @@ var TreeItemNode = class extends vscode3.TreeItem {
 
 // src/webviewPanel.ts
 var vscode5 = __toESM(require("vscode"));
-var path13 = __toESM(require("path"));
-var fs10 = __toESM(require("fs"));
+var path14 = __toESM(require("path"));
+var fs11 = __toESM(require("fs"));
 
 // src/agentRunner.ts
 var path5 = __toESM(require("path"));
@@ -2141,8 +2141,8 @@ var PromptFormatter = class {
 
 // src/fleet/fleetController.ts
 var vscode4 = __toESM(require("vscode"));
-var fs9 = __toESM(require("fs"));
-var path12 = __toESM(require("path"));
+var fs10 = __toESM(require("fs"));
+var path13 = __toESM(require("path"));
 var import_crypto = require("crypto");
 
 // src/fleet/providers.ts
@@ -2354,6 +2354,7 @@ function sanitizeProvider(raw, existingIds = []) {
     enabled: raw?.enabled !== false,
     type: raw?.type === "vscode-command" ? "vscode-command" : raw?.type === "cli" ? "cli" : preset.type,
     command: String(raw?.command ?? preset.command),
+    pinnedModels: Array.isArray(raw?.pinnedModels) ? raw.pinnedModels.map((m) => String(m).trim()).filter(Boolean) : [],
     listCommand: raw?.listCommand ? String(raw.listCommand).slice(0, 300) : void 0,
     agentic: raw?.agentic !== void 0 ? !!raw.agentic : kind !== "ollama" && kind !== "ide-chat",
     budgetDaily: Math.max(0, Number(raw?.budgetDaily) || 0),
@@ -3217,14 +3218,14 @@ function parseOllamaList(text) {
   return lines.map((l) => l.split(/\s+/)[0]).filter(Boolean);
 }
 function httpGetJson(url, timeoutMs) {
-  return new Promise((resolve7, reject) => {
+  return new Promise((resolve8, reject) => {
     const req = http.get(url, { timeout: timeoutMs }, (res) => {
       let body = "";
       res.setEncoding("utf8");
       res.on("data", (d) => body += d);
       res.on("end", () => {
         try {
-          resolve7(JSON.parse(body));
+          resolve8(JSON.parse(body));
         } catch (e) {
           reject(e);
         }
@@ -3245,9 +3246,9 @@ async function detectOllamaModels(host = "127.0.0.1:11434", exePath) {
   const exe = exePath || findExecutable(["ollama"]);
   if (!exe)
     return [];
-  return new Promise((resolve7) => {
+  return new Promise((resolve8) => {
     (0, import_child_process.execFile)(exe, ["list"], { timeout: 4e3, windowsHide: true, shell: isWin() && /\.(cmd|bat)$/i.test(exe) }, (err, stdout) => {
-      resolve7(err ? [] : parseOllamaList(String(stdout)));
+      resolve8(err ? [] : parseOllamaList(String(stdout)));
     });
   });
 }
@@ -3272,11 +3273,247 @@ async function detectOne(kind, env3 = process.env) {
   return d;
 }
 
-// src/fleet/catalog.ts
+// src/fleet/messageBoard.ts
 var fs7 = __toESM(require("fs"));
+var path10 = __toESM(require("path"));
+function isMessageBoardDir(dir) {
+  try {
+    return fs7.statSync(dir).isDirectory() && (fs7.existsSync(path10.join(dir, "ACTIVE_AGENTS.md")) || fs7.existsSync(path10.join(dir, "THREADS")) || fs7.existsSync(path10.join(dir, "LOCKS")));
+  } catch {
+    return false;
+  }
+}
+function findMessageBoard(roots) {
+  for (const r of roots) {
+    let dir = path10.resolve(r);
+    for (let i = 0; i < 4; i++) {
+      const candidate = path10.join(dir, "MessageBoard");
+      if (isMessageBoardDir(candidate))
+        return candidate;
+      const parent = path10.dirname(dir);
+      if (parent === dir)
+        break;
+      dir = parent;
+    }
+  }
+  return void 0;
+}
+function read(file) {
+  try {
+    return fs7.readFileSync(file, "utf8");
+  } catch {
+    return "";
+  }
+}
+var clean = (s) => s.replace(/\*\*/g, "").replace(/`/g, "").trim();
+function parseActiveAgents(md) {
+  const out = [];
+  let inTable = false;
+  for (const line of md.split(/\r?\n/)) {
+    if (/^\|\s*Agent Name\s*\|/i.test(line)) {
+      inTable = true;
+      continue;
+    }
+    if (!inTable)
+      continue;
+    if (!line.trim().startsWith("|")) {
+      if (out.length)
+        break;
+      continue;
+    }
+    if (/^\|\s*-{2,}/.test(line))
+      continue;
+    const cells = line.trim().replace(/^\||\|$/g, "").split("|").map(clean);
+    if (cells.length < 2 || !cells[0])
+      continue;
+    out.push({ name: cells[0], client: cells[1] || "", focus: cells[2] || "", claimed: cells[3] || "", ticket: cells[4] || "", lastCheckin: cells[5] || "" });
+  }
+  return out;
+}
+function field(md, name) {
+  const m = md.match(new RegExp(`^\\|\\s*\\*{0,2}${name}\\*{0,2}\\s*\\|\\s*(.+?)\\s*\\|\\s*$`, "im"));
+  return m ? clean(m[1]) : "";
+}
+function parseThread(file, text) {
+  const title = (text.match(/^#\s+(.+)$/m)?.[1] || path10.basename(file, ".md")).trim();
+  const headings = [...text.matchAll(/^###\s+(.+)$/gm)].map((m) => m[1].trim());
+  return {
+    file: path10.basename(file),
+    path: file,
+    title,
+    status: field(text, "Status"),
+    author: field(text, "Author"),
+    created: field(text, "Created"),
+    ticket: field(text, "Related Ticket"),
+    messages: headings.length,
+    lastMessage: headings[headings.length - 1] || ""
+  };
+}
+function readClaims(boardDir, now = Date.now()) {
+  const dir = path10.join(boardDir, "LOCKS");
+  let files = [];
+  try {
+    files = fs7.readdirSync(dir).filter((f) => f.endsWith(".lock"));
+  } catch {
+    return [];
+  }
+  const out = [];
+  for (const f of files) {
+    try {
+      const l = JSON.parse(fs7.readFileSync(path10.join(dir, f), "utf8"));
+      const exp = Date.parse(l.expires);
+      out.push({
+        key: l.key || f.replace(/\.lock$/, ""),
+        agent: l.agent || "?",
+        ticket: l.ticket || "",
+        reason: l.reason || "",
+        claimed: l.claimed || "",
+        expires: l.expires || "",
+        expired: Number.isFinite(exp) ? exp <= now : false,
+        minutesLeft: Number.isFinite(exp) ? Math.round((exp - now) / 6e4) : 0
+      });
+    } catch {
+    }
+  }
+  return out.sort((a, b) => Number(a.expired) - Number(b.expired) || a.key.localeCompare(b.key));
+}
+function readMessageBoard(boardDir, now = Date.now()) {
+  const threadsDir = path10.join(boardDir, "THREADS");
+  let threadFiles = [];
+  try {
+    threadFiles = fs7.readdirSync(threadsDir).filter((f) => /\.md$/i.test(f)).sort().reverse();
+  } catch {
+  }
+  const threads = threadFiles.map((f) => parseThread(path10.join(threadsDir, f), read(path10.join(threadsDir, f))));
+  const dms = [];
+  const dmDir = path10.join(boardDir, "DIRECT_MESSAGES");
+  try {
+    for (const to of fs7.readdirSync(dmDir, { withFileTypes: true }).filter((d) => d.isDirectory())) {
+      for (const f of fs7.readdirSync(path10.join(dmDir, to.name)).filter((x) => /\.md$/i.test(x)).sort().reverse()) {
+        const p = path10.join(dmDir, to.name, f);
+        dms.push({ file: f, path: p, to: to.name, title: (read(p).match(/^#\s+(.+)$/m)?.[1] || f).trim() });
+      }
+    }
+  } catch {
+  }
+  let archived = 0;
+  try {
+    archived = fs7.readdirSync(path10.join(boardDir, "ARCHIVE")).filter((f) => /\.md$/i.test(f)).length;
+  } catch {
+  }
+  const log = read(path10.join(boardDir, "LOCKS", "CLAIMS_LOG.md")).split(/\r?\n/).filter((l) => l.trim()).slice(-12).reverse();
+  return { root: boardDir, agents: parseActiveAgents(read(path10.join(boardDir, "ACTIVE_AGENTS.md"))), claims: readClaims(boardDir, now), threads, dms, archived, claimsLog: log };
+}
+var slug = (s) => s.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+var stamp = (d = /* @__PURE__ */ new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+function replyToThread(threadPath, author, client, text, now = /* @__PURE__ */ new Date()) {
+  const body = `
+---
+
+### ${stamp(now)} \u2014 ${author} (${client})
+${text.trim()}
+`;
+  fs7.appendFileSync(threadPath, body, "utf8");
+}
+function createThread(boardDir, title, author, client, firstMessage, ticket = "", now = /* @__PURE__ */ new Date()) {
+  const dir = path10.join(boardDir, "THREADS");
+  fs7.mkdirSync(dir, { recursive: true });
+  const used = [...fs7.readdirSync(dir), ...fs7.existsSync(path10.join(boardDir, "ARCHIVE")) ? fs7.readdirSync(path10.join(boardDir, "ARCHIVE")) : []].map((f) => Number(f.match(/THREAD_(\d+)/i)?.[1])).filter((n) => Number.isFinite(n));
+  const next = String((used.length ? Math.max(...used) : 0) + 1).padStart(3, "0");
+  const file = path10.join(dir, `THREAD_${next}_${slug(title).slice(0, 40) || "topic"}.md`);
+  const content = `# THREAD-${next}: ${title.trim()}
+
+| Metadata | Details |
+|---|---|
+| **Author** | ${author} |
+| **Environment** | ${client} |
+| **Status** | Open |
+| **Related Ticket** | ${ticket || "None"} |
+| **Created** | ${stamp(now)} |
+
+---
+
+## Topic Overview
+${firstMessage.trim()}
+
+---
+
+## Conversation Log
+`;
+  fs7.writeFileSync(file, content, "utf8");
+  return file;
+}
+var lockSlug = (key) => key.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+function logClaim(boardDir, line) {
+  try {
+    fs7.mkdirSync(path10.join(boardDir, "LOCKS"), { recursive: true });
+    fs7.appendFileSync(path10.join(boardDir, "LOCKS", "CLAIMS_LOG.md"), `- ${(/* @__PURE__ */ new Date()).toISOString()} ${line}
+`, "utf8");
+  } catch {
+  }
+}
+function claim(boardDir, key, agent, reason, ticket = "", minutes = 60, now = Date.now()) {
+  const dir = path10.join(boardDir, "LOCKS");
+  fs7.mkdirSync(dir, { recursive: true });
+  const file = path10.join(dir, `${lockSlug(key)}.lock`);
+  const lock = (claimed) => JSON.stringify({
+    key,
+    agent,
+    ticket,
+    reason,
+    claimed: claimed || new Date(now).toISOString(),
+    renewed: new Date(now).toISOString(),
+    expires: new Date(now + minutes * 6e4).toISOString()
+  }, null, 2);
+  try {
+    fs7.writeFileSync(file, lock(), { flag: "wx" });
+    logClaim(boardDir, `CLAIM ${key} by ${agent} (${minutes} min) - ${reason}`);
+    return { ok: true };
+  } catch (e) {
+    if (e?.code !== "EEXIST")
+      throw e;
+  }
+  let cur = {};
+  try {
+    cur = JSON.parse(fs7.readFileSync(file, "utf8"));
+  } catch {
+    cur = { agent: "?", expires: "9999-12-31T00:00:00Z" };
+  }
+  if (cur.agent === agent) {
+    fs7.writeFileSync(file, lock(cur.claimed), "utf8");
+    logClaim(boardDir, `RENEW ${key} by ${agent}`);
+    return { ok: true, renewed: true };
+  }
+  if (Date.parse(cur.expires) > now)
+    return { ok: false, heldBy: cur.agent, expires: cur.expires };
+  fs7.writeFileSync(file, lock(), "utf8");
+  logClaim(boardDir, `TAKEOVER ${key} by ${agent} from ${cur.agent} (expired ${cur.expires}) - ${reason}`);
+  return { ok: true };
+}
+function release(boardDir, key, agent, force = false) {
+  const file = path10.join(boardDir, "LOCKS", `${lockSlug(key)}.lock`);
+  let cur;
+  try {
+    cur = JSON.parse(fs7.readFileSync(file, "utf8"));
+  } catch {
+    return false;
+  }
+  if (cur.agent !== agent && !force)
+    return false;
+  try {
+    fs7.unlinkSync(file);
+  } catch {
+    return false;
+  }
+  logClaim(boardDir, `RELEASE ${key} by ${agent}${cur.agent !== agent ? ` (forced; holder was ${cur.agent})` : ""}`);
+  return true;
+}
+
+// src/fleet/catalog.ts
+var fs8 = __toESM(require("fs"));
 var http2 = __toESM(require("http"));
 var os2 = __toESM(require("os"));
-var path10 = __toESM(require("path"));
+var path11 = __toESM(require("path"));
 var import_child_process2 = require("child_process");
 function toMillions(n, unit) {
   return /m/i.test(unit || "") ? n * 1e6 : /k/i.test(unit || "") ? n * 1e3 : n;
@@ -3360,14 +3597,14 @@ function sizeFromParameterSize(s) {
   return /t/i.test(m[2]) ? n * 1e3 : /m/i.test(m[2]) ? n / 1e3 : n;
 }
 function httpGetJson2(url, timeoutMs) {
-  return new Promise((resolve7, reject) => {
+  return new Promise((resolve8, reject) => {
     const req = http2.get(url, { timeout: timeoutMs }, (res) => {
       let body = "";
       res.setEncoding("utf8");
       res.on("data", (d) => body += d);
       res.on("end", () => {
         try {
-          resolve7(JSON.parse(body));
+          resolve8(JSON.parse(body));
         } catch (e) {
           reject(e);
         }
@@ -3418,23 +3655,23 @@ function parseCopilotPolicy(text) {
 }
 function listCopilotLearned(home = os2.homedir()) {
   const ids = /* @__PURE__ */ new Set();
-  const dir = path10.join(home, ".copilot");
+  const dir = path11.join(home, ".copilot");
   try {
-    const cfg = JSON.parse(fs7.readFileSync(path10.join(dir, "config.json"), "utf8").replace(/^\s*\/\/.*$/gm, ""));
+    const cfg = JSON.parse(fs8.readFileSync(path11.join(dir, "config.json"), "utf8").replace(/^\s*\/\/.*$/gm, ""));
     for (const id of cfg.recentModelIds || [])
       ids.add(String(id));
   } catch {
   }
   try {
-    const st = JSON.parse(fs7.readFileSync(path10.join(dir, "settings.json"), "utf8"));
+    const st = JSON.parse(fs8.readFileSync(path11.join(dir, "settings.json"), "utf8"));
     if (st.model)
       ids.add(String(st.model));
   } catch {
   }
   try {
-    const logs = fs7.readdirSync(path10.join(dir, "logs")).filter((f) => f.endsWith(".log")).sort().slice(-40);
+    const logs = fs8.readdirSync(path11.join(dir, "logs")).filter((f) => f.endsWith(".log")).sort().slice(-40);
     for (const f of logs) {
-      const text = fs7.readFileSync(path10.join(dir, "logs", f), "utf8");
+      const text = fs8.readFileSync(path11.join(dir, "logs", f), "utf8");
       for (const m of text.matchAll(/Using default model:\s*([\w.:\/-]+)/g))
         ids.add(m[1]);
     }
@@ -3447,12 +3684,12 @@ function isShim(exe) {
   return process.platform === "win32" && /\.(cmd|bat)$/i.test(exe);
 }
 function runCapture(exe, args, timeoutMs = 3e4) {
-  return new Promise((resolve7, reject) => {
+  return new Promise((resolve8, reject) => {
     (0, import_child_process2.execFile)(exe, args, { timeout: timeoutMs, windowsHide: true, maxBuffer: 8 * 1024 * 1024, shell: isShim(exe) }, (err, stdout, stderr) => {
       if (err && !String(stdout).trim())
         reject(new Error(String(stderr || err.message).trim().slice(0, 300)));
       else
-        resolve7(String(stdout));
+        resolve8(String(stdout));
     });
   });
 }
@@ -3460,7 +3697,7 @@ async function listProviderModels(p, env3 = process.env, importsDir) {
   const base = { providerId: p.id, providerName: p.name, kind: p.kind, fetchedAt: Date.now() };
   if (importsDir) {
     try {
-      const text = fs7.readFileSync(path10.join(importsDir, `${p.id}.txt`), "utf8");
+      const text = fs8.readFileSync(path11.join(importsDir, `${p.id}.txt`), "utf8");
       const policy = parseCopilotPolicy(text);
       const models = policy.length ? policy : parseGenericModels(text);
       if (models.length)
@@ -3473,7 +3710,7 @@ async function listProviderModels(p, env3 = process.env, importsDir) {
   try {
     if (p.listCommand) {
       const parts = p.listCommand.trim().split(/\s+/);
-      const bin = parts[0] === p.kind || !path10.isAbsolute(parts[0]) ? findExecutable([parts[0]], env3) || parts[0] : parts[0];
+      const bin = parts[0] === p.kind || !path11.isAbsolute(parts[0]) ? findExecutable([parts[0]], env3) || parts[0] : parts[0];
       const text = await runCapture(bin, parts.slice(1));
       return { ...base, source: "command", command: p.listCommand, ok: true, models: parseGenericModels(text) };
     }
@@ -3661,6 +3898,7 @@ function curate(raws, opts = {}) {
         local,
         effortVariants,
         speedVariants: g.items.filter((i) => i.speed).map((i) => i.raw.id),
+        members: g.items.map((i) => i.raw.id),
         hidden: false
       });
       if (repItem.raw.enabled === false) {
@@ -3710,51 +3948,51 @@ function curate(raws, opts = {}) {
 var CatalogStore = class {
   dir;
   constructor(workspaceRoot) {
-    this.dir = path10.join(workspaceRoot, ".agentic-kanban", "models");
+    this.dir = path11.join(workspaceRoot, ".agentic-kanban", "models");
   }
   get rawDir() {
-    return path10.join(this.dir, "raw");
+    return path11.join(this.dir, "raw");
   }
   get catalogPath() {
-    return path10.join(this.dir, "catalog.json");
+    return path11.join(this.dir, "catalog.json");
   }
   get overridesPath() {
-    return path10.join(this.dir, "pricing.overrides.json");
+    return path11.join(this.dir, "pricing.overrides.json");
   }
   get importsDir() {
-    return path10.join(this.dir, "imports");
+    return path11.join(this.dir, "imports");
   }
   /** Saves a pasted model list for a provider (used by the next refresh). */
   saveImport(providerId, text) {
-    const file = path10.join(this.importsDir, `${providerId}.txt`);
-    fs7.mkdirSync(path10.dirname(file), { recursive: true });
-    fs7.writeFileSync(file, text, "utf8");
+    const file = path11.join(this.importsDir, `${providerId}.txt`);
+    fs8.mkdirSync(path11.dirname(file), { recursive: true });
+    fs8.writeFileSync(file, text, "utf8");
     return file;
   }
   get benchPath() {
-    return path10.join(this.dir, "bench.json");
+    return path11.join(this.dir, "bench.json");
   }
   writeJson(file, data) {
-    fs7.mkdirSync(path10.dirname(file), { recursive: true });
+    fs8.mkdirSync(path11.dirname(file), { recursive: true });
     const tmp = file + ".tmp";
-    fs7.writeFileSync(tmp, JSON.stringify(data, null, 2), "utf8");
-    fs7.renameSync(tmp, file);
+    fs8.writeFileSync(tmp, JSON.stringify(data, null, 2), "utf8");
+    fs8.renameSync(tmp, file);
   }
   saveRaw(raw) {
-    const file = path10.join(this.rawDir, `${raw.providerId}.json`);
+    const file = path11.join(this.rawDir, `${raw.providerId}.json`);
     this.writeJson(file, raw);
     return file;
   }
   loadRaws() {
     try {
-      return fs7.readdirSync(this.rawDir).filter((f) => f.endsWith(".json")).map((f) => JSON.parse(fs7.readFileSync(path10.join(this.rawDir, f), "utf8")));
+      return fs8.readdirSync(this.rawDir).filter((f) => f.endsWith(".json")).map((f) => JSON.parse(fs8.readFileSync(path11.join(this.rawDir, f), "utf8")));
     } catch {
       return [];
     }
   }
   loadOverrides() {
     try {
-      return JSON.parse(fs7.readFileSync(this.overridesPath, "utf8"));
+      return JSON.parse(fs8.readFileSync(this.overridesPath, "utf8"));
     } catch {
       return {};
     }
@@ -3765,14 +4003,14 @@ var CatalogStore = class {
   }
   loadCatalog() {
     try {
-      return JSON.parse(fs7.readFileSync(this.catalogPath, "utf8"));
+      return JSON.parse(fs8.readFileSync(this.catalogPath, "utf8"));
     } catch {
       return void 0;
     }
   }
   loadBench() {
     try {
-      return JSON.parse(fs7.readFileSync(this.benchPath, "utf8"));
+      return JSON.parse(fs8.readFileSync(this.benchPath, "utf8"));
     } catch {
       return {};
     }
@@ -3792,6 +4030,23 @@ var CatalogStore = class {
     }
     return out;
   }
+  /** Writes catalog.md (cleaned) and full/<provider>.md (complete raw lists) for human review. */
+  exportDocs() {
+    const files = [];
+    const catalog = this.loadCatalog();
+    fs8.mkdirSync(path11.join(this.dir, "full"), { recursive: true });
+    if (catalog) {
+      const f = path11.join(this.dir, "catalog.md");
+      fs8.writeFileSync(f, renderCatalogMarkdown(catalog), "utf8");
+      files.push(f);
+    }
+    for (const raw of this.loadRaws()) {
+      const f = path11.join(this.dir, "full", `${raw.providerId}.md`);
+      fs8.writeFileSync(f, renderRawMarkdown(raw), "utf8");
+      files.push(f);
+    }
+    return files;
+  }
   /** Step 2: curate the saved raw files into catalog.json. */
   curateSaved(keepVersionsPerFamily = 2) {
     const c = curate(this.loadRaws(), { keepVersionsPerFamily, overrides: this.loadOverrides() });
@@ -3804,7 +4059,7 @@ var CatalogIndex = class {
     this.catalog = catalog;
     for (const m of catalog?.models || []) {
       this.byKey.set(m.key, m);
-      for (const id of [...Object.values(m.effortVariants), ...m.speedVariants]) {
+      for (const id of [...Object.values(m.effortVariants), ...m.speedVariants, ...m.members || []]) {
         if (!this.byKey.has(`${m.providerId}::${id}`))
           this.byKey.set(`${m.providerId}::${id}`, m);
       }
@@ -3821,14 +4076,61 @@ var CatalogIndex = class {
     return !!this.catalog?.models.length;
   }
 };
-function providerPatches(providers, catalog, maxModels = 12) {
+function priceText(p) {
+  if (!p)
+    return "?";
+  if (p.free)
+    return "free";
+  if (p.outPerM === void 0)
+    return "?";
+  const tag = p.source === "estimated" ? " (est.)" : p.source === "reference" ? " (ref.)" : p.source === "override" ? " (override)" : "";
+  return `$${p.inPerM ?? "?"} / $${p.outPerM}${tag}`;
+}
+function renderCatalogMarkdown(catalog) {
+  const out = [`# Model catalog (cleaned)`, "", `Generated ${new Date(catalog.generatedAt).toISOString()} \xB7 newest ${catalog.keepVersionsPerFamily} version(s) of each family kept \xB7 prices are USD per 1M tokens (input / output)`, ""];
+  const providers = [...new Set(catalog.models.map((m) => m.providerId))];
+  for (const id of providers) {
+    const list = catalog.models.filter((m) => m.providerId === id);
+    const shown = list.filter((m) => !m.hidden);
+    out.push(`## ${id} \u2014 ${shown.length} shown, ${list.length - shown.length} hidden`, "", "| Model id | Label | Category | Tier | Price | Efforts | Variants |", "|---|---|---|---|---|---|---|");
+    for (const m of shown) {
+      out.push(`| \`${m.id}\` | ${m.label} | ${m.category} | T${m.tier} | ${priceText(m.pricing)} | ${Object.keys(m.effortVariants).join(", ") || "-"} | ${m.members.length} |`);
+    }
+    const hidden = list.filter((m) => m.hidden);
+    if (hidden.length) {
+      out.push("", `### Hidden in ${id}`, "", "| Model id | Why |", "|---|---|");
+      for (const m of hidden)
+        out.push(`| \`${m.id}\` | ${m.hiddenReason || ""} |`);
+    }
+    out.push("");
+  }
+  return out.join("\n");
+}
+function renderRawMarkdown(raw) {
+  const out = [`# ${raw.providerName} \u2014 full model list (${raw.models.length})`, "", `Source: ${raw.source} (\`${raw.command}\`) \xB7 fetched ${new Date(raw.fetchedAt).toISOString()}${raw.ok ? "" : " \xB7 FAILED: " + raw.error}`, ""];
+  const byFamily = /* @__PURE__ */ new Map();
+  for (const m of raw.models)
+    byFamily.set(m.family || "(no family)", [...byFamily.get(m.family || "(no family)") || [], m]);
+  for (const [fam, list] of byFamily) {
+    out.push(`## ${fam} (${list.length})`, "");
+    for (const m of list) {
+      const price = m.pricing ? priceText(m.pricing) : "";
+      const ctx = m.contextTokens ? `${Math.round(m.contextTokens / 1e3)}K ctx` : "";
+      const enabled = m.enabled === false ? "DISABLED" : "";
+      out.push(`- \`${m.id}\`${[m.label && m.label !== m.id ? m.label : "", ctx, price, enabled].filter(Boolean).length ? " \u2014 " + [m.label && m.label !== m.id ? m.label : "", ctx, price, enabled].filter(Boolean).join(" \xB7 ") : ""}`);
+    }
+    out.push("");
+  }
+  return out.join("\n");
+}
+function providerPatches(providers, catalog, maxModels = 60) {
   const patches = [];
   for (const p of providers) {
     const visible = catalog.models.filter((m) => m.providerId === p.id && !m.hidden && m.category !== "specialist");
     if (!visible.length)
       continue;
     const sorted = [...visible].sort((a, b) => b.tier - a.tier || (a.pricing?.outPerM ?? 0) - (b.pricing?.outPerM ?? 0)).slice(0, maxModels);
-    const models = sorted.map((m) => m.id);
+    const models = [.../* @__PURE__ */ new Set([...sorted.map((m) => m.id), ...p.pinnedModels || []])];
     const strong = sorted.filter((m) => m.tier >= 4).sort((a, b) => (a.pricing?.outPerM ?? 0) - (b.pricing?.outPerM ?? 0));
     const defaultModel = models.includes(p.defaultModel) ? p.defaultModel : (strong[0] || sorted[0]).id;
     const existing = (p.modelTiers || "").split(/[,\n]/).map((s) => s.trim()).filter(Boolean);
@@ -3840,8 +4142,8 @@ function providerPatches(providers, catalog, maxModels = 12) {
 }
 
 // src/fleet/speed.ts
-var fs8 = __toESM(require("fs"));
-var path11 = __toESM(require("path"));
+var fs9 = __toESM(require("fs"));
+var path12 = __toESM(require("path"));
 function priorTps(tier, local, sizeB, benchTps) {
   if (benchTps && benchTps > 0)
     return benchTps;
@@ -3861,15 +4163,15 @@ var JsonSpeedStore = class {
   }
   load() {
     try {
-      return JSON.parse(fs8.readFileSync(this.file, "utf8"));
+      return JSON.parse(fs9.readFileSync(this.file, "utf8"));
     } catch {
       return {};
     }
   }
   save(data) {
     try {
-      fs8.mkdirSync(path11.dirname(this.file), { recursive: true });
-      fs8.writeFileSync(this.file, JSON.stringify(data), "utf8");
+      fs9.mkdirSync(path12.dirname(this.file), { recursive: true });
+      fs9.writeFileSync(this.file, JSON.stringify(data), "utf8");
     } catch {
     }
   }
@@ -3957,7 +4259,7 @@ function estimateRun(ticket, p, model, ctx) {
 function candidateModels(p, catalog) {
   const fromCatalog = catalog.visible(p.id).map((m) => m.id);
   const ids = fromCatalog.length ? fromCatalog : p.models.length ? p.models : [p.defaultModel];
-  return [...new Set(ids)];
+  return [.../* @__PURE__ */ new Set([...ids, ...p.pinnedModels || []])];
 }
 function rankOptions(ticket, providers, sessions, ctx, restrictTo) {
   const now = ctx.now ?? Date.now();
@@ -4182,18 +4484,18 @@ function parseReset(window6, now) {
   return void 0;
 }
 function detectLimit(text, models = [], now = Date.now()) {
-  const clean = stripAnsi(text);
-  const m = LIMIT_RE.exec(clean);
+  const clean2 = stripAnsi(text);
+  const m = LIMIT_RE.exec(clean2);
   if (!m)
     return null;
   const start = Math.max(0, m.index - 120);
-  const around = clean.slice(start, m.index + 260);
+  const around = clean2.slice(start, m.index + 260);
   const lower = around.toLowerCase();
   const model = [...models].sort((a, b) => b.length - a.length).find((x) => x && lower.includes(x.toLowerCase()));
   return {
-    resetAt: parseReset(clean.slice(m.index, m.index + 260), now),
+    resetAt: parseReset(clean2.slice(m.index, m.index + 260), now),
     model,
-    excerpt: clean.slice(Math.max(0, m.index - 20), m.index + 140).replace(/\s+/g, " ").trim()
+    excerpt: clean2.slice(Math.max(0, m.index - 20), m.index + 140).replace(/\s+/g, " ").trim()
   };
 }
 var ATTENTION_RE = [
@@ -4348,7 +4650,7 @@ var TerminalLauncher = class {
       setTimeout(() => this.manager.ended(session.id, 0, "Handed to IDE chat"), 0);
       return true;
     }
-    const base = `Agent: ${session.providerName} \xB7 ${session.ticketId || path12.basename(session.ticketPath)}`;
+    const base = `Agent: ${session.providerName} \xB7 ${session.ticketId || path13.basename(session.ticketPath)}`;
     let name = base;
     let n = 2;
     while (vscode4.window.terminals.some((t) => t.name === name))
@@ -4436,6 +4738,56 @@ var FleetController = class _FleetController {
   static get() {
     return _FleetController.instance;
   }
+  /** The BACF Message Board folder for this workspace, if the add-on is installed. */
+  messageBoardDir() {
+    const roots = [
+      ...(vscode4.workspace.workspaceFolders || []).map((f) => f.uri.fsPath),
+      ...BoardManager.getInstance().getAllBoards().map((b) => b.rootPath)
+    ];
+    return findMessageBoard(roots);
+  }
+  sessionClaims = /* @__PURE__ */ new Map();
+  /**
+   * Message Board Rule 0: an agent session claims its ticket (lease lock, same format as claim.py) so other
+   * agents see it, renews it while running and releases it when the session ends.
+   */
+  syncClaims() {
+    const dir = this.messageBoardDir();
+    if (!dir)
+      return;
+    for (const s of this.sessions.list()) {
+      const key = s.ticketId || path13.basename(s.ticketPath, ".md");
+      const tracked = this.sessionClaims.get(s.id);
+      if (s.status === "running" && !tracked) {
+        const agent = s.providerName;
+        const r = claim(dir, key, agent, `Orchestrator session (${s.model || "default model"}): ${s.ticketTitle}`, s.ticketId, 60);
+        if (r.ok)
+          this.sessionClaims.set(s.id, { key, agent });
+      } else if (tracked && s.status !== "running") {
+        release(dir, tracked.key, tracked.agent);
+        this.sessionClaims.delete(s.id);
+      }
+    }
+  }
+  renewClaims() {
+    const dir = this.messageBoardDir();
+    if (!dir)
+      return;
+    for (const [id, c] of this.sessionClaims) {
+      const s = this.sessions.get(id);
+      if (s && s.status === "running")
+        claim(dir, c.key, c.agent, `Orchestrator session: ${s.ticketTitle}`, s.ticketId, 60);
+    }
+  }
+  /** Is another agent already working on this ticket according to the board? (Never blocks your own provider.) */
+  claimedByOther(ticket, agent) {
+    const dir = this.messageBoardDir();
+    if (!dir)
+      return void 0;
+    const key = ticket.id || path13.basename(ticket.path, ".md");
+    const held = readClaims(dir).find((c) => !c.expired && c.key.toLowerCase() === key.toLowerCase() && c.agent !== agent);
+    return held?.agent;
+  }
   static init(context) {
     if (!_FleetController.instance) {
       _FleetController.instance = new _FleetController(context);
@@ -4444,19 +4796,19 @@ var FleetController = class _FleetController {
   }
   constructor(context) {
     const root = vscode4.workspace.workspaceFolders?.[0]?.uri.fsPath || context.globalStorageUri.fsPath;
-    const dir = path12.join(root, ".agentic-kanban");
-    this.settingsPath = path12.join(dir, "fleet.json");
-    this.briefPath = path12.join(dir, "runtime", "orchestrator-brief.md");
+    const dir = path13.join(root, ".agentic-kanban");
+    this.settingsPath = path13.join(dir, "fleet.json");
+    this.briefPath = path13.join(dir, "runtime", "orchestrator-brief.md");
     this.registry = new ProviderRegistry(root);
     this.settings = this.loadSettings();
     this.catalogStore = new CatalogStore(root);
     this.catalog = new CatalogIndex(this.catalogStore.loadCatalog());
-    this.speed = new SpeedBook(new JsonSpeedStore(path12.join(dir, "runtime", "speed.json")));
+    this.speed = new SpeedBook(new JsonSpeedStore(path13.join(dir, "runtime", "speed.json")));
     const launcher = new TerminalLauncher(context.subscriptions);
     this.sessions = new SessionManager(
       (id) => this.registry.list().find((p) => p.id === id),
       launcher,
-      new JsonFleetStore(path12.join(dir, "runtime", "fleet-usage.json"))
+      new JsonFleetStore(path13.join(dir, "runtime", "fleet-usage.json"))
     );
     launcher.manager = this.sessions;
     this.launcher = launcher;
@@ -4474,6 +4826,7 @@ var FleetController = class _FleetController {
       return true;
     };
     this.sessions.onChange(() => {
+      this.syncClaims();
       this.learnSpeeds();
       this.maybeAutoReview();
       this.scheduleAutoResumes();
@@ -4495,7 +4848,7 @@ var FleetController = class _FleetController {
   // ---------------------------------------------------------------- settings
   loadSettings() {
     try {
-      return { ...DEFAULT_SETTINGS, ...JSON.parse(fs9.readFileSync(this.settingsPath, "utf8")) };
+      return { ...DEFAULT_SETTINGS, ...JSON.parse(fs10.readFileSync(this.settingsPath, "utf8")) };
     } catch {
       return { ...DEFAULT_SETTINGS };
     }
@@ -4506,8 +4859,8 @@ var FleetController = class _FleetController {
     next.maxNewPerTick = Math.min(20, Math.max(1, Math.round(Number(next.maxNewPerTick)) || 3));
     this.settings = next;
     try {
-      fs9.mkdirSync(path12.dirname(this.settingsPath), { recursive: true });
-      fs9.writeFileSync(this.settingsPath, JSON.stringify(next, null, 2), "utf8");
+      fs10.mkdirSync(path13.dirname(this.settingsPath), { recursive: true });
+      fs10.writeFileSync(this.settingsPath, JSON.stringify(next, null, 2), "utf8");
     } catch (e) {
       console.warn("[Agentic Kanban] Could not save fleet settings:", e);
     }
@@ -4566,6 +4919,11 @@ var FleetController = class _FleetController {
   // ---------------------------------------------------------------- starting sessions
   async startSession(provider, model, role, ticket, boardId, prebuilt, task, queueIfBusy = true, extra = {}) {
     const agentSessionId = extra.agentSessionId || (0, import_crypto.randomUUID)();
+    const holder = this.claimedByOther(ticket, provider.name);
+    if (holder && holder !== provider.name) {
+      vscode4.window.showWarningMessage(`"${ticket.title}" is claimed by ${holder} on the Message Board. Release the claim there (or pick another ticket) before starting ${provider.name}.`);
+      return void 0;
+    }
     if (model && this.sessions.modelBlock(provider.id, model)) {
       const alt = provider.models.find((m) => !this.sessions.modelBlock(provider.id, m));
       if (!alt) {
@@ -4576,7 +4934,7 @@ var FleetController = class _FleetController {
       model = alt;
     }
     const board = boardId && BoardManager.getInstance().getBoard(boardId) || BoardManager.getInstance().findBoardForTicketPath(ticket.path);
-    const boardRoot = board?.rootPath || path12.dirname(ticket.path);
+    const boardRoot = board?.rootPath || path13.dirname(ticket.path);
     let payload = prebuilt;
     if (!payload || task || extra.assignee) {
       if (role !== "worker" && !provider.command.includes("{task}")) {
@@ -4739,10 +5097,10 @@ var FleetController = class _FleetController {
     return this.registry.list().map((p) => this.sessions.usage(p));
   }
   findTicket(ticketPath) {
-    const key = path12.resolve(ticketPath).toLowerCase();
+    const key = path13.resolve(ticketPath).toLowerCase();
     for (const board of BoardManager.getInstance().getAllBoards()) {
       for (const col of board.columns) {
-        const t = col.tickets.find((x) => path12.resolve(x.path).toLowerCase() === key);
+        const t = col.tickets.find((x) => path13.resolve(x.path).toLowerCase() === key);
         if (t)
           return { ticket: t, board };
       }
@@ -4761,7 +5119,7 @@ var FleetController = class _FleetController {
     if (decision.startsNow) {
       const ongoing = found.board.columns.find((c) => /ongoing|in progress/i.test(c.name));
       if (ongoing && await bm.moveTicket(found.board.id, found.ticket.path, ongoing.name, null)) {
-        ticket = this.findTicket(path12.join(found.board.rootPath, ongoing.name, path12.basename(found.ticket.path)))?.ticket || ticket;
+        ticket = this.findTicket(path13.join(found.board.rootPath, ongoing.name, path13.basename(found.ticket.path)))?.ticket || ticket;
       }
     }
     return !!await this.startSession(provider, decision.model, "worker", ticket, found.board.id, void 0, void 0, true, { hidden: this.settings.backgroundTerminals });
@@ -4778,6 +5136,7 @@ var FleetController = class _FleetController {
     await this.sessions.tick();
     this.sessions.prune();
     this.checkIdle();
+    this.renewClaims();
     if (this.settings.autopilot) {
       await this.runPlan();
     }
@@ -5067,15 +5426,15 @@ var FleetController = class _FleetController {
     if (!cands.length)
       lines.push("(none)");
     for (const c of cands) {
-      lines.push(`- ${c.ticket.id || path12.basename(c.ticket.path)} \u2014 ${c.ticket.title} [${c.ticket.priority}] (${c.ticket.path}) assignee: ${c.ticket.assignee || "unassigned"}`);
+      lines.push(`- ${c.ticket.id || path13.basename(c.ticket.path)} \u2014 ${c.ticket.title} [${c.ticket.priority}] (${c.ticket.path}) assignee: ${c.ticket.assignee || "unassigned"}`);
     }
-    fs9.mkdirSync(path12.dirname(this.briefPath), { recursive: true });
-    fs9.writeFileSync(this.briefPath, lines.join("\n"), "utf8");
+    fs10.mkdirSync(path13.dirname(this.briefPath), { recursive: true });
+    fs10.writeFileSync(this.briefPath, lines.join("\n"), "utf8");
     const planTicket = {
       id: "ORCHESTRATE",
-      filename: path12.basename(this.briefPath),
+      filename: path13.basename(this.briefPath),
       path: this.briefPath,
-      relativePath: path12.relative(board.rootPath, this.briefPath),
+      relativePath: path13.relative(board.rootPath, this.briefPath),
       column: "Backlog",
       subfolder: null,
       title: "Orchestration planning",
@@ -5232,8 +5591,8 @@ var KanbanWebviewManager = class _KanbanWebviewManager {
         try {
           const board = boardManager.getBoard(message.boardId);
           if (board) {
-            const configPath = path13.join(board.rootPath, "config.md");
-            if (fs10.existsSync(configPath)) {
+            const configPath = path14.join(board.rootPath, "config.md");
+            if (fs11.existsSync(configPath)) {
               const doc = await vscode5.workspace.openTextDocument(vscode5.Uri.file(configPath));
               await vscode5.window.showTextDocument(doc, { viewColumn: vscode5.ViewColumn.Beside });
             } else {
@@ -5311,7 +5670,7 @@ Instructions:
           const allBoards = boardManager.getAllBoards();
           if (t && t.path) {
             const foundBoard = allBoards.find(
-              (b) => path13.resolve(t.path).toLowerCase().startsWith(path13.resolve(b.rootPath).toLowerCase())
+              (b) => path14.resolve(t.path).toLowerCase().startsWith(path14.resolve(b.rootPath).toLowerCase())
             );
             if (foundBoard)
               targetBoard2 = foundBoard;
@@ -5343,7 +5702,7 @@ Instructions:
           const allBoards = boardManager.getAllBoards();
           if (message.ticketPath) {
             const foundBoard = allBoards.find(
-              (b) => path13.resolve(message.ticketPath).toLowerCase().startsWith(path13.resolve(b.rootPath).toLowerCase())
+              (b) => path14.resolve(message.ticketPath).toLowerCase().startsWith(path14.resolve(b.rootPath).toLowerCase())
             );
             if (foundBoard)
               targetBoard2 = foundBoard;
@@ -5375,7 +5734,7 @@ Instructions:
               let ticketObj = null;
               for (const col of reloadedBoard.columns) {
                 const found = col.tickets.find(
-                  (t) => path13.resolve(t.path).toLowerCase() === path13.resolve(message.ticketPath).toLowerCase() || message.ticketId && t.id === message.ticketId || t.filename.toLowerCase() === path13.basename(message.ticketPath).toLowerCase()
+                  (t) => path14.resolve(t.path).toLowerCase() === path14.resolve(message.ticketPath).toLowerCase() || message.ticketId && t.id === message.ticketId || t.filename.toLowerCase() === path14.basename(message.ticketPath).toLowerCase()
                 );
                 if (found) {
                   ticketObj = found;
@@ -5384,7 +5743,7 @@ Instructions:
               }
               if (!ticketObj) {
                 const sourcePath = boardManager.resolveTicketPathOnDisk(targetBoard2, message.ticketPath) || message.ticketPath;
-                const fileContent = await fs10.promises.readFile(sourcePath, "utf8");
+                const fileContent = await fs11.promises.readFile(sourcePath, "utf8");
                 ticketObj = TicketParser.parse(sourcePath, fileContent, targetBoard2.rootPath, "", null);
                 if (ticketObj) {
                   ticketObj.assignee = targetName;
@@ -5412,6 +5771,9 @@ Instructions:
       case "openProviders":
         await vscode5.commands.executeCommand("agenticKanban.openProviders");
         break;
+      case "openMessageBoard":
+        await vscode5.commands.executeCommand("agenticKanban.openMessageBoard");
+        break;
       case "openOrchestrator":
         await vscode5.commands.executeCommand("agenticKanban.openOrchestrator");
         break;
@@ -5437,7 +5799,8 @@ Instructions:
         boards: [],
         currentBoard: null,
         overview: null,
-        providers: this.providerSummaries()
+        providers: this.providerSummaries(),
+        hasMessageBoard: this.hasMessageBoard()
       });
       return;
     }
@@ -5450,7 +5813,8 @@ Instructions:
         boards: boards.map((b) => ({ id: b.id, name: b.name, rootPath: b.rootPath })),
         currentBoard: null,
         overview,
-        providers: this.providerSummaries()
+        providers: this.providerSummaries(),
+        hasMessageBoard: this.hasMessageBoard()
       });
       return;
     }
@@ -5466,8 +5830,12 @@ Instructions:
       boards: boards.map((b) => ({ id: b.id, name: b.name, rootPath: b.rootPath })),
       currentBoard,
       overview: null,
-      providers: this.providerSummaries()
+      providers: this.providerSummaries(),
+      hasMessageBoard: this.hasMessageBoard()
     });
+  }
+  hasMessageBoard() {
+    return !!FleetController.get()?.messageBoardDir();
   }
   /** Enabled agent providers for the assign menu (id/name never change together: rename-safe). */
   providerSummaries() {
@@ -5492,7 +5860,7 @@ Instructions:
   }
   getHtmlForWebview(webview) {
     let webviewDir = vscode5.Uri.joinPath(this.extensionUri, "dist", "webview");
-    if (!fs10.existsSync(webviewDir.fsPath)) {
+    if (!fs11.existsSync(webviewDir.fsPath)) {
       webviewDir = vscode5.Uri.joinPath(this.extensionUri, "src", "webview");
     }
     const v = Date.now();
@@ -5585,6 +5953,7 @@ Instructions:
 
         <button id="btnOrchestrator" class="nav-action-btn secondary" title="Orchestrator: usage, plan and running sub-agents"><span>Orchestrator</span></button>
         <button id="btnProviders" class="nav-action-btn secondary" title="Configure agent providers, models and limits"><span>Agents</span></button>
+        <button id="btnMessageBoard" class="nav-action-btn secondary" style="display:none;" title="Message Board: agent roster, claims and threads"><span>Message Board</span></button>
         <button id="btnConfig" class="icon-btn" title="Open Board Configuration">
           <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
             <circle cx="12" cy="12" r="3"/>
@@ -5811,10 +6180,11 @@ Instructions:
 
 // src/fleet/panels.ts
 var vscode6 = __toESM(require("vscode"));
-var fs11 = __toESM(require("fs"));
+var fs12 = __toESM(require("fs"));
 var TITLES = {
   providers: "Agent Providers",
-  orchestrator: "Orchestrator"
+  orchestrator: "Orchestrator",
+  messageboard: "Message Board"
 };
 var FleetPanel = class _FleetPanel {
   constructor(panel, extensionUri, kind) {
@@ -5828,6 +6198,10 @@ var FleetPanel = class _FleetPanel {
     const fleet = FleetController.get();
     if (fleet)
       this.disposables.push(fleet.onDidChange(() => this.push()));
+    if (kind === "messageboard") {
+      const timer = setInterval(() => this.push(), 5e3);
+      this.disposables.push({ dispose: () => clearInterval(timer) });
+    }
     this.disposables.push(BoardManager.getInstance().onDidChangeBoard(() => this.push()));
   }
   static panels = /* @__PURE__ */ new Map();
@@ -5868,6 +6242,43 @@ var FleetPanel = class _FleetPanel {
         case "addProvider":
           fleet.registry.add(m.kindId);
           break;
+        case "openFile": {
+          if (m.path && fs12.existsSync(m.path)) {
+            const doc = await vscode6.workspace.openTextDocument(vscode6.Uri.file(m.path));
+            await vscode6.window.showTextDocument(doc, { viewColumn: vscode6.ViewColumn.Beside });
+          }
+          return;
+        }
+        case "newThread": {
+          const dir = fleet.messageBoardDir();
+          if (!dir)
+            break;
+          const title = await vscode6.window.showInputBox({ prompt: "Thread title", placeHolder: "e.g. Who owns the auth refactor?" });
+          if (!title?.trim())
+            return;
+          const msg = await vscode6.window.showInputBox({ prompt: "First message (what do you want the agents to know or decide?)" });
+          if (msg === void 0)
+            return;
+          const file = createThread(dir, title, "Bj\xF6rn", "Agentic Kanban UI", msg || title);
+          const doc = await vscode6.workspace.openTextDocument(vscode6.Uri.file(file));
+          await vscode6.window.showTextDocument(doc, { viewColumn: vscode6.ViewColumn.Beside });
+          break;
+        }
+        case "reply": {
+          const text = await vscode6.window.showInputBox({ prompt: "Your reply (signed as Bj\xF6rn, Agentic Kanban UI)" });
+          if (text?.trim() && m.path && fs12.existsSync(m.path))
+            replyToThread(m.path, "Bj\xF6rn", "Agentic Kanban UI", text);
+          break;
+        }
+        case "releaseClaim": {
+          const dir = fleet.messageBoardDir();
+          if (dir && m.key)
+            release(dir, m.key, "Agentic Kanban UI", true);
+          break;
+        }
+        case "openMessageBoard":
+          _FleetPanel.show(this.extensionUri, "messageboard");
+          return;
         case "importModels": {
           const text = await vscode6.env.clipboard.readText();
           vscode6.window.showInformationMessage(await fleet.importModels(m.id, text));
@@ -5943,7 +6354,7 @@ var FleetPanel = class _FleetPanel {
           await fleet.requestReview(m.id);
           break;
         case "openTicket": {
-          if (m.path && fs11.existsSync(m.path)) {
+          if (m.path && fs12.existsSync(m.path)) {
             const doc = await vscode6.workspace.openTextDocument(vscode6.Uri.file(m.path));
             await vscode6.window.showTextDocument(doc, { viewColumn: vscode6.ViewColumn.Beside });
           }
@@ -5965,6 +6376,11 @@ var FleetPanel = class _FleetPanel {
     const fleet = FleetController.get();
     if (!fleet)
       return;
+    if (this.kind === "messageboard") {
+      const dir = fleet.messageBoardDir();
+      this.panel.webview.postMessage({ type: "state", board: dir ? readMessageBoard(dir) : null });
+      return;
+    }
     const providers = fleet.registry.list();
     const base = {
       type: "state",
@@ -5988,7 +6404,7 @@ var FleetPanel = class _FleetPanel {
   html() {
     const webview = this.panel.webview;
     let dir = vscode6.Uri.joinPath(this.extensionUri, "dist", "webview");
-    if (!fs11.existsSync(dir.fsPath))
+    if (!fs12.existsSync(dir.fsPath))
       dir = vscode6.Uri.joinPath(this.extensionUri, "src", "webview");
     const v = Date.now();
     const css = webview.asWebviewUri(vscode6.Uri.joinPath(dir, "fleet.css")).with({ query: `v=${v}` });
@@ -6026,6 +6442,9 @@ async function activate(context) {
     }),
     vscode7.commands.registerCommand("agenticKanban.openProviders", () => {
       FleetPanel.show(context.extensionUri, "providers");
+    }),
+    vscode7.commands.registerCommand("agenticKanban.openMessageBoard", () => {
+      FleetPanel.show(context.extensionUri, "messageboard");
     }),
     vscode7.commands.registerCommand("agenticKanban.openOrchestrator", () => {
       FleetPanel.show(context.extensionUri, "orchestrator");
@@ -6102,10 +6521,10 @@ async function activate(context) {
           return;
         board = pick.board;
       }
-      const configPath = path14.join(board.rootPath, "config.md");
-      if (!fs12.existsSync(configPath)) {
+      const configPath = path15.join(board.rootPath, "config.md");
+      if (!fs13.existsSync(configPath)) {
         const defaultConfig = ConfigParser.generateDefaultConfig(board.name);
-        await fs12.promises.writeFile(configPath, defaultConfig, "utf8");
+        await fs13.promises.writeFile(configPath, defaultConfig, "utf8");
       }
       const doc = await vscode7.workspace.openTextDocument(vscode7.Uri.file(configPath));
       await vscode7.window.showTextDocument(doc);
@@ -6131,29 +6550,29 @@ async function activate(context) {
       const res = await boardManager.generateAgentRules(board.id);
       if (!res)
         return;
-      if (fs12.existsSync(res.targetPath)) {
+      if (fs13.existsSync(res.targetPath)) {
         const choice = await vscode7.window.showQuickPick(
           [
-            { label: "Overwrite", description: `Replace entire ${path14.basename(res.targetPath)}` },
-            { label: "Append", description: `Append Kanban rules to existing ${path14.basename(res.targetPath)}` },
+            { label: "Overwrite", description: `Replace entire ${path15.basename(res.targetPath)}` },
+            { label: "Append", description: `Append Kanban rules to existing ${path15.basename(res.targetPath)}` },
             { label: "Cancel", description: "Keep existing file unchanged" }
           ],
-          { placeHolder: `${path14.basename(res.targetPath)} already exists. What would you like to do?` }
+          { placeHolder: `${path15.basename(res.targetPath)} already exists. What would you like to do?` }
         );
         if (!choice || choice.label === "Cancel")
           return;
         if (choice.label === "Append") {
-          const existing = await fs12.promises.readFile(res.targetPath, "utf8");
-          await fs12.promises.writeFile(res.targetPath, `${existing}
+          const existing = await fs13.promises.readFile(res.targetPath, "utf8");
+          await fs13.promises.writeFile(res.targetPath, `${existing}
 
 ${res.content}`, "utf8");
         } else {
-          await fs12.promises.writeFile(res.targetPath, res.content, "utf8");
+          await fs13.promises.writeFile(res.targetPath, res.content, "utf8");
         }
       } else {
-        await fs12.promises.writeFile(res.targetPath, res.content, "utf8");
+        await fs13.promises.writeFile(res.targetPath, res.content, "utf8");
       }
-      vscode7.window.showInformationMessage(`Agent rules generated at ${path14.basename(res.targetPath)}`);
+      vscode7.window.showInformationMessage(`Agent rules generated at ${path15.basename(res.targetPath)}`);
       const doc = await vscode7.workspace.openTextDocument(vscode7.Uri.file(res.targetPath));
       await vscode7.window.showTextDocument(doc);
     }),
@@ -6178,8 +6597,8 @@ ${res.content}`, "utf8");
       const created = await boardManager.initTemplates(board.id);
       if (created && created.length > 0) {
         vscode7.window.showInformationMessage(`Initialized templates: ${created.join(", ")} in ${board.name}/.templates/`);
-        const firstTemplate = path14.join(board.rootPath, ".templates", created[0]);
-        if (fs12.existsSync(firstTemplate)) {
+        const firstTemplate = path15.join(board.rootPath, ".templates", created[0]);
+        if (fs13.existsSync(firstTemplate)) {
           const doc = await vscode7.workspace.openTextDocument(vscode7.Uri.file(firstTemplate));
           await vscode7.window.showTextDocument(doc);
         }

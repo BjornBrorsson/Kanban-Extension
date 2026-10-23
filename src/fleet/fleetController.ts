@@ -8,6 +8,7 @@ import { Board, Ticket } from '../types';
 import { AgentProvider, ProviderRegistry, ProviderRole, providerToAssignee } from './providers';
 import { JsonFleetStore, ProviderUsage, Session, SessionLauncher, SessionManager } from './sessions';
 import { detectAll, detectOne } from './detect';
+import { claim, findMessageBoard, readClaims, release } from './messageBoard';
 import { LimitInfo, detectAttention, detectLimit, pickFallback } from './limits';
 import { CatalogIndex, CatalogStore, parseCopilotPolicy, providerPatches } from './catalog';
 import { JsonSpeedStore, SpeedBook } from './speed';
@@ -197,6 +198,56 @@ export class FleetController {
 
   public static get(): FleetController | undefined { return FleetController.instance; }
 
+  /** The BACF Message Board folder for this workspace, if the add-on is installed. */
+  public messageBoardDir(): string | undefined {
+    const roots = [
+      ...(vscode.workspace.workspaceFolders || []).map(f => f.uri.fsPath),
+      ...BoardManager.getInstance().getAllBoards().map(b => b.rootPath)
+    ];
+    return findMessageBoard(roots);
+  }
+
+  private sessionClaims = new Map<string, { key: string; agent: string }>();
+
+  /**
+   * Message Board Rule 0: an agent session claims its ticket (lease lock, same format as claim.py) so other
+   * agents see it, renews it while running and releases it when the session ends.
+   */
+  private syncClaims(): void {
+    const dir = this.messageBoardDir();
+    if (!dir) return;
+    for (const s of this.sessions.list()) {
+      const key = s.ticketId || path.basename(s.ticketPath, '.md');
+      const tracked = this.sessionClaims.get(s.id);
+      if (s.status === 'running' && !tracked) {
+        const agent = s.providerName;
+        const r = claim(dir, key, agent, `Orchestrator session (${s.model || 'default model'}): ${s.ticketTitle}`, s.ticketId, 60);
+        if (r.ok) this.sessionClaims.set(s.id, { key, agent });
+      } else if (tracked && s.status !== 'running') {
+        release(dir, tracked.key, tracked.agent);
+        this.sessionClaims.delete(s.id);
+      }
+    }
+  }
+
+  private renewClaims(): void {
+    const dir = this.messageBoardDir();
+    if (!dir) return;
+    for (const [id, c] of this.sessionClaims) {
+      const s = this.sessions.get(id);
+      if (s && s.status === 'running') claim(dir, c.key, c.agent, `Orchestrator session: ${s.ticketTitle}`, s.ticketId, 60);
+    }
+  }
+
+  /** Is another agent already working on this ticket according to the board? (Never blocks your own provider.) */
+  private claimedByOther(ticket: Ticket, agent: string): string | undefined {
+    const dir = this.messageBoardDir();
+    if (!dir) return undefined;
+    const key = ticket.id || path.basename(ticket.path, '.md');
+    const held = readClaims(dir).find(c => !c.expired && c.key.toLowerCase() === key.toLowerCase() && c.agent !== agent);
+    return held?.agent;
+  }
+
   public static init(context: vscode.ExtensionContext): FleetController {
     if (!FleetController.instance) {
       FleetController.instance = new FleetController(context);
@@ -238,6 +289,7 @@ export class FleetController {
     };
 
     this.sessions.onChange(() => {
+      this.syncClaims();
       this.learnSpeeds();
       this.maybeAutoReview();
       this.scheduleAutoResumes();
@@ -345,6 +397,11 @@ export class FleetController {
     extra: { agentSessionId?: string; attempt?: number; resumedFrom?: string; assignee?: ReturnType<typeof providerToAssignee>; hidden?: boolean } = {}
   ): Promise<Session | undefined> {
     const agentSessionId = extra.agentSessionId || randomUUID();
+    const holder = this.claimedByOther(ticket, provider.name);
+    if (holder && holder !== provider.name) {
+      vscode.window.showWarningMessage(`"${ticket.title}" is claimed by ${holder} on the Message Board. Release the claim there (or pick another ticket) before starting ${provider.name}.`);
+      return undefined;
+    }
     if (model && this.sessions.modelBlock(provider.id, model)) {
       const alt = provider.models.find(m => !this.sessions.modelBlock(provider.id, m));
       if (!alt) {
@@ -553,6 +610,7 @@ export class FleetController {
     await this.sessions.tick();
     this.sessions.prune();
     this.checkIdle();
+    this.renewClaims();
     if (this.settings.autopilot) {
       await this.runPlan();
     }
